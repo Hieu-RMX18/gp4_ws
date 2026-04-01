@@ -1,0 +1,62 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+    <xacro:macro name="motoman_gp4_ros2_control" params="name initial_positions_file use_fake_hardware:=false robot_ip:=192.168.1.33 controller_port:=50240">
+        <xacro:property name="initial_positions" value="${load_yaml(initial_positions_file)['initial_positions']}"/>
+        <ros2_control name="${name}" type="system">
+            <hardware>
+                <xacro:if value="${use_fake_hardware}">
+                    <!-- CHẾ ĐỘ GIẢ LẬP (simulation) -->
+                    <plugin>mock_components/GenericSystem</plugin>
+                </xacro:if>
+                <xacro:unless value="${use_fake_hardware}">
+                    <!-- CHẾ ĐỘ ROBOT THẬT - MotoROS2 -->
+                    <plugin>motoros2_client_library/MotoROS2HardwareInterface</plugin>
+                    <param name="robot_ip">${robot_ip}</param>
+                    <param name="controller_port">${controller_port}</param>
+                </xacro:unless>
+            </hardware>
+            <joint name="joint_1_s">
+                <command_interface name="position"/>
+                <state_interface name="position">
+                  <param name="initial_value">${initial_positions['joint_1_s']}</param>
+                </state_interface>
+                <state_interface name="velocity"/>
+            </joint>
+            <joint name="joint_2_l">
+                <command_interface name="position"/>
+                <state_interface name="position">
+                  <param name="initial_value">${initial_positions['joint_2_l']}</param>
+                </state_interface>
+                <state_interface name="velocity"/>
+            </joint>
+            <joint name="joint_3_u">
+                <command_interface name="position"/>
+                <state_interface name="position">
+                  <param name="initial_value">${initial_positions['joint_3_u']}</param>
+                </state_interface>
+                <state_interface name="velocity"/>
+            </joint>
+            <joint name="joint_4_r">
+                <command_interface name="position"/>
+                <state_interface name="position">
+                  <param name="initial_value">${initial_positions['joint_4_r']}</param>
+                </state_interface>
+                <state_interface name="velocity"/>
+            </joint>
+            <joint name="joint_5_b">
+                <command_interface name="position"/>
+                <state_interface name="position">
+                  <param name="initial_value">${initial_positions['joint_5_b']}</param>
+                </state_interface>
+                <state_interface name="velocity"/>
+            </joint>
+            <joint name="joint_6_t">
+                <command_interface name="position"/>
+                <state_interface name="position">
+                  <param name="initial_value">${initial_positions['joint_6_t']}</param>
+                </state_interface>
+                <state_interface name="velocity"/>
+            </joint>
+        </ros2_control>
+    </xacro:macro>
+</robot>

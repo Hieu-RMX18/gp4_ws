@@ -1,0 +1,25 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: motoman_gp4_support
+    relative_path: urdf/gp4.urdf
+  srdf:
+    relative_path: config/motoman_gp4.srdf
+  package_settings:
+    author_name: hieu2
+    author_email: msrgentleman999s@gmail.com
+    generated_timestamp: 1773767996
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity
+  modified_urdf:
+    xacros:
+      - control_xacro
+  control_xacro:
+    command:
+      - position
+    state:
+      - position
+      - velocity

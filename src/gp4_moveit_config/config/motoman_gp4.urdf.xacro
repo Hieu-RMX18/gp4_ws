@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="motoman_gp4">
+    <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+    <!-- 
+        use_fake_hardware:
+          true  = simulation/mock (mặc định an toàn)
+          false = robot thật Yaskawa GP4 qua MotoROS2
+    -->
+    <xacro:arg name="use_fake_hardware"       default="false" />
+    <xacro:arg name="robot_ip"                default="192.168.1.33" />
+    <xacro:arg name="controller_port"         default="50240" />
+
+    <!-- Import motoman_gp4 urdf file -->
+    <xacro:include filename="$(find motoman_gp4_support)/urdf/gp4.urdf" />
+
+    <!-- Import ros2_control xacro -->
+    <xacro:include filename="motoman_gp4.ros2_control.xacro" />
+
+    <!-- Gọi macro với tham số thật/giả -->
+    <xacro:motoman_gp4_ros2_control
+        name="GP4RealSystem"
+        initial_positions_file="$(arg initial_positions_file)"
+        use_fake_hardware="$(arg use_fake_hardware)"
+        robot_ip="$(arg robot_ip)"
+        controller_port="$(arg controller_port)"
+    />
+</robot>

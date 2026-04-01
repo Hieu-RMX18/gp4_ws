@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>gp4_bringup</name>
+  <version>0.0.1</version>
+  <description>Bringup launch files for GP4 MoveIt</description>
+
+  <maintainer email="msrgentleman@gmail.com">hieu2</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>gp4_moveit_config</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

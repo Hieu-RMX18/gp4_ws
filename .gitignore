@@ -1,0 +1,28 @@
+# 1. Chặn toàn bộ mọi thứ trong workspace
+/*
+
+# 2. Cho phép đẩy file .gitignore này lên
+!.gitignore
+
+# 3. Cho phép thư mục src và file cấu hình cụ thể
+!src/
+!motoros2_config.yaml
+
+# 4. (Tùy chọn) Chặn các folder rác bên trong src nếu có
+# Ví dụ: chặn các folder dependency bạn đã liệt kê trong ảnh 
+# nếu bạn không muốn đẩy code của thư viện bên thứ 3 lên
+src/motoman_ros2_support_packages/
+src/motoros2_client_interface_dependencies/
+src/ros-industrial/
+src/yaskawa-global/
+
+# 5. Luôn luôn chặn các file tạm và build (để chắc chắn)
+build/
+install/
+log/
+.cache/
+.claude/
+.codex/
+.vscode/
+__pycache__/
+*.pyc

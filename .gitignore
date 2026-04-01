@@ -17,6 +17,8 @@ src/ros-industrial/
 src/yaskawa-global/
 
 # 5. Luôn luôn chặn các file tạm và build (để chắc chắn)
+*.zip
+*.db
 build/
 install/
 log/

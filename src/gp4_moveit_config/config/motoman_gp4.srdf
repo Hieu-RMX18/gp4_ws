@@ -13,13 +13,14 @@
         <chain base_link="base_link" tip_link="tool0"/>
     </group>
     <!--GROUP STATES: Purpose: Define a named state for a particular group, in terms of joint values. This is useful to define states like 'folded arms'-->
+    <!-- Elbow-down HOME captured from the real GP4 on 2026-03-20. -->
     <group_state name="home" group="gp4_arm">
-        <joint name="joint_1_s" value="0"/>
-        <joint name="joint_2_l" value="0"/>
-        <joint name="joint_3_u" value="0"/>
+        <joint name="joint_1_s" value="1.5477395698141883"/>
+        <joint name="joint_2_l" value="-0.15883329466662804"/>
+        <joint name="joint_3_u" value="-0.15854787143360877"/>
         <joint name="joint_4_r" value="0"/>
-        <joint name="joint_5_b" value="0"/>
-        <joint name="joint_6_t" value="0"/>
+        <joint name="joint_5_b" value="-1.6017466450445892"/>
+        <joint name="joint_6_t" value="0.05361262853660316"/>
     </group_state>
     <group_state name="ready_down" group="gp4_arm">
         <joint name="joint_1_s" value="0.2459"/>

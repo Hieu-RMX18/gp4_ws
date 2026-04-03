@@ -1,7 +1,12 @@
 # joint_limits.yaml allows the dynamics properties specified in the URDF to be overwritten or augmented as needed
-
+#
+# GP4 position and velocity limits below mirror the motoman_gp4_support URDF, which
+# matches the official Yaskawa GP4 motion-range / speed table. The public flyer does
+# not publish per-axis acceleration limits, so the acceleration values remain
+# conservative engineering assumptions for MoveIt time-parameterization.
+#
 # For beginners, we downscale velocity and acceleration limits.
-# You can always specify higher scaling factors (<= 1.0) in your motion requests.  # Increase the values below to 1.0 to always move at maximum speed.
+# You can always specify higher scaling factors (<= 1.0) in your motion requests.
 default_velocity_scaling_factor: 0.1
 default_acceleration_scaling_factor: 0.1
 
@@ -9,31 +14,43 @@ default_acceleration_scaling_factor: 0.1
 # Joint limits can be turned off with [has_velocity_limits, has_acceleration_limits]
 joint_limits:
   joint_1_s:
+    min_position: -2.9670597283903604
+    max_position: 2.9670597283903604
     has_velocity_limits: true
     max_velocity: 8.1157810217736319
     has_acceleration_limits: true
     max_acceleration: 2.5
   joint_2_l:
+    min_position: -1.9198621771937625
+    max_position: 2.2689280275926285
     has_velocity_limits: true
     max_velocity: 8.1157810217736319
     has_acceleration_limits: true
     max_acceleration: 2.5
   joint_3_u:
+    min_position: -1.1344640137963142
+    max_position: 3.490658503988659
     has_velocity_limits: true
     max_velocity: 9.1629785729702302
     has_acceleration_limits: true
     max_acceleration: 2.5
   joint_4_r:
+    min_position: -3.490658503988659
+    max_position: 3.490658503988659
     has_velocity_limits: true
     max_velocity: 9.8611102737679612
     has_acceleration_limits: true
     max_acceleration: 3.0
   joint_5_b:
+    min_position: -2.1467549799530254
+    max_position: 2.1467549799530254
     has_velocity_limits: true
     max_velocity: 9.8611102737679612
     has_acceleration_limits: true
     max_acceleration: 3.0
   joint_6_t:
+    min_position: -7.941248096574199
+    max_position: 7.941248096574199
     has_velocity_limits: true
     max_velocity: 17.453292519943297
     has_acceleration_limits: true

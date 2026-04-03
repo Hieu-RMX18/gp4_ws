@@ -1,0 +1,4 @@
+supervisor_node:
+  ros__parameters:
+    audit_log_path: "/tmp/gp4_audit"
+    heartbeat_rate_hz: 1.0

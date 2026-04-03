@@ -19,6 +19,8 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>trac_ik_kinematics_plugin</exec_depend>
+  <exec_depend>pilz_industrial_motion_planner</exec_depend>
   <exec_depend>moveit_kinematics</exec_depend>
   <exec_depend>moveit_planners</exec_depend>
   <exec_depend>moveit_simple_controller_manager</exec_depend>

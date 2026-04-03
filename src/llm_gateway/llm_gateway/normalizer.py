@@ -1,0 +1,132 @@
+"""Unit normalizer for poses and joints."""
+
+from __future__ import annotations
+
+import math
+from typing import Any, Dict, List
+
+from geometry_msgs.msg import Pose, Quaternion
+
+
+def _to_float(value: Any, field: str) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be numeric.") from exc
+
+
+def _is_likely_mm(position_xyz: List[float]) -> bool:
+    # If any component is larger than 10 units, treat as millimeters.
+    return any(abs(value) > 10.0 for value in position_xyz)
+
+
+def _is_likely_degrees(angles: List[float]) -> bool:
+    # If any angle magnitude exceeds 2*pi, treat all as degrees.
+    return any(abs(value) > (2.0 * math.pi) for value in angles)
+
+
+def _rpy_to_quaternion(roll_rad: float, pitch_rad: float, yaw_rad: float) -> Quaternion:
+    cy = math.cos(yaw_rad * 0.5)
+    sy = math.sin(yaw_rad * 0.5)
+    cp = math.cos(pitch_rad * 0.5)
+    sp = math.sin(pitch_rad * 0.5)
+    cr = math.cos(roll_rad * 0.5)
+    sr = math.sin(roll_rad * 0.5)
+    return Quaternion(
+        x=sr * cp * cy - cr * sp * sy,
+        y=cr * sp * cy + sr * cp * sy,
+        z=cr * cp * sy - sr * sp * cy,
+        w=cr * cp * cy + sr * sp * sy,
+    )
+
+
+def normalize_pose(raw_pose: Dict[str, Any]) -> Pose:
+    """Convert position/orientation into geometry_msgs/Pose with unit detection."""
+    if not isinstance(raw_pose, dict):
+        raise ValueError("target_pose must be an object.")
+
+    position = raw_pose.get("position")
+    orientation = raw_pose.get("orientation")
+    if not isinstance(position, dict) or not isinstance(orientation, dict):
+        raise ValueError("target_pose must include position and orientation objects.")
+
+    x = _to_float(position.get("x"), "target_pose.position.x")
+    y = _to_float(position.get("y"), "target_pose.position.y")
+    z = _to_float(position.get("z"), "target_pose.position.z")
+    roll = _to_float(orientation.get("roll"), "target_pose.orientation.roll")
+    pitch = _to_float(orientation.get("pitch"), "target_pose.orientation.pitch")
+    yaw = _to_float(orientation.get("yaw"), "target_pose.orientation.yaw")
+
+    if _is_likely_mm([x, y, z]):
+        x /= 1000.0
+        y /= 1000.0
+        z /= 1000.0
+
+    if _is_likely_degrees([roll, pitch, yaw]):
+        roll = math.radians(roll)
+        pitch = math.radians(pitch)
+        yaw = math.radians(yaw)
+
+    pose = Pose()
+    pose.position.x = x
+    pose.position.y = y
+    pose.position.z = z
+    pose.orientation = _rpy_to_quaternion(roll, pitch, yaw)
+    return pose
+
+
+def normalize_joints(raw_joints: List[Any]) -> List[float]:
+    """Normalize joint list; degrees are converted to radians when detected."""
+    if not isinstance(raw_joints, list):
+        raise ValueError("joint_target must be a list.")
+
+    joints = [_to_float(value, f"joint_target[{index}]") for index, value in enumerate(raw_joints)]
+    if _is_likely_degrees(joints):
+        return [math.radians(value) for value in joints]
+    return joints
+
+
+class Normalizer:
+    """Class wrapper used by node code."""
+
+    _PLANNER_DEFAULTS = {
+        "LIN": "PILZ_LIN",
+        "PTP": "PILZ_PTP",
+        "CIRC": "PILZ_CIRC",
+        "HOME": "PILZ_PTP",
+        "approach": "PILZ_LIN",
+        "retract": "PILZ_LIN",
+    }
+
+    def __init__(self, default_velocity_scale: float = 0.1, default_acceleration_scale: float = 0.1):
+        self.default_velocity_scale = float(default_velocity_scale)
+        self.default_acceleration_scale = float(default_acceleration_scale)
+
+    def normalize_pose(self, raw_pose: Dict[str, Any]) -> Pose:
+        return normalize_pose(raw_pose)
+
+    def normalize_joints(self, raw_joints: List[Any]) -> List[float]:
+        return normalize_joints(raw_joints)
+
+    def normalize(self, command: Dict[str, Any]) -> Dict[str, Any]:
+        """Compatibility helper: normalize optional fields in a command dict."""
+        if not isinstance(command, dict):
+            raise ValueError("command must be an object.")
+        if "primitive_type" not in command:
+            raise ValueError("Missing required field: primitive_type.")
+
+        normalized = dict(command)
+        if "target_pose" in normalized:
+            normalized["target_pose_msg"] = normalize_pose(normalized["target_pose"])
+        if "joint_target" in normalized:
+            normalized["joint_target"] = normalize_joints(normalized["joint_target"])
+
+        normalized.setdefault("velocity_scale", self.default_velocity_scale)
+        normalized.setdefault("acceleration_scale", self.default_acceleration_scale)
+        primitive_type = normalized["primitive_type"]
+        normalized.setdefault(
+            "planner_id",
+            self._PLANNER_DEFAULTS.get(primitive_type, "OMPL_RRTConnect"),
+        )
+        normalized.setdefault("require_approval", True)
+        return normalized

@@ -1,0 +1,8 @@
+gp4_arm:
+  default_planner_config: RRTConnect
+  planner_configs:
+    RRTConnect:
+      type: geometric::RRTConnect
+      range: 0.0
+    RRTstar:
+      type: geometric::RRTstar

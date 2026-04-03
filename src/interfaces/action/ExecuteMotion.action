@@ -1,0 +1,17 @@
+# Goal
+string primitive_type        # "LIN", "PTP", "CIRC", "HOME", "approach", "retract"
+geometry_msgs/Pose target_pose
+float64[] joint_target       # optional, dùng cho PTP joint-space
+float64 velocity_scale       # 0.0 - 1.0
+float64 acceleration_scale   # 0.0 - 1.0
+string planner_id            # "PILZ_LIN", "PILZ_PTP", "OMPL_RRTConnect"
+bool require_approval        # true = chờ human confirm trước khi execute
+---
+# Result
+bool success
+string message
+float64 execution_time_sec
+---
+# Feedback
+float64 progress             # 0.0 - 1.0
+string current_state

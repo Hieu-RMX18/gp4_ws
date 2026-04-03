@@ -1,0 +1,10 @@
+# Request
+string command_json          # JSON từ LLM
+string primitive_type
+geometry_msgs/Pose target_pose
+float64 velocity_scale
+---
+# Response
+bool valid
+string reason                # nếu invalid, giải thích lý do
+string sanitized_json        # nếu valid, JSON đã normalize

@@ -1,0 +1,101 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ExecuteMotionFunctionCall",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "arguments"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "const": "execute_motion"
+    },
+    "arguments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primitive_type"],
+      "properties": {
+        "primitive_type": {
+          "type": "string",
+          "enum": ["LIN", "PTP", "CIRC", "HOME", "approach", "retract"]
+        },
+        "target_pose": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["position", "orientation"],
+          "properties": {
+            "position": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["x", "y", "z"],
+              "properties": {
+                "x": { "type": "number" },
+                "y": { "type": "number" },
+                "z": { "type": "number" }
+              }
+            },
+            "orientation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["roll", "pitch", "yaw"],
+              "properties": {
+                "roll": { "type": "number" },
+                "pitch": { "type": "number" },
+                "yaw": { "type": "number" }
+              }
+            }
+          }
+        },
+        "joint_target": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 6,
+          "maxItems": 6
+        },
+        "velocity_scale": {
+          "type": "number",
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0
+        },
+        "acceleration_scale": {
+          "type": "number",
+          "exclusiveMinimum": 0.0,
+          "maximum": 1.0
+        },
+        "planner_id": {
+          "type": "string",
+          "enum": ["PILZ_LIN", "PILZ_PTP", "PILZ_CIRC", "OMPL_RRTConnect"]
+        },
+        "require_approval": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "primitive_type": {
+                "enum": ["LIN", "CIRC", "approach", "retract"]
+              }
+            }
+          },
+          "then": {
+            "required": ["target_pose"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "primitive_type": { "const": "PTP" }
+            }
+          },
+          "then": {
+            "anyOf": [
+              { "required": ["target_pose"] },
+              { "required": ["joint_target"] }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

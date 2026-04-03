@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>llm_gateway</name>
+  <version>0.0.0</version>
+  <description>LLM Gateway layer for Yaskawa GP4 robot.</description>
+  <maintainer email="user@todo.todo">user</maintainer>
+  <license>TODO: License declaration</license>
+
+  <depend>rclpy</depend>
+  <depend>ament_index_python</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>interfaces</depend>
+  <depend>safety</depend>
+  <exec_depend>python3-jsonschema</exec_depend>
+  <exec_depend>python3-pytest</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

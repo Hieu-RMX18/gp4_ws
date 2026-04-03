@@ -6,7 +6,7 @@
           true  = simulation/mock (mặc định an toàn)
           false = robot thật Yaskawa GP4 qua MotoROS2
     -->
-    <xacro:arg name="use_fake_hardware"       default="false" />
+    <xacro:arg name="use_fake_hardware"       default="true" />
     <xacro:arg name="robot_ip"                default="192.168.1.33" />
     <xacro:arg name="controller_port"         default="50240" />
 

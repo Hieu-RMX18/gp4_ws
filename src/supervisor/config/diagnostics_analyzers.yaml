@@ -1,0 +1,32 @@
+/**:
+  ros__parameters:
+    pub_rate: 1.0
+    base_path: GP4
+    analyzers:
+      hardware:
+        type: diagnostic_aggregator/GenericAnalyzer
+        path: Hardware
+        startswith:
+          - /hw_adapter
+          - /yaskawa
+      motion:
+        type: diagnostic_aggregator/GenericAnalyzer
+        path: Motion
+        startswith:
+          - /motion_core
+          - /primitives
+      safety:
+        type: diagnostic_aggregator/GenericAnalyzer
+        path: Safety
+        startswith:
+          - /safety
+      gateway:
+        type: diagnostic_aggregator/GenericAnalyzer
+        path: Gateway
+        startswith:
+          - /llm_gateway
+      supervisor:
+        type: diagnostic_aggregator/GenericAnalyzer
+        path: Supervisor
+        startswith:
+          - /supervisor

@@ -13,6 +13,11 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
     gp4_bringup_share = get_package_share_directory('gp4_bringup')
     supervisor_share = get_package_share_directory('supervisor')
+    analyzers_config = os.path.join(
+        supervisor_share,
+        'config',
+        'diagnostics_analyzers.yaml',
+    )
     use_fake_hardware_value = 'true'
     audit_log_path_arg = DeclareLaunchArgument(
         'audit_log_path',
@@ -63,6 +68,14 @@ def generate_launch_description():
         ],
     )
 
+    diagnostic_aggregator = Node(
+        package='diagnostic_aggregator',
+        executable='aggregator_node',
+        name='diagnostic_aggregator',
+        output='screen',
+        parameters=[analyzers_config],
+    )
+
     supervisor_node = Node(
         package='supervisor',
         executable='supervisor_node',
@@ -82,5 +95,6 @@ def generate_launch_description():
         moveit_only,
         safety_node,
         motion_core_node,
+        diagnostic_aggregator,
         supervisor_node,
     ])

@@ -1,12 +1,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <future>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include <control_msgs/action/follow_joint_trajectory.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/robot_state/conversions.h>
@@ -31,6 +33,8 @@ class MotionCoreNode final : public rclcpp::Node
 public:
   using ExecuteMotion = interfaces::action::ExecuteMotion;
   using GoalHandleExecuteMotion = rclcpp_action::ServerGoalHandle<ExecuteMotion>;
+  using FollowJointTrajectory = control_msgs::action::FollowJointTrajectory;
+  using GoalHandleFollowJointTrajectory = rclcpp_action::ClientGoalHandle<FollowJointTrajectory>;
 
   MotionCoreNode()
   : rclcpp::Node("motion_core_node"),
@@ -44,7 +48,19 @@ public:
       std::bind(&MotionCoreNode::handle_cancel, this, std::placeholders::_1),
       std::bind(&MotionCoreNode::handle_accepted, this, std::placeholders::_1));
 
-    RCLCPP_INFO(get_logger(), "motion_core_node started (planning-only mode, no hardware execution)");
+    trajectory_action_name_ = declare_parameter<std::string>(
+      "trajectory_action_name",
+      "/controller_manager/follow_joint_trajectory");
+    trajectory_action_timeout_sec_ = declare_parameter<double>(
+      "trajectory_action_timeout_sec",
+      30.0);
+    trajectory_execution_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
+      this,
+      trajectory_action_name_);
+
+    RCLCPP_INFO(
+      get_logger(),
+      "motion_core_node started (validated trajectories execute through follow_joint_trajectory)");
   }
 
   void initialize()
@@ -64,6 +80,7 @@ private:
   static constexpr const char * kPlanningGroup = "gp4_arm";
 
   rclcpp_action::Server<ExecuteMotion>::SharedPtr action_server_;
+  rclcpp_action::Client<FollowJointTrajectory>::SharedPtr trajectory_execution_client_;
 
   PlannerRouter planner_router_;
   OrientationFilter orientation_filter_;
@@ -73,6 +90,8 @@ private:
   QualityGate quality_gate_;
 
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
+  std::string trajectory_action_name_;
+  double trajectory_action_timeout_sec_{30.0};
 
   static std::string normalize_primitive(std::string primitive)
   {
@@ -200,6 +219,86 @@ private:
     return false;
   }
 
+  bool execute_joint_trajectory(
+    const trajectory_msgs::msg::JointTrajectory & trajectory,
+    std::string & reason)
+  {
+    reason.clear();
+
+    if (!trajectory_execution_client_)
+    {
+      reason = "follow_joint_trajectory client not initialized";
+      return false;
+    }
+
+    if (!trajectory_execution_client_->wait_for_action_server(std::chrono::seconds(5)))
+    {
+      reason = "follow_joint_trajectory action unavailable at " + trajectory_action_name_;
+      return false;
+    }
+
+    FollowJointTrajectory::Goal goal;
+    goal.trajectory = trajectory;
+
+    auto send_goal_future = trajectory_execution_client_->async_send_goal(goal);
+    if (send_goal_future.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
+    {
+      reason = "timed out sending trajectory to " + trajectory_action_name_;
+      return false;
+    }
+
+    GoalHandleFollowJointTrajectory::SharedPtr controller_goal_handle = send_goal_future.get();
+    if (!controller_goal_handle)
+    {
+      reason = "trajectory controller rejected goal";
+      return false;
+    }
+
+    auto result_future = trajectory_execution_client_->async_get_result(controller_goal_handle);
+    const auto result_timeout =
+      std::chrono::duration<double>(std::max(trajectory_action_timeout_sec_, 1.0));
+    if (result_future.wait_for(result_timeout) != std::future_status::ready)
+    {
+      trajectory_execution_client_->async_cancel_goal(controller_goal_handle);
+      reason = "timed out waiting for controller result from " + trajectory_action_name_;
+      return false;
+    }
+
+    const auto wrapped_result = result_future.get();
+    if (!wrapped_result.result)
+    {
+      reason = "trajectory controller returned no result";
+      return false;
+    }
+
+    if (wrapped_result.code != rclcpp_action::ResultCode::SUCCEEDED)
+    {
+      std::ostringstream status_message;
+      status_message << "trajectory action returned result code "
+                     << static_cast<int>(wrapped_result.code);
+      if (!wrapped_result.result->error_string.empty())
+      {
+        status_message << ": " << wrapped_result.result->error_string;
+      }
+      reason = status_message.str();
+      return false;
+    }
+
+    if (wrapped_result.result->error_code != FollowJointTrajectory::Result::SUCCESSFUL)
+    {
+      std::ostringstream controller_error;
+      controller_error << "controller error " << wrapped_result.result->error_code;
+      if (!wrapped_result.result->error_string.empty())
+      {
+        controller_error << ": " << wrapped_result.result->error_string;
+      }
+      reason = controller_error.str();
+      return false;
+    }
+
+    return true;
+  }
+
   void publish_feedback(
     const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
     double progress,
@@ -279,7 +378,7 @@ private:
       abort_with_message(
         goal_handle,
         started_at,
-        "require_approval flow is not yet implemented in Phase 4 (planning-only server)");
+        "require_approval flow is not yet implemented in Phase 4 execution server");
       return;
     }
 
@@ -524,13 +623,22 @@ private:
       return;
     }
 
-    publish_feedback(goal_handle, 0.95, "planning_complete_no_execution");
+    publish_feedback(goal_handle, 0.75, "trajectory_execution_requested");
+
+    std::string execution_reason;
+    if (!execute_joint_trajectory(output_traj, execution_reason))
+    {
+      abort_with_message(goal_handle, started_at, "trajectory execution failed: " + execution_reason);
+      return;
+    }
+
+    publish_feedback(goal_handle, 0.95, "trajectory_execution_complete");
 
     auto result = std::make_shared<ExecuteMotion::Result>();
     result->success = true;
 
     std::ostringstream message;
-    message << "planning-only success; primitive=" << primitive
+    message << "execution success; primitive=" << primitive
             << ", planner_id=" << planner_selection.planner_id
             << ", points=" << output_traj.points.size();
 

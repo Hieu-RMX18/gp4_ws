@@ -1,9 +1,9 @@
 llm_backend:
-  provider: "9router_local"
-  base_url: "http://localhost:20128/v1"
+  provider: "provider"
+  base_url: "http://"
   # API key loaded from environment variable GP4_LLM_API_KEY
   # NEVER commit plaintext keys to the repository.
-  api_key: "sk-1c0d701e1dd534c3-qxhjs9-86faa1c0"
+  api_key: "sk-secrect-key"
   api_mode: "openai_compatible"
   model: "claude-haiku-4-5"
   temperature: 0.0

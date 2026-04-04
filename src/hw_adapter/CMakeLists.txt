@@ -29,6 +29,7 @@ add_library(${PROJECT_NAME}_components SHARED
   src/motoros2_session_manager.cpp
   src/trajectory_executor.cpp
   src/tool_state_monitor.cpp
+  src/recovery_state_machine.cpp
   src/hw_adapter_node.cpp
 )
 

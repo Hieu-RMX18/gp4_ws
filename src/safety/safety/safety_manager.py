@@ -1,4 +1,5 @@
 import os
+import threading
 import rclpy
 from rclpy.node import Node
 import yaml
@@ -11,10 +12,27 @@ from .command_validator import CommandValidator
 from .workspace_guard import WorkspaceGuard
 from .execution_gate import ExecutionGate
 
+
 class SafetyManager(Node):
+    """V4 H1/H2: Fail-closed safety manager with execution lock.
+
+    Monitors robot status via industrial_msgs/RobotStatus.
+    Blocks execution when:
+    - Robot in_error
+    - Robot e_stopped
+    - Robot not ready (drives not powered, motion not possible)
+    - No trusted joint state available (no status received)
+    """
+
     def __init__(self):
         super().__init__('safety_manager')
-        
+
+        # V4 H2: Fail-closed — start in blocked state until robot proves ready
+        self._lock = threading.Lock()
+        self._robot_ready = False
+        self._last_error_reason = "no robot status received yet (fail-closed)"
+        self._status_received = False
+
         # Load safety rules from config
         try:
             pkg_share = get_package_share_directory('safety')
@@ -29,37 +47,76 @@ class SafetyManager(Node):
         # Initialize internal modules
         self.validator = CommandValidator(self.safety_rules)
         self.guard = WorkspaceGuard(self.safety_rules)
-        self.gate = ExecutionGate(self, self.validator, self.guard)
+        self.gate = ExecutionGate(self, self.validator, self.guard, self)
 
-        # Emergency stop logic subscription
+        # V4 J5: Correct subscriber type: industrial_msgs/RobotStatus
         self.status_sub = self.create_subscription(
             RobotStatus,
             '/yaskawa/robot_status',
             self.status_callback,
             10
         )
-        # Safety status publisher
+        # Safety status publisher (structured status)
         self.safety_status_pub = self.create_publisher(String, '/safety_status', 10)
-        
-        self.get_logger().info("SafetyManager started and ready.")
+
+        self.get_logger().info("SafetyManager started (fail-closed until robot status received).")
+
+    @property
+    def is_robot_ready(self) -> bool:
+        """Thread-safe check: is the robot ready for execution?"""
+        with self._lock:
+            return self._robot_ready
+
+    @property
+    def last_error_reason(self) -> str:
+        """Thread-safe: why is the robot not ready?"""
+        with self._lock:
+            return self._last_error_reason
 
     def status_callback(self, msg: RobotStatus):
-        # Trigger emergency stop logic if status has ERROR
-        if msg.in_error.val == TriState.TRUE:
-            self.get_logger().error(
-                "EMERGENCY STOP: robot reported in_error via /yaskawa/robot_status")
-            self.publish_status("ERROR: Emergency stop triggered")
-        elif msg.e_stopped.val == TriState.TRUE:
-            self.get_logger().error(
-                "EMERGENCY STOP: robot e_stopped via /yaskawa/robot_status")
-            self.publish_status("ERROR: E-stop active")
-        else:
+        """V4 H1-Layer4: Update robot readiness from controller status."""
+        with self._lock:
+            self._status_received = True
+
+            # Check safety-critical fields
+            if msg.in_error.val == TriState.TRUE:
+                self._robot_ready = False
+                self._last_error_reason = "robot in_error via /yaskawa/robot_status"
+                self.get_logger().error(
+                    "SAFETY BLOCK: robot reported in_error")
+                self.publish_status("ERROR: in_error active")
+                return
+
+            if msg.e_stopped.val == TriState.TRUE:
+                self._robot_ready = False
+                self._last_error_reason = "robot e_stopped via /yaskawa/robot_status"
+                self.get_logger().error(
+                    "SAFETY BLOCK: robot e_stopped")
+                self.publish_status("ERROR: E-stop active")
+                return
+
+            if msg.drives_powered.val != TriState.TRUE:
+                self._robot_ready = False
+                self._last_error_reason = "drives not powered"
+                self.publish_status("BLOCKED: drives not powered")
+                return
+
+            if msg.motion_possible.val != TriState.TRUE:
+                self._robot_ready = False
+                self._last_error_reason = "motion not possible"
+                self.publish_status("BLOCKED: motion not possible")
+                return
+
+            # All checks passed — robot is ready
+            self._robot_ready = True
+            self._last_error_reason = ""
             self.publish_status("OK")
 
     def publish_status(self, status_msg: str):
         msg = String()
         msg.data = status_msg
         self.safety_status_pub.publish(msg)
+
 
 def main(args=None):
     rclpy.init(args=args)

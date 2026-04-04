@@ -8,6 +8,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(trajectory_msgs REQUIRED)
 
 set(msg_files
   "msg/MotionFeedback.msg"
@@ -22,13 +23,14 @@ set(srv_files
 
 set(action_files
   "action/ExecuteMotion.action"
+  "action/DispatchTrajectory.action"
 )
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   ${msg_files}
   ${srv_files}
   ${action_files}
-  DEPENDENCIES geometry_msgs
+  DEPENDENCIES geometry_msgs trajectory_msgs
 )
 
 ament_package()

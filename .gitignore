@@ -29,6 +29,10 @@ log/
 .venv/
 __pycache__/
 *.pyc
-build/
-install/
-log/
+
+# Secrets — never commit API keys or credentials
+.env
+.env.*
+*.secret
+*.key
+secrets/

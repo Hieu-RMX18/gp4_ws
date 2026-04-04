@@ -8,7 +8,6 @@
 #include <thread>
 #include <vector>
 
-#include <control_msgs/action/follow_joint_trajectory.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/robot_state/conversions.h>
@@ -18,10 +17,12 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 
 #include <interfaces/action/execute_motion.hpp>
+#include <interfaces/action/dispatch_trajectory.hpp>
 
 #include "motion_core/ik_selector.hpp"
 #include "motion_core/orientation_filter.hpp"
 #include "motion_core/planner_router.hpp"
+#include "motion_core/planning_scene_manager.hpp"
 #include "motion_core/quality_gate.hpp"
 #include "motion_core/seed_manager.hpp"
 #include "motion_core/trajectory_post_processor.hpp"
@@ -33,13 +34,12 @@ class MotionCoreNode final : public rclcpp::Node
 public:
   using ExecuteMotion = interfaces::action::ExecuteMotion;
   using GoalHandleExecuteMotion = rclcpp_action::ServerGoalHandle<ExecuteMotion>;
-  using FollowJointTrajectory = control_msgs::action::FollowJointTrajectory;
-  using GoalHandleFollowJointTrajectory = rclcpp_action::ClientGoalHandle<FollowJointTrajectory>;
+  using DispatchTrajectory = interfaces::action::DispatchTrajectory;
 
   MotionCoreNode()
   : rclcpp::Node("motion_core_node"),
     seed_manager_(*this),
-    quality_gate_(TrajectoryPostProcessor::kMaxTrajectoryPoints, QualityGate::kMinimumCartesianFraction)
+    quality_gate_(kInternalMaxTrajectoryPoints, QualityGate::kMinimumCartesianFraction)
   {
     action_server_ = rclcpp_action::create_server<ExecuteMotion>(
       this,
@@ -48,23 +48,22 @@ public:
       std::bind(&MotionCoreNode::handle_cancel, this, std::placeholders::_1),
       std::bind(&MotionCoreNode::handle_accepted, this, std::placeholders::_1));
 
-    trajectory_action_name_ = declare_parameter<std::string>(
-      "trajectory_action_name",
-      "/yaskawa/follow_joint_trajectory");
-    RCLCPP_INFO(
-        get_logger(),
-        "trajectory_action_name resolved to: %s",
-        trajectory_action_name_.c_str());
-    trajectory_action_timeout_sec_ = declare_parameter<double>(
-      "trajectory_action_timeout_sec",
-      30.0);
-    trajectory_execution_client_ = rclcpp_action::create_client<FollowJointTrajectory>(
+    // V4 Contract: motion_core does NOT execute directly on hardware.
+    // It sends validated trajectories to hw_adapter via DispatchTrajectory action.
+    dispatch_action_name_ = declare_parameter<std::string>(
+      "dispatch_action_name",
+      "/hw_adapter/dispatch_trajectory");
+    dispatch_timeout_sec_ = declare_parameter<double>(
+      "dispatch_timeout_sec",
+      60.0);
+    dispatch_client_ = rclcpp_action::create_client<DispatchTrajectory>(
       this,
-      trajectory_action_name_);
+      dispatch_action_name_);
 
     RCLCPP_INFO(
       get_logger(),
-      "motion_core_node started (validated trajectories execute through follow_joint_trajectory)");
+      "motion_core_node started (plan-only mode, execution via %s)",
+      dispatch_action_name_.c_str());
   }
 
   void initialize()
@@ -73,6 +72,25 @@ public:
     if (!ensure_move_group(reason)) {
       RCLCPP_ERROR(get_logger(), "Failed to initialize MoveGroup in initialize(): %s", reason.c_str());
     }
+
+    // V4 J9: Load planning scene from YAML on startup
+    const auto scene_path = declare_parameter<std::string>(
+      "scene_objects_path", "");
+    if (!scene_path.empty())
+    {
+      const auto result = scene_manager_.load_and_apply(scene_path);
+      if (result != SceneLoadResult::OK)
+      {
+        RCLCPP_ERROR(get_logger(),
+          "Planning scene load FAILED (%s) — planning will be blocked until scene is loaded",
+          scene_load_result_name(result));
+      }
+    }
+    else
+    {
+      RCLCPP_WARN(get_logger(),
+        "No scene_objects_path configured — planning scene empty (no collision objects)");
+    }
   }
 
 private:
@@ -80,11 +98,15 @@ private:
   static constexpr double kMaxAccelerationScale = 0.2;
   static constexpr double kPlanningTimeSec = 5.0;
   static constexpr double kCartesianEefStep = 0.005;
-  static constexpr double kCartesianJumpThreshold = 0.0;
+  // V4 G0: jump_threshold must be >= 1.5 in Cartesian planning config.
+  static constexpr double kCartesianJumpThreshold = 1.5;
   static constexpr const char * kPlanningGroup = "gp4_arm";
+  // V4 G2: Internal point budget is 180-190, NOT the MotoROS2 hard limit of 200.
+  static constexpr std::size_t kInternalMaxTrajectoryPoints = 190;
 
   rclcpp_action::Server<ExecuteMotion>::SharedPtr action_server_;
-  rclcpp_action::Client<FollowJointTrajectory>::SharedPtr trajectory_execution_client_;
+  // V4: NO FollowJointTrajectory client. Execution goes through hw_adapter only.
+  rclcpp_action::Client<DispatchTrajectory>::SharedPtr dispatch_client_;
 
   PlannerRouter planner_router_;
   OrientationFilter orientation_filter_;
@@ -94,8 +116,9 @@ private:
   QualityGate quality_gate_;
 
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
-  std::string trajectory_action_name_;
-  double trajectory_action_timeout_sec_{30.0};
+  PlanningSceneManager scene_manager_{get_logger()};
+  std::string dispatch_action_name_;
+  double dispatch_timeout_sec_{60.0};
 
   static std::string normalize_primitive(std::string primitive)
   {
@@ -223,83 +246,79 @@ private:
     return false;
   }
 
-  bool execute_joint_trajectory(
+  static double quaternion_norm_sq(const geometry_msgs::msg::Quaternion & q)
+  {
+    return (q.x * q.x) + (q.y * q.y) + (q.z * q.z) + (q.w * q.w);
+  }
+
+  /// Dispatch a validated trajectory to hw_adapter via DispatchTrajectory action.
+  /// This is the V4-compliant execution path. motion_core never talks to FJT directly.
+  bool dispatch_to_hw_adapter(
     const trajectory_msgs::msg::JointTrajectory & trajectory,
-    std::string & reason)
+    std::string & reason,
+    std::string & execution_note)
   {
     reason.clear();
+    execution_note.clear();
 
-    if (!trajectory_execution_client_)
+    if (!dispatch_client_)
     {
-      reason = "follow_joint_trajectory client not initialized";
+      reason = "DispatchTrajectory client not initialized";
       return false;
     }
 
-    if (!trajectory_execution_client_->wait_for_action_server(std::chrono::seconds(5)))
+    if (!dispatch_client_->wait_for_action_server(std::chrono::seconds(5)))
     {
-      reason = "follow_joint_trajectory action unavailable at " + trajectory_action_name_;
+      reason = "DispatchTrajectory action server unavailable at " + dispatch_action_name_;
       return false;
     }
 
-    FollowJointTrajectory::Goal goal;
+    DispatchTrajectory::Goal goal;
     goal.trajectory = trajectory;
+    goal.timeout_sec = dispatch_timeout_sec_;
 
-    auto send_goal_future = trajectory_execution_client_->async_send_goal(goal);
+    auto send_goal_future = dispatch_client_->async_send_goal(goal);
     if (send_goal_future.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
     {
-      reason = "timed out sending trajectory to " + trajectory_action_name_;
+      reason = "timed out sending trajectory to " + dispatch_action_name_;
       return false;
     }
 
-    GoalHandleFollowJointTrajectory::SharedPtr controller_goal_handle = send_goal_future.get();
-    if (!controller_goal_handle)
+    auto goal_handle = send_goal_future.get();
+    if (!goal_handle)
     {
-      reason = "trajectory controller rejected goal";
+      reason = "hw_adapter rejected trajectory dispatch goal";
       return false;
     }
 
-    auto result_future = trajectory_execution_client_->async_get_result(controller_goal_handle);
+    auto result_future = dispatch_client_->async_get_result(goal_handle);
     const auto result_timeout =
-      std::chrono::duration<double>(std::max(trajectory_action_timeout_sec_, 1.0));
+      std::chrono::duration<double>(std::max(dispatch_timeout_sec_, 10.0));
     if (result_future.wait_for(result_timeout) != std::future_status::ready)
     {
-      trajectory_execution_client_->async_cancel_goal(controller_goal_handle);
-      reason = "timed out waiting for controller result from " + trajectory_action_name_;
+      dispatch_client_->async_cancel_goal(goal_handle);
+      reason = "timed out waiting for dispatch result from " + dispatch_action_name_;
       return false;
     }
 
     const auto wrapped_result = result_future.get();
     if (!wrapped_result.result)
     {
-      reason = "trajectory controller returned no result";
+      reason = "hw_adapter returned no dispatch result";
       return false;
     }
 
-    if (wrapped_result.code != rclcpp_action::ResultCode::SUCCEEDED)
+    if (!wrapped_result.result->success)
     {
-      std::ostringstream status_message;
-      status_message << "trajectory action returned result code "
-                     << static_cast<int>(wrapped_result.code);
-      if (!wrapped_result.result->error_string.empty())
-      {
-        status_message << ": " << wrapped_result.result->error_string;
-      }
-      reason = status_message.str();
+      reason = wrapped_result.result->message.empty() ?
+        "hw_adapter execution failed" : wrapped_result.result->message;
       return false;
     }
 
-    if (wrapped_result.result->error_code != FollowJointTrajectory::Result::SUCCESSFUL)
-    {
-      std::ostringstream controller_error;
-      controller_error << "controller error " << wrapped_result.result->error_code;
-      if (!wrapped_result.result->error_string.empty())
-      {
-        controller_error << ": " << wrapped_result.result->error_string;
-      }
-      reason = controller_error.str();
-      return false;
-    }
-
+    std::ostringstream note;
+    note << "dispatched_via=" << dispatch_action_name_
+         << ", hw_execution_time=" << wrapped_result.result->execution_time_sec << "s";
+    execution_note = note.str();
     return true;
   }
 
@@ -453,6 +472,23 @@ private:
     if (pose_required)
     {
       normalized_pose = goal->target_pose;
+      if (quaternion_norm_sq(normalized_pose.orientation) <= 1e-12)
+      {
+        const auto current_pose = move_group_->getCurrentPose().pose;
+        if (quaternion_norm_sq(current_pose.orientation) <= 1e-12)
+        {
+          abort_with_message(
+            goal_handle,
+            started_at,
+            "orientation unresolved: command omitted orientation and current pose orientation is unavailable");
+          return;
+        }
+        normalized_pose.orientation = current_pose.orientation;
+        RCLCPP_WARN(
+          get_logger(),
+          "Goal orientation omitted; using current end-effector orientation for deterministic IK.");
+      }
+
       std::string orientation_reason;
       if (!orientation_filter_.normalize_and_validate(normalized_pose, orientation_reason))
       {
@@ -541,20 +577,68 @@ private:
     }
     else if (primitive == "LIN")
     {
-      std::vector<geometry_msgs::msg::Pose> waypoints;
-      waypoints.push_back(normalized_pose);
-
-      cartesian_fraction = move_group_->computeCartesianPath(
-        waypoints,
-        kCartesianEefStep,
-        kCartesianJumpThreshold,
-        planned_trajectory_msg,
-        true);
-
-      if (cartesian_fraction < 0.0)
+      // V4 E1: PILZ_LIN is the primary LIN strategy.
+      // computeCartesianPath is kept as fallback only.
+      // When planner_selection routes to Pilz LIN, we use MoveGroupInterface::plan()
+      // with setPoseTarget, which triggers Pilz LIN directly.
+      if (planner_selection.pipeline_id == "pilz_industrial_motion_planner" &&
+          planner_selection.planner_id == "LIN")
       {
-        abort_with_message(goal_handle, started_at, "computeCartesianPath returned error for LIN primitive");
-        return;
+        // Use Pilz LIN natively via MoveGroupInterface
+        move_group_->setPoseTarget(normalized_pose);
+
+        moveit::planning_interface::MoveGroupInterface::Plan plan;
+        const auto plan_code = move_group_->plan(plan);
+        if (plan_code != moveit::core::MoveItErrorCode::SUCCESS)
+        {
+          // Fallback to computeCartesianPath if Pilz LIN fails
+          RCLCPP_WARN(get_logger(),
+            "Pilz LIN planning failed, attempting computeCartesianPath fallback.");
+
+          std::vector<geometry_msgs::msg::Pose> waypoints;
+          waypoints.push_back(normalized_pose);
+
+          cartesian_fraction = move_group_->computeCartesianPath(
+            waypoints,
+            kCartesianEefStep,
+            kCartesianJumpThreshold,
+            planned_trajectory_msg,
+            true);
+
+          if (cartesian_fraction < 0.0)
+          {
+            abort_with_message(goal_handle, started_at,
+              "both Pilz LIN and computeCartesianPath failed for LIN primitive");
+            return;
+          }
+        }
+        else
+        {
+          planned_trajectory_msg = plan.trajectory_;
+          plan_start_state_msg = plan.start_state_;
+          has_plan_start_state = true;
+          // Pilz provides native timing; fraction is implicit 1.0
+          cartesian_fraction = 1.0;
+        }
+      }
+      else
+      {
+        // Fallback: computeCartesianPath
+        std::vector<geometry_msgs::msg::Pose> waypoints;
+        waypoints.push_back(normalized_pose);
+
+        cartesian_fraction = move_group_->computeCartesianPath(
+          waypoints,
+          kCartesianEefStep,
+          kCartesianJumpThreshold,
+          planned_trajectory_msg,
+          true);
+
+        if (cartesian_fraction < 0.0)
+        {
+          abort_with_message(goal_handle, started_at, "computeCartesianPath returned error for LIN primitive");
+          return;
+        }
       }
     }
 
@@ -590,14 +674,26 @@ private:
     robot_trajectory::RobotTrajectory robot_trajectory(move_group_->getRobotModel(), kPlanningGroup);
     robot_trajectory.setRobotTrajectoryMsg(reference_state, planned_trajectory_msg);
 
+    // V4 G1: correct pipeline order —
+    //   geometry plan → dense validation → resample → timing → Ruckig → final validation
+    // If Pilz provided native timing (has_plan_start_state=true and Pilz planner),
+    // skip TOTG unless the trajectory was resampled.
+    const bool pilz_native_timing =
+      has_plan_start_state &&
+      planner_selection.pipeline_id == "pilz_industrial_motion_planner";
+
     std::string post_reason;
-    if (robot_trajectory.getWayPointCount() >= 2U)
+    if (robot_trajectory.getWayPointCount() >= 2U && !pilz_native_timing)
     {
       if (!trajectory_post_processor_.apply_totg(robot_trajectory, velocity_scale, acceleration_scale, post_reason))
       {
         abort_with_message(goal_handle, started_at, "TOTG failed: " + post_reason);
         return;
       }
+    }
+    else if (pilz_native_timing)
+    {
+      post_reason = "TOTG skipped: Pilz native timing preserved";
     }
     else
     {
@@ -617,8 +713,9 @@ private:
     robot_trajectory.getRobotTrajectoryMsg(postprocessed_msg);
     trajectory_msgs::msg::JointTrajectory output_traj = postprocessed_msg.joint_trajectory;
 
+    // V4 G2: Internal budget is 190 (not 200 MotoROS2 hard limit)
     if (!trajectory_post_processor_.downsample_to_max_points(
-          output_traj, TrajectoryPostProcessor::kMaxTrajectoryPoints, post_reason))
+          output_traj, kInternalMaxTrajectoryPoints, post_reason))
     {
       abort_with_message(goal_handle, started_at, "downsampling failed: " + post_reason);
       return;
@@ -631,12 +728,14 @@ private:
       return;
     }
 
-    publish_feedback(goal_handle, 0.75, "trajectory_execution_requested");
+    publish_feedback(goal_handle, 0.75, "trajectory_dispatch_requested");
 
+    // V4 B1/A1: Dispatch validated trajectory to hw_adapter — NEVER execute directly.
     std::string execution_reason;
-    if (!execute_joint_trajectory(output_traj, execution_reason))
+    std::string execution_note;
+    if (!dispatch_to_hw_adapter(output_traj, execution_reason, execution_note))
     {
-      abort_with_message(goal_handle, started_at, "trajectory execution failed: " + execution_reason);
+      abort_with_message(goal_handle, started_at, "trajectory dispatch failed: " + execution_reason);
       return;
     }
 
@@ -658,6 +757,10 @@ private:
     if (!ruckig_reason.empty())
     {
       message << ", ruckig_status=" << ruckig_reason;
+    }
+    if (!execution_note.empty())
+    {
+      message << ", " << execution_note;
     }
 
     result->message = message.str();

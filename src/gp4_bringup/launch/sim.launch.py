@@ -57,12 +57,40 @@ def generate_launch_description():
         output='screen',
     )
 
+    # V4 A1: hw_adapter is the only execution backend, even in simulation.
+    # In sim mode, it connects to the fake controller's FJT action.
+    hw_adapter_node = Node(
+        package='hw_adapter',
+        executable='hw_adapter_node',
+        name='hw_adapter_node',
+        output='screen',
+        parameters=[{
+            # Fake hardware: the active controller action server is
+            # gp4_arm_controller/follow_joint_trajectory (not /yaskawa/...)
+            "follow_joint_trajectory_action": "/gp4_arm_controller/follow_joint_trajectory",
+            "dispatch_action_name": "/hw_adapter/dispatch_trajectory",
+            # In sim, robot_status will not exist; hw_adapter tolerates missing status
+            "robot_status_topic": "/yaskawa/robot_status",
+        }],
+    )
+
+    # V4 Phase 1: motion_core is plan-only. It sends validated trajectories
+    # to hw_adapter via DispatchTrajectory, not directly to FJT.
     motion_core_node = Node(
         package='motion_core',
         executable='motion_core_node',
         name='motion_core_node',
         output='screen',
-        parameters=[moveit_config.to_dict()],
+        parameters=[
+            moveit_config.to_dict(),
+            {
+                # motion_core dispatches to hw_adapter, no direct FJT client
+                "dispatch_action_name": "/hw_adapter/dispatch_trajectory",
+                "dispatch_timeout_sec": 30.0,
+                # V4 J9: planning scene collision objects
+                "scene_objects_path": os.path.join(gp4_bringup_share, 'config', 'scene_objects.yaml'),
+            },
+        ],
         remappings=[
             ('/yaskawa/joint_states', '/joint_states'),
         ],
@@ -94,6 +122,7 @@ def generate_launch_description():
         audit_log_path_arg,
         moveit_only,
         safety_node,
+        hw_adapter_node,
         motion_core_node,
         diagnostic_aggregator,
         supervisor_node,

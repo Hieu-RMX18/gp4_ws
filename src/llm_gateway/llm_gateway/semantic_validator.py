@@ -26,11 +26,23 @@ class SemanticValidator:
     def __init__(self, safety_rules: dict | None = None):
         if safety_rules is None:
             safety_rules = self._load_safety_rules()
-        ws = safety_rules.get("workspace", {})
+        workspace_bounds = self._DEFAULT_BOUNDS
+        ws = safety_rules.get("workspace_bounds")
+        if not isinstance(ws, dict) or not ws:
+            ws = safety_rules.get("workspace", {})
         self._workspace_bounds = {
-            "x": (float(ws.get("x_min",  0.0)), float(ws.get("x_max",  0.6))),
-            "y": (float(ws.get("y_min", -0.3)), float(ws.get("y_max",  0.3))),
-            "z": (float(ws.get("z_min",  0.2)), float(ws.get("z_max",  0.6))),
+            "x": (
+                float(ws.get("x_min", workspace_bounds["x"][0])),
+                float(ws.get("x_max", workspace_bounds["x"][1])),
+            ),
+            "y": (
+                float(ws.get("y_min", workspace_bounds["y"][0])),
+                float(ws.get("y_max", workspace_bounds["y"][1])),
+            ),
+            "z": (
+                float(ws.get("z_min", workspace_bounds["z"][0])),
+                float(ws.get("z_max", workspace_bounds["z"][1])),
+            ),
         }
 
     @staticmethod

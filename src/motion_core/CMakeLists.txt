@@ -31,6 +31,7 @@ add_library(${PROJECT_NAME}_components
   src/trajectory_post_processor.cpp
   src/quality_gate.cpp
   src/orientation_filter.cpp
+  src/planning_scene_manager.cpp
 )
 
 target_include_directories(${PROJECT_NAME}_components PUBLIC
@@ -51,6 +52,10 @@ ament_target_dependencies(${PROJECT_NAME}_components
   moveit_msgs
   tf2_geometry_msgs
   pluginlib
+)
+
+target_link_libraries(${PROJECT_NAME}_components
+  yaml-cpp
 )
 
 add_executable(motion_core_node

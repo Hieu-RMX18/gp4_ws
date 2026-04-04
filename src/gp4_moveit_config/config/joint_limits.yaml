@@ -5,6 +5,9 @@
 # not publish per-axis acceleration limits, so the acceleration values remain
 # conservative engineering assumptions for MoveIt time-parameterization.
 #
+# V4 G3: Jerk limits added for all 6 joints. Ruckig requires these for true
+# jerk-limited smoothing. Starting conservatively — tune via benchmark matrix.
+#
 # For beginners, we downscale velocity and acceleration limits.
 # You can always specify higher scaling factors (<= 1.0) in your motion requests.
 default_velocity_scaling_factor: 0.1
@@ -20,6 +23,8 @@ joint_limits:
     max_velocity: 8.1157810217736319
     has_acceleration_limits: true
     max_acceleration: 2.5
+    has_jerk_limits: true
+    max_jerk: 50.0
   joint_2_l:
     min_position: -1.9198621771937625
     max_position: 2.2689280275926285
@@ -27,6 +32,8 @@ joint_limits:
     max_velocity: 8.1157810217736319
     has_acceleration_limits: true
     max_acceleration: 2.5
+    has_jerk_limits: true
+    max_jerk: 50.0
   joint_3_u:
     min_position: -1.1344640137963142
     max_position: 3.490658503988659
@@ -34,6 +41,8 @@ joint_limits:
     max_velocity: 9.1629785729702302
     has_acceleration_limits: true
     max_acceleration: 2.5
+    has_jerk_limits: true
+    max_jerk: 50.0
   joint_4_r:
     min_position: -3.490658503988659
     max_position: 3.490658503988659
@@ -41,6 +50,8 @@ joint_limits:
     max_velocity: 9.8611102737679612
     has_acceleration_limits: true
     max_acceleration: 3.0
+    has_jerk_limits: true
+    max_jerk: 80.0
   joint_5_b:
     min_position: -2.1467549799530254
     max_position: 2.1467549799530254
@@ -48,6 +59,8 @@ joint_limits:
     max_velocity: 9.8611102737679612
     has_acceleration_limits: true
     max_acceleration: 3.0
+    has_jerk_limits: true
+    max_jerk: 80.0
   joint_6_t:
     min_position: -7.941248096574199
     max_position: 7.941248096574199
@@ -55,3 +68,5 @@ joint_limits:
     max_velocity: 17.453292519943297
     has_acceleration_limits: true
     max_acceleration: 5.0
+    has_jerk_limits: true
+    max_jerk: 120.0

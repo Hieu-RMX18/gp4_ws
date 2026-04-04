@@ -30,6 +30,8 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
     declare_parameter<std::string>("write_single_io_service", std::string());
   const auto tool_io_address = declare_parameter<int64_t>("tool_io_address", 0);
   const auto tool_poll_period_ms = declare_parameter<int64_t>("tool_poll_period_ms", 250);
+  const auto dispatch_action_name =
+    declare_parameter<std::string>("dispatch_action_name", "/hw_adapter/dispatch_trajectory");
 
   robot_status_monitor_ = std::make_unique<RobotStatusMonitor>(*this, robot_status_topic);
   session_manager_ = std::make_unique<Motoros2SessionManager>(
@@ -60,6 +62,19 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
     tool_io_address > 0 ? static_cast<uint32_t>(tool_io_address) : 0U,
     std::chrono::milliseconds(tool_poll_period_ms > 0 ? tool_poll_period_ms : 0));
 
+  // --- DispatchTrajectory action server ---
+  // This is the single ROS interface through which motion_core sends
+  // validated trajectories for execution on the real robot controller.
+  dispatch_action_server_ = rclcpp_action::create_server<DispatchTrajectory>(
+    this,
+    dispatch_action_name,
+    std::bind(&HwAdapterNode::handle_dispatch_goal, this,
+      std::placeholders::_1, std::placeholders::_2),
+    std::bind(&HwAdapterNode::handle_dispatch_cancel, this,
+      std::placeholders::_1),
+    std::bind(&HwAdapterNode::handle_dispatch_accepted, this,
+      std::placeholders::_1));
+
   {
     std::lock_guard<std::mutex> lock(orchestration_mutex_);
     last_status_message_ =
@@ -68,9 +83,89 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
 
   RCLCPP_INFO(
     get_logger(),
-    "hw_adapter_node initialized for %s on %s; orchestration remains deterministic and not verified on hardware.",
+    "hw_adapter_node initialized for %s on %s; DispatchTrajectory action: %s",
     backend_capabilities_.controller_variant().c_str(),
-    trajectory_action_name.c_str());
+    trajectory_action_name.c_str(),
+    dispatch_action_name.c_str());
+}
+
+// --- DispatchTrajectory action callbacks ---
+
+rclcpp_action::GoalResponse HwAdapterNode::handle_dispatch_goal(
+  const rclcpp_action::GoalUUID &,
+  std::shared_ptr<const DispatchTrajectory::Goal> goal)
+{
+  if (!goal || goal->trajectory.points.empty())
+  {
+    RCLCPP_WARN(get_logger(), "Rejecting DispatchTrajectory: empty trajectory.");
+    return rclcpp_action::GoalResponse::REJECT;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(orchestration_mutex_);
+    if (execution_in_progress_)
+    {
+      RCLCPP_WARN(get_logger(),
+        "Rejecting DispatchTrajectory: execution already in progress.");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+  }
+
+  return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+}
+
+rclcpp_action::CancelResponse HwAdapterNode::handle_dispatch_cancel(
+  const std::shared_ptr<GoalHandleDispatchTrajectory>)
+{
+  RCLCPP_INFO(get_logger(), "DispatchTrajectory cancel requested.");
+  return rclcpp_action::CancelResponse::ACCEPT;
+}
+
+void HwAdapterNode::handle_dispatch_accepted(
+  const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle)
+{
+  std::thread([this, goal_handle]() { execute_dispatch(goal_handle); }).detach();
+}
+
+void HwAdapterNode::execute_dispatch(
+  const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle)
+{
+  const auto started_at = std::chrono::steady_clock::now();
+  const auto goal = goal_handle->get_goal();
+
+  // Publish feedback: readiness check
+  auto feedback = std::make_shared<DispatchTrajectory::Feedback>();
+  feedback->state = "readiness_check";
+  goal_handle->publish_feedback(feedback);
+
+  const double timeout_sec = (goal->timeout_sec > 0.0) ? goal->timeout_sec : 30.0;
+  const auto timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::duration<double>(timeout_sec));
+
+  // Delegate to the existing execute_trajectory orchestration
+  const auto report = execute_trajectory(goal->trajectory, timeout_ms);
+
+  const auto ended_at = std::chrono::steady_clock::now();
+  const double execution_time_sec =
+    std::chrono::duration_cast<std::chrono::duration<double>>(ended_at - started_at).count();
+
+  auto result = std::make_shared<DispatchTrajectory::Result>();
+  result->success = report.success;
+  result->message = report.message;
+  result->execution_time_sec = execution_time_sec;
+
+  if (report.success)
+  {
+    feedback->state = "done";
+    goal_handle->publish_feedback(feedback);
+    goal_handle->succeed(result);
+  }
+  else
+  {
+    feedback->state = "failed";
+    goal_handle->publish_feedback(feedback);
+    goal_handle->abort(result);
+  }
 }
 
 const BackendCapabilities & HwAdapterNode::backend_capabilities() const
@@ -222,10 +317,21 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory(
       report.message += " | stop_motion failed: " + stop_reason;
     }
 
-    finalize(
-      report.stop_motion_succeeded ?
-      "fatal execution failure: stop_motion issued" :
-      "fatal execution failure: stop_motion failed");
+    // V4 J4-Recovery: attempt deterministic recovery after fatal failure
+    RCLCPP_WARN(get_logger(), "Fatal execution failure — initiating J4-Recovery");
+    const auto recovery_result = attempt_recovery();
+    if (recovery_result.recovered)
+    {
+      finalize("fatal failure recovered in " +
+        std::to_string(recovery_result.elapsed_sec) + "s");
+    }
+    else
+    {
+      finalize(
+        "fatal execution failure: recovery FAILED at " +
+        std::string(recovery_state_name(recovery_result.final_state)));
+    }
+
     RCLCPP_ERROR(get_logger(), "%s", report.message.c_str());
     return report;
   }
@@ -253,5 +359,40 @@ bool HwAdapterNode::should_stop_motion_on_failure(
   const TrajectoryExecutionResult & result) const
 {
   return !result.success && (result.accepted || result.completed);
+}
+
+RecoveryResult HwAdapterNode::attempt_recovery()
+{
+  RecoveryCallbacks callbacks;
+
+  callbacks.stop_motion = [this](std::string & reason) {
+    return session_manager_->stop_motion(reason);
+  };
+
+  callbacks.reset_error = [this](std::string & reason) {
+    return session_manager_->reset_error(reason);
+  };
+
+  callbacks.verify_joint_state = [this](std::string & reason) {
+    if (!robot_status_monitor_->has_status())
+    {
+      reason = "no robot status received since startup";
+      return false;
+    }
+    reason.clear();
+    return true;
+  };
+
+  callbacks.is_ready_for_motion = [this](std::string & reason) {
+    return robot_status_monitor_->is_ready_for_motion(reason);
+  };
+
+  RecoveryStateMachine fsm(
+    get_logger(),
+    std::move(callbacks),
+    std::chrono::seconds(5),   // per-step timeout
+    std::chrono::seconds(20)); // total recovery timeout
+
+  return fsm.execute();
 }
 }  // namespace hw_adapter

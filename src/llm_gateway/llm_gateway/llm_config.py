@@ -11,7 +11,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 
 
-_MODEL_PLACEHOLDER = "SET_THIS_FROM_YOUR_9ROUTER_ALIAS"
+_MODEL_PLACEHOLDER = "claude-haiku-4-5"
 
 
 def _default_config_path() -> str:
@@ -62,14 +62,30 @@ def load_llm_backend_config(config_path: str | None = None) -> LLMBackendConfig:
     if not isinstance(backend, dict):
         raise ValueError("llm_backend must be a mapping.")
 
+    def _resolve_env_ref(value: Any) -> Any:
+        """Resolve ${ENV_VAR} references in string values."""
+        if not isinstance(value, str):
+            return value
+        if value.startswith("${") and value.endswith("}"):
+            env_name = value[2:-1]
+            return os.getenv(env_name, "")
+        return value
+
     def pick(key: str, default: Any) -> Any:
         env_key = f"LLM_{key.upper()}"
-        return os.getenv(env_key, backend.get(key, default))
+        raw = os.getenv(env_key, backend.get(key, default))
+        return _resolve_env_ref(raw)
+
+    # api_key: GP4_LLM_API_KEY takes priority, then LLM_API_KEY, then config file.
+    raw_api_key = os.getenv(
+        "GP4_LLM_API_KEY",
+        os.getenv("LLM_API_KEY", _resolve_env_ref(backend.get("api_key", "")))
+    )
 
     return LLMBackendConfig(
         provider=str(backend.get("provider", "9router_local")),
         base_url=str(pick("base_url", "http://localhost:20128/v1")).rstrip("/"),
-        api_key=str(pick("api_key", "")),
+        api_key=str(raw_api_key),
         api_mode=str(backend.get("api_mode", "openai_compatible")),
         model=str(pick("model", _MODEL_PLACEHOLDER)),
         temperature=float(pick("temperature", 0.0)),

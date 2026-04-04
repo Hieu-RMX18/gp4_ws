@@ -4,11 +4,20 @@ from interfaces.srv import ValidateCommand
 from .command_validator import CommandValidator
 from .workspace_guard import WorkspaceGuard
 
+
 class ExecutionGate:
-    def __init__(self, node: Node, validator: CommandValidator, guard: WorkspaceGuard):
+    """V4 H2: Fail-closed execution gate.
+
+    Validates commands AND checks robot readiness before allowing execution.
+    """
+
+    def __init__(self, node: Node, validator: CommandValidator,
+                 guard: WorkspaceGuard, safety_manager=None):
         self.node = node
         self.validator = validator
         self.guard = guard
+        # Reference to SafetyManager for readiness checks
+        self._safety_manager = safety_manager
 
         self.srv = self.node.create_service(
             ValidateCommand,
@@ -19,7 +28,19 @@ class ExecutionGate:
 
     def validate_callback(self, request, response):
         cmd_json = request.command_json
-        
+
+        # V4 H2: Fail-closed readiness check BEFORE command validation.
+        # If robot is not ready, reject ALL commands.
+        if self._safety_manager is not None:
+            if not self._safety_manager.is_robot_ready:
+                reason = self._safety_manager.last_error_reason
+                self.node.get_logger().warn(
+                    f"Execution blocked (fail-closed): {reason}")
+                response.valid = False
+                response.reason = f"BLOCKED: {reason}"
+                response.sanitized_json = ""
+                return response
+
         # 1. Validate JSON and parameters
         is_valid_cmd, reason_cmd = self.validator.validate(cmd_json)
         if not is_valid_cmd:
@@ -55,6 +76,6 @@ class ExecutionGate:
         response.reason = "OK"
         # Normalize and stringify JSON
         response.sanitized_json = json.dumps(cmd_data)
-        
+
         self.node.get_logger().info(f"Command validated successfully: {prim_type}")
         return response

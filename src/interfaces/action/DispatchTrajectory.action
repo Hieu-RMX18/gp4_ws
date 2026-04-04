@@ -1,0 +1,12 @@
+# Goal — validated JointTrajectory dispatched from motion_core to hw_adapter.
+# hw_adapter is the only node allowed to send it to the robot controller.
+trajectory_msgs/JointTrajectory trajectory
+float64 timeout_sec          # execution timeout; 0 = use hw_adapter default
+---
+# Result
+bool success
+string message
+float64 execution_time_sec
+---
+# Feedback
+string state                 # e.g. "readiness_check", "trajectory_mode", "executing", "done"

@@ -78,6 +78,16 @@ def normalize_pose(raw_pose: Dict[str, Any]) -> Pose:
     orientation = raw_pose.get("orientation")
     if not isinstance(position, dict):
         raise ValueError("target_pose.position must be an object.")
+    if orientation is None:
+        # LLM position-only intents can omit orientation; encode this as a
+        # zero-quaternion sentinel so motion_core can preserve current tool
+        # orientation deterministically at execution time.
+        orientation = {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+            "w": 0.0,
+        }
     if not isinstance(orientation, dict):
         raise ValueError("target_pose.orientation must be an object.")
 

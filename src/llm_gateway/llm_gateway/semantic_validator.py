@@ -109,5 +109,9 @@ class SemanticValidator:
             + (pose.orientation.z * pose.orientation.z)
             + (pose.orientation.w * pose.orientation.w)
         )
-        if not math.isfinite(quaternion_norm) or quaternion_norm <= 1e-9:
-            raise ValueError("target_pose.orientation must be a non-zero quaternion.")
+        if not math.isfinite(quaternion_norm):
+            raise ValueError("target_pose.orientation must be finite.")
+        if quaternion_norm <= 1e-9:
+            # Zero quaternion is a supported sentinel for position-only intents.
+            # motion_core resolves this to current tool orientation before IK.
+            return

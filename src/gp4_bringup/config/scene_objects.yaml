@@ -1,0 +1,29 @@
+# PLACEHOLDER — đo thực tế rồi thay số
+# Frame: base_link của GP4
+# Khi chưa đo được: set dimensions lớn hơn thực tế 10-15% → planner conservative, an toàn hơn
+
+collision_objects:
+
+  table_surface:
+    type: box
+    dimensions: [1.2, 0.8, 0.05]   # x, y, z [m] — ĐO LẠI
+    pose:
+      position: [0.5, 0.0, -0.03]  # tâm mặt bàn — ĐO LẠI
+      orientation: [0, 0, 0, 1]    # [x, y, z, w]
+    frame_id: base_link
+
+  robot_mount:
+    type: cylinder
+    dimensions: [0.15, 0.12]       # radius, height — ĐO LẠI
+    pose:
+      position: [0.0, 0.0, -0.07]
+      orientation: [0, 0, 0, 1]
+    frame_id: base_link
+
+  safety_fence_front:
+    type: box
+    dimensions: [0.01, 1.5, 1.2]   # mặt phẳng cấm phía trước
+    pose:
+      position: [0.85, 0.0, 0.6]   # ĐO LẠI
+      orientation: [0, 0, 0, 1]
+    frame_id: base_link

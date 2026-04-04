@@ -11,7 +11,8 @@ namespace motion_core
 class TrajectoryPostProcessor
 {
 public:
-  static constexpr std::size_t kMaxTrajectoryPoints = 200;
+  // V4 G2: Internal point budget is 190 (MotoROS2 hard limit is 200)
+  static constexpr std::size_t kMaxTrajectoryPoints = 190;
   static constexpr double kDefaultVelocityScaling = 0.3;
   static constexpr double kDefaultAccelerationScaling = 0.2;
 

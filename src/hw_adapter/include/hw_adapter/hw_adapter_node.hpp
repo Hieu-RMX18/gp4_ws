@@ -6,14 +6,19 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
+
+#include <interfaces/action/dispatch_trajectory.hpp>
 
 #include "hw_adapter/backend_capabilities.hpp"
 #include "hw_adapter/motoros2_session_manager.hpp"
 #include "hw_adapter/robot_status_monitor.hpp"
 #include "hw_adapter/tool_state_monitor.hpp"
+#include "hw_adapter/recovery_state_machine.hpp"
 #include "hw_adapter/trajectory_executor.hpp"
 
 namespace hw_adapter
@@ -43,6 +48,9 @@ struct HwAdapterExecutionReport
 class HwAdapterNode final : public rclcpp::Node
 {
 public:
+  using DispatchTrajectory = interfaces::action::DispatchTrajectory;
+  using GoalHandleDispatchTrajectory = rclcpp_action::ServerGoalHandle<DispatchTrajectory>;
+
   explicit HwAdapterNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
   const BackendCapabilities & backend_capabilities() const;
@@ -57,7 +65,21 @@ public:
     const trajectory_msgs::msg::JointTrajectory & trajectory,
     std::chrono::milliseconds timeout = std::chrono::seconds(30));
 
+  /// V4 J4-Recovery: attempt deterministic recovery after fatal execution failure.
+  RecoveryResult attempt_recovery();
+
 private:
+  // DispatchTrajectory action server callbacks
+  rclcpp_action::GoalResponse handle_dispatch_goal(
+    const rclcpp_action::GoalUUID & uuid,
+    std::shared_ptr<const DispatchTrajectory::Goal> goal);
+  rclcpp_action::CancelResponse handle_dispatch_cancel(
+    const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
+  void handle_dispatch_accepted(
+    const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
+  void execute_dispatch(
+    const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
+
   HwAdapterOrchestrationSnapshot build_snapshot_locked() const;
   bool should_stop_motion_on_failure(const TrajectoryExecutionResult & result) const;
 
@@ -66,6 +88,10 @@ private:
   std::unique_ptr<Motoros2SessionManager> session_manager_;
   std::unique_ptr<TrajectoryExecutor> trajectory_executor_;
   std::unique_ptr<ToolStateMonitor> tool_state_monitor_;
+
+  // DispatchTrajectory action server
+  rclcpp_action::Server<DispatchTrajectory>::SharedPtr dispatch_action_server_;
+
   mutable std::mutex orchestration_mutex_;
   bool execution_in_progress_ = false;
   bool last_execution_success_ = false;

@@ -59,7 +59,16 @@ def _normalized_move_group_parameters(moveit_config):
     return parameters
 
 
-def _check_micro_ros_agent(_context):
+def _check_rmw_and_agent(_context):
+    """V4 A8 + H1-Layer0: verify RMW is FastDDS and micro-ROS Agent is reachable."""
+    rmw = os.environ.get('RMW_IMPLEMENTATION', '')
+    if rmw != 'rmw_fastrtps_cpp':
+        return [
+            LogInfo(msg=f'RMW_IMPLEMENTATION is "{rmw}", expected "rmw_fastrtps_cpp".'),
+            EmitEvent(event=Shutdown(
+                reason='V4 A8: RMW_IMPLEMENTATION must be rmw_fastrtps_cpp for MotoROS2 compatibility.')),
+        ]
+
     try:
         subprocess.run(
             ['bash', '-lc', "ss -lun | grep -q ':8888'"],
@@ -76,7 +85,7 @@ def _check_micro_ros_agent(_context):
         ]
 
     return [
-        LogInfo(msg='micro-ROS Agent readiness check passed on UDP port 8888.'),
+        LogInfo(msg='RMW and micro-ROS Agent readiness checks passed.'),
     ]
 
 
@@ -186,14 +195,37 @@ def generate_launch_description():
         ],
     )
 
+    # V4 A1/B1: hw_adapter is the only execution backend.
     hw_adapter_node = Node(
         package='hw_adapter',
         executable='hw_adapter_node',
         name='hw_adapter_node',
         output='screen',
+        parameters=[{
+            # Real hardware: MotoROS2 FJT action
+            "follow_joint_trajectory_action": "/yaskawa/follow_joint_trajectory",
+            "dispatch_action_name": "/hw_adapter/dispatch_trajectory",
+        }],
         additional_env={
             'GP4_AGENT_IP': agent_ip,
         },
+    )
+
+    # V4 Phase 1: motion_core MUST be launched on real hardware path too.
+    # Same /execute_motion contract as simulation.
+    motion_core_node = Node(
+        package='motion_core',
+        executable='motion_core_node',
+        name='motion_core_node',
+        output='screen',
+        parameters=[
+            moveit_config.to_dict(),
+            {
+                # motion_core sends validated trajectories to hw_adapter (not directly to controller)
+                "dispatch_action_name": "/hw_adapter/dispatch_trajectory",
+                "dispatch_timeout_sec": 60.0,
+            },
+        ],
     )
 
     return LaunchDescription([
@@ -201,7 +233,7 @@ def generate_launch_description():
         robot_ip_arg,
         agent_ip_arg,
         use_rviz_arg,
-        OpaqueFunction(function=_check_micro_ros_agent),
+        OpaqueFunction(function=_check_rmw_and_agent),
         robot_state_publisher,
         RegisterEventHandler(
             OnProcessStart(
@@ -224,7 +256,7 @@ def generate_launch_description():
         RegisterEventHandler(
             OnProcessExit(
                 target_action=gp4_arm_controller_spawner,
-                on_exit=[move_group, rviz],
+                on_exit=[move_group, rviz, motion_core_node],
             )
         ),
     ])

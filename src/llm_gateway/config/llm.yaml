@@ -1,4 +1,12 @@
-llm_provider: "openai"  # or anthropic
-model: "gpt-4o-mini"
-temperature: 0.1
-max_tokens: 512
+llm_backend:
+  provider: "9router_local"
+  base_url: "http://localhost:20128/v1"
+  api_key: "sk-1c0d701e1dd534c3-qxhjs9-86faa1c0" # Thay bằng key đã tạo trong 9router
+  api_mode: "openai_compatible"
+  model: "ollama/gpt-oss:120b"
+  temperature: 0.0
+  max_tokens: 3618
+  require_json_only: true
+  fail_on_non_json: true
+  fail_on_schema_mismatch: true
+  request_timeout_sec: 30.0 # Lưu ý: Nên tăng thêm vì model 120b rất nặng

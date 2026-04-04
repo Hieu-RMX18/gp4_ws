@@ -14,6 +14,7 @@
   <depend>interfaces</depend>
   <depend>safety</depend>
   <exec_depend>python3-jsonschema</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>python3-pytest</exec_depend>
 
   <export>

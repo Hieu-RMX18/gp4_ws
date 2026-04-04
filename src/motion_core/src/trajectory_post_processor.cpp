@@ -147,21 +147,21 @@ bool TrajectoryPostProcessor::downsample_to_max_points(
 }
 
 bool TrajectoryPostProcessor::apply_ruckig_smoothing(
-  trajectory_msgs::msg::JointTrajectory & traj,
+  robot_trajectory::RobotTrajectory & traj,
   std::string & reason) const
 {
   reason.clear();
-
-  if (traj.points.empty())
-  {
-    reason = "trajectory has no points";
+  if (traj.getWayPointCount() == 0) {
+    reason = "trajectory has no waypoints";
     return false;
   }
-
 #if MOTION_CORE_HAS_RUCKIG
-  reason =
-    "Ruckig available in this build but skipped: current API only carries JointTrajectory and lacks RobotTrajectory "
-    "context.";
+  trajectory_processing::RuckigSmoothing smoother;
+  if (!smoother.applySmoothing(traj, 1.0, 1.0)) {
+    reason = "RuckigSmoothing::applySmoothing failed";
+    return false;
+  }
+  reason = "Ruckig smoothing applied successfully";
   return true;
 #else
   reason = "Ruckig smoothing unavailable in this build; optional step skipped.";

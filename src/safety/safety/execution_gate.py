@@ -34,7 +34,11 @@ class ExecutionGate:
         prim_type = cmd_data.get("primitive_type", "")
 
         # 3. Check workspace and collisions if target_pose should be used
-        if prim_type not in ["HOME", "STOP", "JOINTS"]:
+        # Skip pose check for: HOME, STOP, or PTP when joint_target is provided
+        ptp_with_joints = (prim_type == "PTP" and
+                           hasattr(request, 'joint_target') and
+                           len(request.joint_target) > 0)
+        if prim_type not in ["HOME", "STOP"] and not ptp_with_joints:
             is_valid_pose, reason_pose = self.guard.check_pose(request.target_pose)
             if not is_valid_pose:
                 self.node.get_logger().warn(f"Pose validation failed: {reason_pose}")

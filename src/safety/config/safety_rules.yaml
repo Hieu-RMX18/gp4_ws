@@ -7,14 +7,14 @@ workspace_bounds:
   z_max:  1.2
 
 joint_limits_override:
-  max_velocity_scale: 0.5
+  max_velocity_scale: 0.3
   max_acceleration_scale: 0.3
 
 forbidden_zones:
   - name: table
     x: 0.0
     y: 0.0
-    z: -0.05
+    z: 0.02
     size_x: 1.6
     size_y: 1.6
     size_z: 0.1

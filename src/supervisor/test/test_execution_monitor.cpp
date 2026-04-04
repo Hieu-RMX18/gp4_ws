@@ -84,6 +84,22 @@ action_msgs::msg::GoalStatusArray make_status_array(
   return status_array;
 }
 
+action_msgs::msg::GoalStatusArray make_status_array(
+  const std::vector<std::pair<unique_identifier_msgs::msg::UUID, int8_t>> & entries,
+  const rclcpp::Time & stamp)
+{
+  action_msgs::msg::GoalStatusArray status_array;
+  for (const auto & [goal_id, status_code] : entries)
+  {
+    action_msgs::msg::GoalStatus goal_status;
+    goal_status.goal_info.goal_id = goal_id;
+    goal_status.goal_info.stamp = stamp;
+    goal_status.status = status_code;
+    status_array.status_list.push_back(goal_status);
+  }
+  return status_array;
+}
+
 bool wait_for_condition(
   rclcpp::executors::SingleThreadedExecutor & executor,
   const std::function<bool()> & predicate,
@@ -226,6 +242,12 @@ protected:
     status_pub_->publish(make_status_array(goal_id, status_code, node_->now()));
   }
 
+  void publish_statuses(
+    const std::vector<std::pair<unique_identifier_msgs::msg::UUID, int8_t>> & entries)
+  {
+    status_pub_->publish(make_status_array(entries, node_->now()));
+  }
+
   std::vector<diagnostic_msgs::msg::DiagnosticStatus> alerts_copy()
   {
     std::lock_guard<std::mutex> lock(alert_mutex_);
@@ -335,4 +357,32 @@ TEST_F(ExecutionMonitorFixture, ConsecutiveFailuresPublishWarnAlert)
   EXPECT_EQ(snapshot.current_state, "IDLE");
   EXPECT_EQ(snapshot.consecutive_failure_count, 3U);
   EXPECT_EQ(snapshot.last_alert_level, diagnostic_msgs::msg::DiagnosticStatus::WARN);
+}
+
+TEST_F(ExecutionMonitorFixture, IgnoresTerminalHistoryWhenCountingActiveGoals)
+{
+  const auto stale_goal_id = make_uuid(0x30U);
+  const auto current_goal_id = make_uuid(0x31U);
+
+  publish_goal_request(current_goal_id, 0.5);
+  publish_goal_response(true);
+  publish_statuses({
+    {stale_goal_id, action_msgs::msg::GoalStatus::STATUS_ABORTED},
+    {current_goal_id, action_msgs::msg::GoalStatus::STATUS_EXECUTING},
+  });
+
+  ASSERT_TRUE(wait_for_condition(
+      executor_,
+      [this, &current_goal_id]() {
+        const auto snapshot = monitor_->snapshot();
+        return snapshot.current_state == "EXECUTING" &&
+               snapshot.active_goal_id == goal_id_to_string(current_goal_id) &&
+               snapshot.active_goal_count == 1U;
+      },
+      std::chrono::seconds(5)));
+
+  const auto snapshot = monitor_->snapshot();
+  EXPECT_EQ(snapshot.active_goal_count, 1U);
+  EXPECT_EQ(snapshot.active_goal_id, goal_id_to_string(current_goal_id));
+  EXPECT_EQ(snapshot.current_state, "EXECUTING");
 }

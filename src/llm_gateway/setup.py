@@ -14,7 +14,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'config'), glob('config/*.*')),
     ],
-    install_requires=['setuptools', 'jsonschema'],
+    install_requires=['setuptools', 'jsonschema', 'pyyaml'],
     zip_safe=True,
     maintainer='user',
     maintainer_email='user@todo.todo',
@@ -23,7 +23,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'llm_gateway_node = llm_gateway.gateway_node:main',
+            'llm_gateway_node = llm_gateway.llm_gateway_node:main',
         ],
     },
 )

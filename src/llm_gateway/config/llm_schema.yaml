@@ -1,0 +1,104 @@
+$schema: "http://json-schema.org/draft-07/schema#"
+title: "Phase9ExecuteMotionCommand"
+type: object
+additionalProperties: false
+required:
+  - primitive_type
+properties:
+  primitive_type:
+    type: string
+    enum:
+      - HOME
+      - PTP
+      - LIN
+  target_pose:
+    type: object
+    additionalProperties: false
+    required:
+      - position
+    properties:
+      position:
+        type: object
+        additionalProperties: false
+        required:
+          - x
+          - y
+          - z
+        properties:
+          x:
+            type: number
+          y:
+            type: number
+          z:
+            type: number
+      orientation:
+        anyOf:
+          - type: object
+            additionalProperties: false
+            required:
+              - x
+              - y
+              - z
+              - w
+            properties:
+              x:
+                type: number
+              y:
+                type: number
+              z:
+                type: number
+              w:
+                type: number
+          - type: object
+            additionalProperties: false
+            required:
+              - roll
+              - pitch
+              - yaw
+            properties:
+              roll:
+                type: number
+              pitch:
+                type: number
+              yaw:
+                type: number
+  joint_target:
+    type: array
+    minItems: 6
+    maxItems: 6
+    items:
+      type: number
+  velocity_scale:
+    type: number
+    minimum: 0.05
+    maximum: 0.30
+  acceleration_scale:
+    type: number
+    minimum: 0.05
+    maximum: 0.30
+  planner_id:
+    type: string
+    enum:
+      - PILZ_LIN
+      - PILZ_PTP
+      - OMPL_RRTConnect
+  require_approval:
+    type: boolean
+allOf:
+  - if:
+      properties:
+        primitive_type:
+          const: LIN
+    then:
+      required:
+        - target_pose
+  - if:
+      properties:
+        primitive_type:
+          const: PTP
+    then:
+      anyOf:
+        - required:
+            - target_pose
+        - required:
+            - joint_target

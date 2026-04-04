@@ -40,6 +40,35 @@ def _rpy_to_quaternion(roll_rad: float, pitch_rad: float, yaw_rad: float) -> Qua
     )
 
 
+def _normalize_orientation(raw_orientation: Dict[str, Any]) -> Quaternion:
+    if not isinstance(raw_orientation, dict):
+        raise ValueError("target_pose.orientation must be an object.")
+
+    quaternion_fields = ("x", "y", "z", "w")
+    if all(field in raw_orientation for field in quaternion_fields):
+        return Quaternion(
+            x=_to_float(raw_orientation.get("x"), "target_pose.orientation.x"),
+            y=_to_float(raw_orientation.get("y"), "target_pose.orientation.y"),
+            z=_to_float(raw_orientation.get("z"), "target_pose.orientation.z"),
+            w=_to_float(raw_orientation.get("w"), "target_pose.orientation.w"),
+        )
+
+    rpy_fields = ("roll", "pitch", "yaw")
+    if all(field in raw_orientation for field in rpy_fields):
+        roll = _to_float(raw_orientation.get("roll"), "target_pose.orientation.roll")
+        pitch = _to_float(raw_orientation.get("pitch"), "target_pose.orientation.pitch")
+        yaw = _to_float(raw_orientation.get("yaw"), "target_pose.orientation.yaw")
+
+        if _is_likely_degrees([roll, pitch, yaw]):
+            roll = math.radians(roll)
+            pitch = math.radians(pitch)
+            yaw = math.radians(yaw)
+
+        return _rpy_to_quaternion(roll, pitch, yaw)
+
+    raise ValueError("target_pose.orientation must provide x/y/z/w or roll/pitch/yaw.")
+
+
 def normalize_pose(raw_pose: Dict[str, Any]) -> Pose:
     """Convert position/orientation into geometry_msgs/Pose with unit detection."""
     if not isinstance(raw_pose, dict):
@@ -47,31 +76,25 @@ def normalize_pose(raw_pose: Dict[str, Any]) -> Pose:
 
     position = raw_pose.get("position")
     orientation = raw_pose.get("orientation")
-    if not isinstance(position, dict) or not isinstance(orientation, dict):
-        raise ValueError("target_pose must include position and orientation objects.")
+    if not isinstance(position, dict):
+        raise ValueError("target_pose.position must be an object.")
+    if not isinstance(orientation, dict):
+        raise ValueError("target_pose.orientation must be an object.")
 
     x = _to_float(position.get("x"), "target_pose.position.x")
     y = _to_float(position.get("y"), "target_pose.position.y")
     z = _to_float(position.get("z"), "target_pose.position.z")
-    roll = _to_float(orientation.get("roll"), "target_pose.orientation.roll")
-    pitch = _to_float(orientation.get("pitch"), "target_pose.orientation.pitch")
-    yaw = _to_float(orientation.get("yaw"), "target_pose.orientation.yaw")
 
     if _is_likely_mm([x, y, z]):
         x /= 1000.0
         y /= 1000.0
         z /= 1000.0
 
-    if _is_likely_degrees([roll, pitch, yaw]):
-        roll = math.radians(roll)
-        pitch = math.radians(pitch)
-        yaw = math.radians(yaw)
-
     pose = Pose()
     pose.position.x = x
     pose.position.y = y
     pose.position.z = z
-    pose.orientation = _rpy_to_quaternion(roll, pitch, yaw)
+    pose.orientation = _normalize_orientation(orientation)
     return pose
 
 
@@ -92,10 +115,7 @@ class Normalizer:
     _PLANNER_DEFAULTS = {
         "LIN": "PILZ_LIN",
         "PTP": "PILZ_PTP",
-        "CIRC": "PILZ_CIRC",
         "HOME": "PILZ_PTP",
-        "approach": "PILZ_LIN",
-        "retract": "PILZ_LIN",
     }
 
     def __init__(self, default_velocity_scale: float = 0.1, default_acceleration_scale: float = 0.1):
@@ -128,5 +148,7 @@ class Normalizer:
             "planner_id",
             self._PLANNER_DEFAULTS.get(primitive_type, "OMPL_RRTConnect"),
         )
+        # Default to explicit downstream approval because llm_gateway is not
+        # the final safety authority for real hardware execution.
         normalized.setdefault("require_approval", True)
         return normalized

@@ -43,3 +43,21 @@ def test_normalizer_defaults(normalizer):
     assert normalized["acceleration_scale"] == 0.1
     assert normalized["planner_id"] == "PILZ_PTP"
     assert normalized["require_approval"] is True
+
+
+def test_normalizer_accepts_quaternion_orientation(normalizer):
+    normalized = normalizer.normalize(
+        {
+            "primitive_type": "LIN",
+            "target_pose": {
+                "position": {"x": 0.35, "y": 0.1, "z": 0.2},
+                "orientation": {"x": 0.0, "y": 0.707, "z": 0.0, "w": 0.707},
+            },
+        }
+    )
+
+    pose = normalized["target_pose_msg"]
+    assert math.isclose(pose.orientation.x, 0.0, abs_tol=1e-9)
+    assert math.isclose(pose.orientation.y, 0.707, abs_tol=1e-9)
+    assert math.isclose(pose.orientation.z, 0.0, abs_tol=1e-9)
+    assert math.isclose(pose.orientation.w, 0.707, abs_tol=1e-9)

@@ -26,5 +26,9 @@ log/
 .claude/
 .codex/
 .vscode/
+.venv/
 __pycache__/
 *.pyc
+build/
+install/
+log/

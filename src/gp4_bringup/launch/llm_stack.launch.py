@@ -12,7 +12,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     llm_provider_arg = DeclareLaunchArgument(
         'llm_provider',
-        default_value='openai',
+        default_value='9router_local',
         description='Logical LLM provider label exported to the llm_gateway process environment.',
     )
     audit_log_path_arg = DeclareLaunchArgument(

@@ -4,6 +4,8 @@ from rclpy.node import Node
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from std_msgs.msg import String
+from industrial_msgs.msg import RobotStatus
+from industrial_msgs.msg import TriState
 
 from .command_validator import CommandValidator
 from .workspace_guard import WorkspaceGuard
@@ -31,7 +33,7 @@ class SafetyManager(Node):
 
         # Emergency stop logic subscription
         self.status_sub = self.create_subscription(
-            String,
+            RobotStatus,
             '/yaskawa/robot_status',
             self.status_callback,
             10
@@ -41,11 +43,16 @@ class SafetyManager(Node):
         
         self.get_logger().info("SafetyManager started and ready.")
 
-    def status_callback(self, msg: String):
+    def status_callback(self, msg: RobotStatus):
         # Trigger emergency stop logic if status has ERROR
-        if "ERROR" in msg.data.upper():
-            self.get_logger().error(f"EMERGENCY STOP CONDITION TRIGGERED: {msg.data}")
+        if msg.in_error.val == TriState.TRUE:
+            self.get_logger().error(
+                "EMERGENCY STOP: robot reported in_error via /yaskawa/robot_status")
             self.publish_status("ERROR: Emergency stop triggered")
+        elif msg.e_stopped.val == TriState.TRUE:
+            self.get_logger().error(
+                "EMERGENCY STOP: robot e_stopped via /yaskawa/robot_status")
+            self.publish_status("ERROR: E-stop active")
         else:
             self.publish_status("OK")
 

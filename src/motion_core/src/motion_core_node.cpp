@@ -50,7 +50,11 @@ public:
 
     trajectory_action_name_ = declare_parameter<std::string>(
       "trajectory_action_name",
-      "/controller_manager/follow_joint_trajectory");
+      "/yaskawa/follow_joint_trajectory");
+    RCLCPP_INFO(
+        get_logger(),
+        "trajectory_action_name resolved to: %s",
+        trajectory_action_name_.c_str());
     trajectory_action_timeout_sec_ = declare_parameter<double>(
       "trajectory_action_timeout_sec",
       30.0);
@@ -376,9 +380,11 @@ private:
     if (goal->require_approval)
     {
       abort_with_message(
-        goal_handle,
-        started_at,
-        "require_approval flow is not yet implemented in Phase 4 execution server");
+          goal_handle, started_at,
+          "[DEFERRED] require_approval=true: human-in-the-loop approval gate "
+          "is architecturally reserved but not implemented in Phase 4. "
+          "Set require_approval=false or auto_clear_unimplemented_approval=true "
+          "in the gateway launch config to use the current execution path.");
       return;
     }
 
@@ -598,6 +604,15 @@ private:
       post_reason = "TOTG skipped for single-waypoint trajectory";
     }
 
+    std::string ruckig_reason;
+    if (!trajectory_post_processor_.apply_ruckig_smoothing(
+          robot_trajectory, ruckig_reason)) {
+      abort_with_message(goal_handle, started_at,
+          "Ruckig smoothing failed: " + ruckig_reason);
+      return;
+    }
+    RCLCPP_INFO(get_logger(), "Ruckig: %s", ruckig_reason.c_str());
+
     moveit_msgs::msg::RobotTrajectory postprocessed_msg;
     robot_trajectory.getRobotTrajectoryMsg(postprocessed_msg);
     trajectory_msgs::msg::JointTrajectory output_traj = postprocessed_msg.joint_trajectory;
@@ -606,13 +621,6 @@ private:
           output_traj, TrajectoryPostProcessor::kMaxTrajectoryPoints, post_reason))
     {
       abort_with_message(goal_handle, started_at, "downsampling failed: " + post_reason);
-      return;
-    }
-
-    std::string ruckig_reason;
-    if (!trajectory_post_processor_.apply_ruckig_smoothing(output_traj, ruckig_reason))
-    {
-      abort_with_message(goal_handle, started_at, "Ruckig smoothing failed: " + ruckig_reason);
       return;
     }
 

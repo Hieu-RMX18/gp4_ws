@@ -236,7 +236,14 @@ void ExecutionMonitor::status_callback(const action_msgs::msg::GoalStatusArray::
   {
     std::lock_guard<std::mutex> lock(snapshot_mutex_);
     snapshot_.seen_status = true;
-    snapshot_.active_goal_count = msg->status_list.size();
+    // GoalStatusArray can retain terminal history for older goals, so only
+    // count statuses that are still active when checking for duplicate goals.
+    snapshot_.active_goal_count = static_cast<std::size_t>(std::count_if(
+        msg->status_list.begin(),
+        msg->status_list.end(),
+        [](const action_msgs::msg::GoalStatus & status) {
+          return is_active_status(status.status);
+        }));
 
     if (snapshot_.active_goal_count > 1U)
     {

@@ -76,6 +76,12 @@ ament_target_dependencies(motion_core_node
   pluginlib
 )
 
+find_package(ruckig QUIET)
+if(ruckig_FOUND)
+  target_link_libraries(motion_core_node ruckig::ruckig)
+  target_compile_definitions(motion_core_node PRIVATE MOTION_CORE_HAS_RUCKIG=1)
+endif()
+
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 

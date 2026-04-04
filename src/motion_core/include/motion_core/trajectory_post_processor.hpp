@@ -27,7 +27,7 @@ public:
     std::string & reason) const;
 
   bool apply_ruckig_smoothing(
-    trajectory_msgs::msg::JointTrajectory & traj,
+    robot_trajectory::RobotTrajectory & traj,
     std::string & reason) const;
 };
 }  // namespace motion_core

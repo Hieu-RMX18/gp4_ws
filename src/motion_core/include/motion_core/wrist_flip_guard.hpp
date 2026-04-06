@@ -15,7 +15,7 @@ public:
   // J4/J5 (wrist joints): 20° = 0.349 rad
   // J6 (wrist rotate): 30° = 0.524 rad (with unwrap for continuous rotation)
   static constexpr double kDeltaRadJ123 = 0.4363323129985824;  // 25°
-  static constexpr double kDeltaRadJ45  = 0.3490658503988659;  // 20°
+  static constexpr double kDeltaRadJ45  = 0.7853981633974483;  // 45°
   static constexpr double kDeltaRadJ6   = 0.5235987755982988;  // 30°
 
   // Legacy API compatibility

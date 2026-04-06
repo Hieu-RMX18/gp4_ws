@@ -4,6 +4,7 @@
 #include "hw_adapter/hw_adapter_node.hpp"
 
 #include <chrono>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -13,6 +14,7 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
 : rclcpp::Node("hw_adapter_node", options),
   backend_capabilities_(*this)
 {
+  const auto sim_mode = declare_parameter<bool>("sim_mode", false);
   const auto robot_status_topic =
     declare_parameter<std::string>("robot_status_topic", "/yaskawa/robot_status");
   const auto trajectory_action_name = declare_parameter<std::string>(
@@ -32,8 +34,12 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
   const auto tool_poll_period_ms = declare_parameter<int64_t>("tool_poll_period_ms", 250);
   const auto dispatch_action_name =
     declare_parameter<std::string>("dispatch_action_name", "/hw_adapter/dispatch_trajectory");
+  sim_mode_ = sim_mode;
 
-  robot_status_monitor_ = std::make_unique<RobotStatusMonitor>(*this, robot_status_topic);
+  if (!sim_mode_)
+  {
+    robot_status_monitor_ = std::make_unique<RobotStatusMonitor>(*this, robot_status_topic);
+  }
   session_manager_ = std::make_unique<Motoros2SessionManager>(
     *this,
     SessionServiceNames{
@@ -45,6 +51,16 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
     *this,
     trajectory_action_name,
     [this](std::string & reason) {
+      if (sim_mode_)
+      {
+        reason.clear();
+        return true;
+      }
+      if (!robot_status_monitor_)
+      {
+        reason = "robot_status_monitor is not initialized";
+        return false;
+      }
       return robot_status_monitor_->is_ready_for_motion(reason);
     },
     [this](std::string & reason) {
@@ -77,9 +93,38 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
 
   {
     std::lock_guard<std::mutex> lock(orchestration_mutex_);
-    last_status_message_ =
+    last_status_message_ = sim_mode_ ?
+      "simulation mode: robot status bypassed" :
       "hw_adapter orchestrator initialized; waiting for robot readiness before execution";
   }
+
+  if (sim_mode_)
+  {
+    sim_readiness_pub_ = create_publisher<interfaces::msg::RobotReadiness>(
+      "/hw_adapter/ready",
+      rclcpp::QoS(1).reliable().transient_local());
+    sim_readiness_timer_ = create_wall_timer(
+      std::chrono::seconds(1),
+      std::bind(&HwAdapterNode::publish_sim_readiness, this));
+    publish_sim_readiness();
+    RCLCPP_INFO(
+      get_logger(),
+      "hw_adapter_node running in SIM MODE: robot_status readiness bypass enabled");
+  }
+
+  // --- Step 4.1: AlarmReset service server ---
+  // Delegates to session_manager_->reset_error() which calls MotoROS2 reset_error.
+  alarm_reset_service_ = create_service<AlarmReset>(
+    "/hw_adapter/alarm_reset",
+    std::bind(&HwAdapterNode::handle_alarm_reset, this,
+      std::placeholders::_1, std::placeholders::_2));
+
+  // --- Step 4.2: IoSet service server ---
+  // Delegates to MotoROS2 WriteSingleIO if available at build time.
+  io_set_service_ = create_service<IoSet>(
+    "/hw_adapter/io_set",
+    std::bind(&HwAdapterNode::handle_io_set, this,
+      std::placeholders::_1, std::placeholders::_2));
 
   RCLCPP_INFO(
     get_logger(),
@@ -168,6 +213,19 @@ void HwAdapterNode::execute_dispatch(
   }
 }
 
+void HwAdapterNode::publish_sim_readiness()
+{
+  if (!sim_mode_ || !sim_readiness_pub_)
+  {
+    return;
+  }
+
+  interfaces::msg::RobotReadiness msg;
+  msg.ready = true;
+  msg.status_message = "simulation mode: robot status bypassed";
+  sim_readiness_pub_->publish(msg);
+}
+
 const BackendCapabilities & HwAdapterNode::backend_capabilities() const
 {
   return backend_capabilities_;
@@ -175,6 +233,10 @@ const BackendCapabilities & HwAdapterNode::backend_capabilities() const
 
 const RobotStatusMonitor & HwAdapterNode::robot_status_monitor() const
 {
+  if (!robot_status_monitor_)
+  {
+    throw std::runtime_error("robot_status_monitor is unavailable when sim_mode=true");
+  }
   return *robot_status_monitor_;
 }
 
@@ -202,6 +264,17 @@ bool HwAdapterNode::is_ready_for_execution(std::string & reason) const
       reason = "hw_adapter is already executing; asynchronous motion is unsupported";
       return false;
     }
+  }
+
+  if (sim_mode_)
+  {
+    reason.clear();
+    return true;
+  }
+  if (!robot_status_monitor_)
+  {
+    reason = "robot_status_monitor is not initialized";
+    return false;
   }
 
   return robot_status_monitor_->is_ready_for_motion(reason);
@@ -237,7 +310,9 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory(
     execution_in_progress_ = true;
     last_execution_success_ = false;
     last_error_was_fatal_ = false;
-    last_status_message_ = "hw_adapter checking robot readiness before trajectory execution";
+    last_status_message_ = sim_mode_ ?
+      "hw_adapter SIM MODE: robot_status readiness bypassed for trajectory execution" :
+      "hw_adapter checking robot readiness before trajectory execution";
   }
 
   auto finalize = [this, &report](const std::string & status_message) {
@@ -249,7 +324,15 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory(
     };
 
   std::string reason;
-  if (!robot_status_monitor_->is_ready_for_motion(reason))
+  if (!sim_mode_ && !robot_status_monitor_)
+  {
+    report.blocked = true;
+    report.message = "robot_status_monitor is not initialized";
+    finalize("execution blocked: " + report.message);
+    RCLCPP_WARN(get_logger(), "%s", report.message.c_str());
+    return report;
+  }
+  if (!sim_mode_ && !robot_status_monitor_->is_ready_for_motion(reason))
   {
     report.blocked = true;
     report.message = reason.empty() ? "robot is not ready for execution" : std::move(reason);
@@ -282,6 +365,13 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory(
   if (!session_manager_->ensure_trajectory_mode(reason))
   {
     report.message = reason.empty() ? "failed to enter trajectory mode" : std::move(reason);
+    if (sim_mode_)
+    {
+      RCLCPP_WARN(
+        get_logger(),
+        "SIM MODE detected ensure_trajectory_mode failure: %s",
+        report.message.c_str());
+    }
     finalize("execution blocked: " + report.message);
     RCLCPP_WARN(get_logger(), "%s", report.message.c_str());
     return report;
@@ -344,7 +434,7 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory(
 HwAdapterOrchestrationSnapshot HwAdapterNode::build_snapshot_locked() const
 {
   HwAdapterOrchestrationSnapshot snapshot;
-  snapshot.robot_ready = robot_status_monitor_ && robot_status_monitor_->is_ready();
+  snapshot.robot_ready = sim_mode_ || (robot_status_monitor_ && robot_status_monitor_->is_ready());
   snapshot.session_ready = session_manager_ && session_manager_->is_session_ready();
   snapshot.tool_state_available = tool_state_monitor_ && tool_state_monitor_->has_tool_state();
   snapshot.execution_in_progress = execution_in_progress_;
@@ -352,6 +442,18 @@ HwAdapterOrchestrationSnapshot HwAdapterNode::build_snapshot_locked() const
   snapshot.last_execution_success = last_execution_success_;
   snapshot.last_error_was_fatal = last_error_was_fatal_;
   snapshot.status_message = last_status_message_;
+  if (sim_mode_ && !snapshot.execution_in_progress)
+  {
+    const bool has_active_issue =
+      snapshot.last_error_was_fatal ||
+      snapshot.status_message.find("failed") != std::string::npos ||
+      snapshot.status_message.find("blocked") != std::string::npos ||
+      snapshot.status_message.find("rejected") != std::string::npos;
+    if (!has_active_issue)
+    {
+      snapshot.status_message = "simulation mode: robot status bypassed";
+    }
+  }
   return snapshot;
 }
 
@@ -374,6 +476,16 @@ RecoveryResult HwAdapterNode::attempt_recovery()
   };
 
   callbacks.verify_joint_state = [this](std::string & reason) {
+    if (sim_mode_)
+    {
+      reason.clear();
+      return true;
+    }
+    if (!robot_status_monitor_)
+    {
+      reason = "robot_status_monitor is not initialized";
+      return false;
+    }
     if (!robot_status_monitor_->has_status())
     {
       reason = "no robot status received since startup";
@@ -384,6 +496,16 @@ RecoveryResult HwAdapterNode::attempt_recovery()
   };
 
   callbacks.is_ready_for_motion = [this](std::string & reason) {
+    if (sim_mode_)
+    {
+      reason.clear();
+      return true;
+    }
+    if (!robot_status_monitor_)
+    {
+      reason = "robot_status_monitor is not initialized";
+      return false;
+    }
     return robot_status_monitor_->is_ready_for_motion(reason);
   };
 
@@ -394,5 +516,136 @@ RecoveryResult HwAdapterNode::attempt_recovery()
     std::chrono::seconds(20)); // total recovery timeout
 
   return fsm.execute();
+}
+
+// --- Step 4.1: AlarmReset service handler ---
+// Delegates to session_manager_->reset_error() which wraps MotoROS2 reset_error service.
+void HwAdapterNode::handle_alarm_reset(
+  const std::shared_ptr<AlarmReset::Request> /*request*/,
+  std::shared_ptr<AlarmReset::Response> response)
+{
+  if (!session_manager_)
+  {
+    response->success = false;
+    response->message = "session_manager not initialized";
+    RCLCPP_ERROR(get_logger(), "ALARM_RESET: %s", response->message.c_str());
+    return;
+  }
+
+  std::string reason;
+  const bool ok = session_manager_->reset_error(reason);
+  response->success = ok;
+  response->message = ok
+    ? (reason.empty() ? "alarm reset succeeded" : reason)
+    : (reason.empty() ? "alarm reset failed" : reason);
+
+  if (ok)
+  {
+    RCLCPP_INFO(get_logger(), "ALARM_RESET: %s", response->message.c_str());
+  }
+  else
+  {
+    RCLCPP_WARN(get_logger(), "ALARM_RESET: %s", response->message.c_str());
+  }
+}
+
+// --- Step 4.2: IoSet service handler ---
+// Delegates to MotoROS2 WriteSingleIO if motoros2_interfaces was available at build time.
+// If not available, returns a graceful "unavailable" response.
+void HwAdapterNode::handle_io_set(
+  const std::shared_ptr<IoSet::Request> request,
+  std::shared_ptr<IoSet::Response> response)
+{
+#if HW_ADAPTER_HAS_TOOL_IO_INTERFACES
+  if (!tool_state_monitor_ || !tool_state_monitor_->io_services_configured())
+  {
+    response->success = false;
+    response->message =
+      "IO_SET unavailable: WriteSingleIO service is not configured in hw_adapter";
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+
+  // Use the write_single_io service name from the tool_state_monitor config
+  const auto & svc_names = tool_state_monitor_->snapshot();
+  if (!svc_names.write_service_configured)
+  {
+    response->success = false;
+    response->message =
+      "IO_SET unavailable: write_single_io service name is empty";
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+
+  // Reuse the write_single_io_service parameter already declared in constructor.
+  using WriteSingleIO = motoros2_interfaces::srv::WriteSingleIO;
+  std::string write_svc_name;
+  get_parameter("write_single_io_service", write_svc_name);
+  if (write_svc_name.empty())
+  {
+    response->success = false;
+    response->message =
+      "IO_SET unavailable: write_single_io_service parameter is empty";
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+  auto write_client = create_client<WriteSingleIO>(write_svc_name);
+
+  // If the parameter was empty or the service isn't ready, fail gracefully
+  if (!write_client || !write_client->wait_for_service(std::chrono::seconds(3)))
+  {
+    response->success = false;
+    response->message =
+      "IO_SET unavailable: WriteSingleIO service is not reachable";
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+
+  auto io_request = std::make_shared<WriteSingleIO::Request>();
+  io_request->address = request->address;
+  io_request->value = request->value;
+
+  auto future = write_client->async_send_request(io_request);
+  if (future.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
+  {
+    response->success = false;
+    response->message =
+      "IO_SET timed out waiting for WriteSingleIO response";
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+
+  auto io_response = future.get();
+  if (!io_response)
+  {
+    response->success = false;
+    response->message = "IO_SET: WriteSingleIO returned null response";
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+    return;
+  }
+
+  response->success = io_response->success;
+  response->message = io_response->success
+    ? "IO_SET: address=" + std::to_string(request->address) +
+      " value=" + std::to_string(request->value) + " written successfully"
+    : "IO_SET failed: " + io_response->message;
+
+  if (response->success)
+  {
+    RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
+  }
+  else
+  {
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+  }
+#else
+  // motoros2_interfaces was not available at build time — graceful unavailable
+  (void)request;
+  response->success = false;
+  response->message =
+    "IO_SET unavailable: motoros2_interfaces was not found at build time; "
+    "rebuild hw_adapter with motoros2_interfaces installed to enable IO control";
+  RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
+#endif
 }
 }  // namespace hw_adapter

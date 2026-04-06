@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 import rclpy
 from interfaces.action import ExecuteMotion
-from interfaces.srv import ValidateCommand
+from interfaces.srv import GetCurrentPose, ValidateCommand
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException
@@ -95,6 +95,13 @@ class LLMGatewayNode(Node):
             callback_group=callback_group,
         )
 
+        # GET_POSE: dedicated query service client — separate from motion path
+        self._get_pose_client = self.create_client(
+            GetCurrentPose,
+            "/get_current_pose",
+            callback_group=callback_group,
+        )
+
         self.get_logger().info("LLMGatewayNode ready.")
 
     def _declare_parameters(self) -> None:
@@ -174,6 +181,14 @@ class LLMGatewayNode(Node):
             return
 
         self.publish_status("semantic_valid")
+
+        # Query-only commands bypass the safety gate and motion action pipeline.
+        # GET_POSE routes to the dedicated query service — no motion side effects.
+        primitive_type = normalized_command.get("primitive_type", "")
+        if self._is_query_command(primitive_type):
+            self._handle_get_pose_query(normalized_command, intent_text)
+            return
+
         if not self._validate_client.wait_for_service(timeout_sec=self._safety_service_timeout_sec):
             self._reject(
                 "validate_service_unavailable",
@@ -198,13 +213,88 @@ class LLMGatewayNode(Node):
         self._semantic_validator.validate(normalized_command)
         return normalized_command
 
+    def _is_query_command(self, primitive_type: str) -> bool:
+        """Return True for query-only commands that bypass the motion action pipeline."""
+        return primitive_type == "GET_POSE"
+
+    def _handle_get_pose_query(
+        self, normalized_command: Dict[str, Any], intent_text: str
+    ) -> None:
+        """Route GET_POSE to the dedicated query service — NO motion action path."""
+        if not self._get_pose_client.wait_for_service(timeout_sec=self._safety_service_timeout_sec):
+            self._reject(
+                "get_pose_service_unavailable",
+                "GetCurrentPose service unavailable",
+                intent_text=intent_text,
+            )
+            return
+
+        request = GetCurrentPose.Request()
+        request.reference_frame = str(normalized_command.get("reference_frame", "base_link"))
+
+        self.publish_status("get_pose_requested")
+        future = self._get_pose_client.call_async(request)
+        future.add_done_callback(
+            lambda f, intent=intent_text: self._on_get_pose_done(f, intent)
+        )
+
+    def _on_get_pose_done(self, future: Any, intent_text: str) -> None:
+        """Handle GetCurrentPose service response."""
+        try:
+            response = future.result()
+        except Exception as exc:
+            self._reject(
+                "get_pose_service_call_failed",
+                str(exc),
+                intent_text=intent_text,
+            )
+            return
+
+        if not response.success:
+            self._reject(
+                "get_pose_failed",
+                response.message,
+                intent_text=intent_text,
+            )
+            return
+
+        pose = response.current_pose
+        pose_data = {
+            "position": {
+                "x": float(pose.position.x),
+                "y": float(pose.position.y),
+                "z": float(pose.position.z),
+            },
+            "orientation": {
+                "x": float(pose.orientation.x),
+                "y": float(pose.orientation.y),
+                "z": float(pose.orientation.z),
+                "w": float(pose.orientation.w),
+            },
+        }
+
+        self.get_logger().info(
+            f"GET_POSE result: pos=({pose.position.x:.4f}, "
+            f"{pose.position.y:.4f}, {pose.position.z:.4f}), "
+            f"orient=({pose.orientation.x:.4f}, {pose.orientation.y:.4f}, "
+            f"{pose.orientation.z:.4f}, {pose.orientation.w:.4f})"
+        )
+        self._publish_debug({
+            "status": "query_result",
+            "stage": "get_pose",
+            "intent": intent_text,
+            "message": response.message,
+            "current_pose": pose_data,
+        })
+        self.publish_status("query_succeeded")
+
     def _build_validate_request(
         self, normalized_command: Dict[str, Any], command_payload: Dict[str, Any]
     ) -> ValidateCommand.Request:
         request = ValidateCommand.Request()
         request.command_json = json.dumps(command_payload, ensure_ascii=True, separators=(",", ":"))
         request.primitive_type = normalized_command["primitive_type"]
-        request.velocity_scale = normalized_command["velocity_scale"]
+        request.velocity_scale = normalized_command.get("velocity_scale", 0.0)
         if "target_pose_msg" in normalized_command:
             request.target_pose = normalized_command["target_pose_msg"]
         return request

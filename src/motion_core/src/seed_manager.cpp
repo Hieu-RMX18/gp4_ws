@@ -56,6 +56,18 @@ bool SeedManager::get_seed_state(const std::string & primitive_family, std::vect
   return false;
 }
 
+bool SeedManager::get_current_joint_positions(std::vector<double> & positions) const
+{
+  std::lock_guard<std::mutex> lock(joint_state_mutex_);
+  if (!has_joint_state_)
+  {
+    positions.clear();
+    return false;
+  }
+
+  return extract_ordered_positions(positions);
+}
+
 void SeedManager::cache_successful_seed(
   const std::string & primitive_family,
   const std::vector<double> & seed)

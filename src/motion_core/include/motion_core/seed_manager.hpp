@@ -25,6 +25,10 @@ public:
   /// V4 D2: Get seed with context of which primitive family is requesting it.
   bool get_seed_state(const std::string & primitive_family, std::vector<double> & seed) const;
 
+  /// Return only the latest ordered joint positions from /yaskawa/joint_states.
+  /// No cache or named-target fallback is applied.
+  bool get_current_joint_positions(std::vector<double> & positions) const;
+
   /// V4 D2: Cache a successful IK solution for a primitive family.
   void cache_successful_seed(const std::string & primitive_family, const std::vector<double> & seed);
 

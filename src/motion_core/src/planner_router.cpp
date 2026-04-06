@@ -39,11 +39,14 @@ std::string PlannerRouter::route_planner(
     return "OMPL_RRTConnect";
   }
 
-  if (primitive == "LIN")
+  if (primitive == "LIN" || primitive == "MOVE_REL")
   {
     return "PILZ_LIN";
   }
-  if (primitive == "PTP")
+  if (
+    primitive == "PTP" ||
+    primitive == "MOVE_JOINT" ||
+    primitive == "MOVE_JOINTS")
   {
     return "PILZ_PTP";
   }

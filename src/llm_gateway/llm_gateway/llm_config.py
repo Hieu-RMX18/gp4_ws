@@ -11,7 +11,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 
 
-_MODEL_PLACEHOLDER = "claude-haiku-4-5"
+_MODEL_PLACEHOLDER = "TEEN MODEL 9ROUTER"
 
 
 def _default_config_path() -> str:

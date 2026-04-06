@@ -12,9 +12,19 @@ from ament_index_python.packages import get_package_share_directory
 class SemanticValidator:
     """Enforce phase-specific primitive, workspace, and scaling constraints."""
 
-    _ALLOWED_PRIMITIVES = {"HOME", "PTP", "LIN"}
+    _ALLOWED_PRIMITIVES = {
+        "HOME", "PTP", "LIN", "MOVE_REL", "GET_POSE",
+        "SET_SPEED", "WAIT", "STOP", "MOVE_JOINT", "MOVE_JOINTS",
+        "IO_SET", "ALARM_RESET",
+    }
     _MIN_VELOCITY_SCALE = 0.05
     _MAX_VELOCITY_SCALE = 0.30
+
+    # MOVE_REL: max single-command translation norm (meters)
+    _MAX_MOVE_REL_DELTA = 0.20
+
+    # GP4 has 6 joints (0..5)
+    _NUM_JOINTS = 6
 
     # Fallback bounds — overridden by safety_rules.yaml at construction
     _DEFAULT_BOUNDS = {
@@ -65,6 +75,86 @@ class SemanticValidator:
                 f"primitive_type must be one of {sorted(self._ALLOWED_PRIMITIVES)}."
             )
 
+        # ── GET_POSE is a query-only command — no motion targets, no velocity/scaling needed. ──
+        if primitive_type == "GET_POSE":
+            if command.get("target_pose_msg") or command.get("target_pose") or command.get("joint_target"):
+                raise ValueError("GET_POSE must not include target_pose or joint_target.")
+            return True
+
+        # ── STOP: no fields needed ──
+        if primitive_type == "STOP":
+            if command.get("target_pose_msg") or command.get("target_pose") or command.get("joint_target"):
+                raise ValueError("STOP must not include target_pose or joint_target.")
+            return True
+
+        # ── ALARM_RESET: no fields needed ──
+        if primitive_type == "ALARM_RESET":
+            return True
+
+        # ── SET_SPEED: velocity_scale in bounds, stateless ──
+        if primitive_type == "SET_SPEED":
+            vs = float(command.get("velocity_scale", 0.0))
+            if not (self._MIN_VELOCITY_SCALE <= vs <= self._MAX_VELOCITY_SCALE):
+                raise ValueError(
+                    f"SET_SPEED: velocity_scale {vs:.2f} must be within "
+                    f"[{self._MIN_VELOCITY_SCALE:.2f}, {self._MAX_VELOCITY_SCALE:.2f}]."
+                )
+            return True
+
+        # ── WAIT: duration must be >= 0 ──
+        if primitive_type == "WAIT":
+            duration = float(command.get("wait_duration_sec", -1.0))
+            if duration < 0:
+                raise ValueError("WAIT: wait_duration_sec must be >= 0.")
+            return True
+
+        # ── IO_SET: address required, value must be 0 or 1 ──
+        if primitive_type == "IO_SET":
+            if "io_address" not in command:
+                raise ValueError("IO_SET requires io_address.")
+            io_val = command.get("io_value")
+            if io_val is None:
+                raise ValueError("IO_SET requires io_value.")
+            if int(io_val) not in (0, 1):
+                raise ValueError(
+                    f"IO_SET: io_value must be 0 or 1, got {io_val}."
+                )
+            return True
+
+        # ── MOVE_JOINT: validate joint_index and joint_angle ──
+        if primitive_type == "MOVE_JOINT":
+            if "joint_index" not in command:
+                raise ValueError("MOVE_JOINT requires joint_index.")
+            if "joint_angle" not in command:
+                raise ValueError("MOVE_JOINT requires joint_angle.")
+            idx = int(command["joint_index"])
+            if idx < 0 or idx >= self._NUM_JOINTS:
+                raise ValueError(
+                    f"MOVE_JOINT: joint_index {idx} out of range "
+                    f"[0, {self._NUM_JOINTS - 1}]."
+                )
+            angle = float(command["joint_angle"])
+            if not math.isfinite(angle):
+                raise ValueError("MOVE_JOINT: joint_angle must be a finite number.")
+            return True
+
+        # ── MOVE_JOINTS: validate joint_target length ──
+        if primitive_type == "MOVE_JOINTS":
+            jt = command.get("joint_target")
+            if not jt or not isinstance(jt, list):
+                raise ValueError("MOVE_JOINTS requires joint_target as a list.")
+            if len(jt) != self._NUM_JOINTS:
+                raise ValueError(
+                    f"MOVE_JOINTS: joint_target must have exactly "
+                    f"{self._NUM_JOINTS} elements, got {len(jt)}."
+                )
+            return True
+
+        # ── MOVE_REL: translation-only relative motion ──
+        if primitive_type == "MOVE_REL":
+            return self._validate_move_rel(command)
+
+        # ── Motion primitives (HOME, PTP, LIN) require velocity_scale ──
         velocity_scale = float(command.get("velocity_scale", 0.0))
         if not (self._MIN_VELOCITY_SCALE <= velocity_scale <= self._MAX_VELOCITY_SCALE):
             raise ValueError(
@@ -88,6 +178,44 @@ class SemanticValidator:
 
         if has_pose:
             self._validate_pose(command["target_pose_msg"])
+
+        return True
+
+    def _validate_move_rel(self, command: Dict[str, Any]) -> bool:
+        """Validate MOVE_REL: translation-only relative motion."""
+        if command.get("target_pose_msg") or command.get("joint_target"):
+            raise ValueError(
+                "MOVE_REL must not include target_pose or joint_target."
+            )
+
+        for field in ("delta_x", "delta_y", "delta_z"):
+            if field not in command:
+                raise ValueError(f"MOVE_REL requires {field}.")
+            if not math.isfinite(float(command[field])):
+                raise ValueError(f"MOVE_REL: {field} must be a finite number.")
+
+        dx = float(command["delta_x"])
+        dy = float(command["delta_y"])
+        dz = float(command["delta_z"])
+
+        if dx == 0.0 and dy == 0.0 and dz == 0.0:
+            raise ValueError(
+                "MOVE_REL: at least one delta component must be non-zero."
+            )
+
+        delta_norm = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if delta_norm > self._MAX_MOVE_REL_DELTA:
+            raise ValueError(
+                f"MOVE_REL: delta norm {delta_norm:.4f} m exceeds "
+                f"limit {self._MAX_MOVE_REL_DELTA} m."
+            )
+
+        ref_frame = command.get("reference_frame", "base_link")
+        if ref_frame and ref_frame != "base_link":
+            raise ValueError(
+                f"MOVE_REL: unsupported reference_frame '{ref_frame}'; "
+                f"only 'base_link' is supported."
+            )
 
         return True
 
@@ -115,3 +243,4 @@ class SemanticValidator:
             # Zero quaternion is a supported sentinel for position-only intents.
             # motion_core resolves this to current tool orientation before IK.
             return
+

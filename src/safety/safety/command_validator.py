@@ -1,5 +1,15 @@
 import json
 
+
+_VELOCITY_BYPASS_PRIMITIVES = {
+    "ALARM_RESET",
+    "STOP",
+    "WAIT",
+    "IO_SET",
+    "GET_POSE",
+}
+
+
 class CommandValidator:
     def __init__(self, safety_rules: dict):
         self.safety_rules = safety_rules
@@ -17,6 +27,9 @@ class CommandValidator:
         primitive_type = cmd.get("primitive_type")
         if not primitive_type:
             return False, "Missing primitive_type"
+
+        if primitive_type in _VELOCITY_BYPASS_PRIMITIVES:
+            return True, ""
 
         velocity_scale = cmd.get("velocity_scale", 1.0)
         try:

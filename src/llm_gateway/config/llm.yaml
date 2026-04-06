@@ -5,7 +5,7 @@ llm_backend:
   # NEVER commit plaintext keys to the repository.
   api_key: "sk-1c0d701e1dd534c3-qxhjs9-86faa1c0"
   api_mode: "openai_compatible"
-  model: "claude-haiku-4-5"
+  model: "cx/gpt-5.2"
   temperature: 0.0
   max_tokens: 3618
   require_json_only: true

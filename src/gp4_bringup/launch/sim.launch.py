@@ -55,10 +55,26 @@ def generate_launch_description():
         executable='safety_manager',
         name='safety',
         output='screen',
+        parameters=[{
+            'sim_mode': True,
+        }],
+    )
+
+    # SIM MODE: clear deferred approval after ValidateCommand so fake/sim
+    # commands can execute end-to-end without changing real-hardware policy.
+    llm_gateway_node = Node(
+        package='llm_gateway',
+        executable='llm_gateway_node',
+        name='llm_gateway',
+        output='screen',
+        parameters=[{
+            'auto_clear_unimplemented_approval': True,
+        }],
     )
 
     # V4 A1: hw_adapter is the only execution backend, even in simulation.
     # In sim mode, it connects to the fake controller's FJT action.
+    # SIM MODE: bypass robot_status readiness for RViz simulation only.
     hw_adapter_node = Node(
         package='hw_adapter',
         executable='hw_adapter_node',
@@ -67,10 +83,12 @@ def generate_launch_description():
         parameters=[{
             # Fake hardware: the active controller action server is
             # gp4_arm_controller/follow_joint_trajectory (not /yaskawa/...)
-            "follow_joint_trajectory_action": "/gp4_arm_controller/follow_joint_trajectory",
+            "follow_joint_trajectory_action": "/controller_manager/follow_joint_trajectory",
             "dispatch_action_name": "/hw_adapter/dispatch_trajectory",
-            # In sim, robot_status will not exist; hw_adapter tolerates missing status
             "robot_status_topic": "/yaskawa/robot_status",
+            "start_traj_mode_service": "",
+            "reset_error_service": "",
+            "sim_mode": True,
         }],
     )
 
@@ -122,6 +140,7 @@ def generate_launch_description():
         audit_log_path_arg,
         moveit_only,
         safety_node,
+        llm_gateway_node,
         hw_adapter_node,
         motion_core_node,
         diagnostic_aggregator,

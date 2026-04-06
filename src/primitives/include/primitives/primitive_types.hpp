@@ -18,6 +18,13 @@ enum class PrimitiveType
   RETRACT,
   CIRC,
   BLENDED_SEQUENCE,
+  SET_SPEED,
+  WAIT,
+  STOP,
+  MOVE_JOINT,
+  IO_SET,
+  ALARM_RESET,
+  MOVE_JOINTS,
   UNKNOWN
 };
 
@@ -98,6 +105,34 @@ inline PrimitiveType from_string(const std::string & s)
   {
     return PrimitiveType::BLENDED_SEQUENCE;
   }
+  if (normalized == "SET_SPEED")
+  {
+    return PrimitiveType::SET_SPEED;
+  }
+  if (normalized == "WAIT")
+  {
+    return PrimitiveType::WAIT;
+  }
+  if (normalized == "STOP")
+  {
+    return PrimitiveType::STOP;
+  }
+  if (normalized == "MOVE_JOINT")
+  {
+    return PrimitiveType::MOVE_JOINT;
+  }
+  if (normalized == "IO_SET")
+  {
+    return PrimitiveType::IO_SET;
+  }
+  if (normalized == "ALARM_RESET")
+  {
+    return PrimitiveType::ALARM_RESET;
+  }
+  if (normalized == "MOVE_JOINTS" || normalized == "MOVJ")
+  {
+    return PrimitiveType::MOVE_JOINTS;
+  }
 
   return PrimitiveType::UNKNOWN;
 }
@@ -120,6 +155,20 @@ inline std::string to_string(PrimitiveType t)
       return "CIRC";
     case PrimitiveType::BLENDED_SEQUENCE:
       return "BLENDED_SEQUENCE";
+    case PrimitiveType::SET_SPEED:
+      return "SET_SPEED";
+    case PrimitiveType::WAIT:
+      return "WAIT";
+    case PrimitiveType::STOP:
+      return "STOP";
+    case PrimitiveType::MOVE_JOINT:
+      return "MOVE_JOINT";
+    case PrimitiveType::IO_SET:
+      return "IO_SET";
+    case PrimitiveType::ALARM_RESET:
+      return "ALARM_RESET";
+    case PrimitiveType::MOVE_JOINTS:
+      return "MOVE_JOINTS";
     case PrimitiveType::UNKNOWN:
     default:
       return "UNKNOWN";
@@ -128,7 +177,8 @@ inline std::string to_string(PrimitiveType t)
 
 inline bool is_joint_space(PrimitiveType t)
 {
-  return t == PrimitiveType::HOME || t == PrimitiveType::PTP;
+  return t == PrimitiveType::HOME || t == PrimitiveType::PTP ||
+         t == PrimitiveType::MOVE_JOINT || t == PrimitiveType::MOVE_JOINTS;
 }
 
 inline bool is_cartesian_linear(PrimitiveType t)

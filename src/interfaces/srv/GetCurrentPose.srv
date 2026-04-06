@@ -1,0 +1,7 @@
+# Request
+string reference_frame       # reference frame for the pose; empty defaults to "base_link"
+---
+# Response
+bool success
+string message               # explicit reason if !success
+geometry_msgs/Pose current_pose

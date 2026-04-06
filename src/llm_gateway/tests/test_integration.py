@@ -63,17 +63,26 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
         )
     )
     node._execute_client.server_is_ready = MagicMock(return_value=True)
-    node._execute_client.send_goal_async = MagicMock(return_value=ImmediateFuture(SimpleNamespace()))
+    # Mock goal handle must have .accepted and .get_result_async() like a real rclpy goal handle
+    mock_exec_result = SimpleNamespace(
+        result=SimpleNamespace(success=True, message="ok", execution_time_sec=0.1)
+    )
+    mock_goal_handle = SimpleNamespace(
+        accepted=True,
+        get_result_async=lambda: ImmediateFuture(mock_exec_result),
+    )
+    node._execute_client.send_goal_async = MagicMock(return_value=ImmediateFuture(mock_goal_handle))
 
     node.process_intent("di chuyển thẳng tới x 0.35 y 0.1 z 0.2")
 
     goal = node._execute_client.send_goal_async.call_args.args[0]
     assert goal.velocity_scale == 0.15
     assert goal.require_approval is False
-    assert debug_messages[-1]["status"] == "validated"
-    assert debug_messages[-1]["validated_command"]["velocity_scale"] == 0.15
-    assert debug_messages[-1]["validated_command"]["require_approval"] is False
-    assert statuses[-1] == "dispatched"
+    # Full flow now completes: debug_messages has both 'validated' and 'succeeded'
+    validated_msg = next(m for m in debug_messages if m["status"] == "validated")
+    assert validated_msg["validated_command"]["velocity_scale"] == 0.15
+    assert validated_msg["validated_command"]["require_approval"] is False
+    assert "dispatched" in statuses
 
     node.destroy_node()
 
@@ -102,13 +111,23 @@ def test_gateway_preserves_require_approval_when_auto_clear_disabled(openai_payl
         )
     )
     node._execute_client.server_is_ready = MagicMock(return_value=True)
-    node._execute_client.send_goal_async = MagicMock(return_value=ImmediateFuture(SimpleNamespace()))
+    # Mock goal handle must have .accepted and .get_result_async() like a real rclpy goal handle
+    mock_exec_result = SimpleNamespace(
+        result=SimpleNamespace(success=True, message="ok", execution_time_sec=0.1)
+    )
+    mock_goal_handle = SimpleNamespace(
+        accepted=True,
+        get_result_async=lambda: ImmediateFuture(mock_exec_result),
+    )
+    node._execute_client.send_goal_async = MagicMock(return_value=ImmediateFuture(mock_goal_handle))
 
     node.process_intent("di chuyển về home")
 
     goal = node._execute_client.send_goal_async.call_args.args[0]
     assert goal.require_approval is True
-    assert debug_messages[-1]["validated_command"]["require_approval"] is True
+    # Full flow now completes: find 'validated' message specifically
+    validated_msg = next(m for m in debug_messages if m["status"] == "validated")
+    assert validated_msg["validated_command"]["require_approval"] is True
 
     node.destroy_node()
 

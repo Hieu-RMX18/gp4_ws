@@ -1,0 +1,7 @@
+# Request
+uint32 address               # controller I/O address
+int32 value                  # value to write (0 or 1 for digital)
+---
+# Response
+bool success
+string message

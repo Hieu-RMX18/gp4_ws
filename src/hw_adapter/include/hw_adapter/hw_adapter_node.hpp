@@ -13,6 +13,9 @@
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
 #include <interfaces/action/dispatch_trajectory.hpp>
+#include <interfaces/msg/robot_readiness.hpp>
+#include <interfaces/srv/alarm_reset.hpp>
+#include <interfaces/srv/io_set.hpp>
 
 #include "hw_adapter/backend_capabilities.hpp"
 #include "hw_adapter/motoros2_session_manager.hpp"
@@ -50,6 +53,8 @@ class HwAdapterNode final : public rclcpp::Node
 public:
   using DispatchTrajectory = interfaces::action::DispatchTrajectory;
   using GoalHandleDispatchTrajectory = rclcpp_action::ServerGoalHandle<DispatchTrajectory>;
+  using AlarmReset = interfaces::srv::AlarmReset;
+  using IoSet = interfaces::srv::IoSet;
 
   explicit HwAdapterNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
@@ -79,20 +84,38 @@ private:
     const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
   void execute_dispatch(
     const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
+  void publish_sim_readiness();
 
   HwAdapterOrchestrationSnapshot build_snapshot_locked() const;
   bool should_stop_motion_on_failure(const TrajectoryExecutionResult & result) const;
+
+  // Step 4.1: AlarmReset service handler
+  void handle_alarm_reset(
+    const std::shared_ptr<AlarmReset::Request> request,
+    std::shared_ptr<AlarmReset::Response> response);
+
+  // Step 4.2: IoSet service handler
+  void handle_io_set(
+    const std::shared_ptr<IoSet::Request> request,
+    std::shared_ptr<IoSet::Response> response);
 
   BackendCapabilities backend_capabilities_;
   std::unique_ptr<RobotStatusMonitor> robot_status_monitor_;
   std::unique_ptr<Motoros2SessionManager> session_manager_;
   std::unique_ptr<TrajectoryExecutor> trajectory_executor_;
   std::unique_ptr<ToolStateMonitor> tool_state_monitor_;
+  rclcpp::Publisher<interfaces::msg::RobotReadiness>::SharedPtr sim_readiness_pub_;
+  rclcpp::TimerBase::SharedPtr sim_readiness_timer_;
 
   // DispatchTrajectory action server
   rclcpp_action::Server<DispatchTrajectory>::SharedPtr dispatch_action_server_;
 
+  // Step 4.1/4.2: AlarmReset and IoSet service servers
+  rclcpp::Service<AlarmReset>::SharedPtr alarm_reset_service_;
+  rclcpp::Service<IoSet>::SharedPtr io_set_service_;
+
   mutable std::mutex orchestration_mutex_;
+  bool sim_mode_ = false;
   bool execution_in_progress_ = false;
   bool last_execution_success_ = false;
   bool last_error_was_fatal_ = false;

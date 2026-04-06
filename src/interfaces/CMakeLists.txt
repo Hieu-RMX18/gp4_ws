@@ -19,6 +19,9 @@ set(msg_files
 
 set(srv_files
   "srv/ValidateCommand.srv"
+  "srv/GetCurrentPose.srv"
+  "srv/AlarmReset.srv"
+  "srv/IoSet.srv"
 )
 
 set(action_files

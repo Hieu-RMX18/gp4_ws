@@ -24,7 +24,7 @@ namespace
 {
 constexpr double kWaitForServersTimeoutSec = 10.0;
 constexpr double kCartesianEefStep = 0.005;
-constexpr double kCartesianJumpThreshold = 0.0;
+constexpr double kCartesianJumpThreshold = 1.0;
 constexpr double kDefaultVelocityCap = 0.3;
 constexpr double kDefaultAccelerationCap = 0.2;
 constexpr double kDefaultVelocityScale = 0.3;

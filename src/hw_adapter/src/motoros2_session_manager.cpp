@@ -160,7 +160,7 @@ bool Motoros2SessionManager::wait_for_required_services(
   reason = "MotoROS2 session services are unavailable in this build environment";
   return false;
 #else
-  if (!wait_for_service_or_timeout<StartTrajMode>(
+  if (!service_names_.start_traj_mode.empty() && !wait_for_service_or_timeout<StartTrajMode>(
       start_traj_mode_client_,
       service_names_.start_traj_mode,
       timeout,
@@ -169,7 +169,7 @@ bool Motoros2SessionManager::wait_for_required_services(
     return false;
   }
 
-  if (!wait_for_service_or_timeout<ResetError>(
+  if (!service_names_.reset_error.empty() && !wait_for_service_or_timeout<ResetError>(
       reset_error_client_,
       service_names_.reset_error,
       timeout,
@@ -214,6 +214,11 @@ bool Motoros2SessionManager::start_traj_mode(std::string & reason)
   update_status_message(reason);
   return false;
 #else
+  if (service_names_.start_traj_mode.empty()) {
+    set_session_ready(true, "Simulated trajectory mode (no service)");
+    reason.clear();
+    return true;
+  }
   {
     std::lock_guard<std::mutex> state_lock(snapshot_mutex_);
     if (snapshot_.session_ready)

@@ -7,6 +7,7 @@ from ament_index_python.packages import get_package_share_directory
 from std_msgs.msg import String
 from industrial_msgs.msg import RobotStatus
 from industrial_msgs.msg import TriState
+from interfaces.msg import RobotReadiness
 
 from .command_validator import CommandValidator
 from .workspace_guard import WorkspaceGuard
@@ -26,12 +27,18 @@ class SafetyManager(Node):
 
     def __init__(self):
         super().__init__('safety_manager')
+        self._sim_mode = bool(self.declare_parameter('sim_mode', False).value)
 
         # V4 H2: Fail-closed — start in blocked state until robot proves ready
         self._lock = threading.Lock()
         self._robot_ready = False
-        self._last_error_reason = "no robot status received yet (fail-closed)"
+        self._last_error_reason = (
+            "no hw_adapter readiness received yet (sim mode)"
+            if self._sim_mode else
+            "no robot status received yet (fail-closed)"
+        )
         self._status_received = False
+        self._adapter_ready_received = False
 
         # Load safety rules from config
         try:
@@ -49,17 +56,31 @@ class SafetyManager(Node):
         self.guard = WorkspaceGuard(self.safety_rules)
         self.gate = ExecutionGate(self, self.validator, self.guard, self)
 
-        # V4 J5: Correct subscriber type: industrial_msgs/RobotStatus
-        self.status_sub = self.create_subscription(
-            RobotStatus,
-            '/yaskawa/robot_status',
-            self.status_callback,
-            10
-        )
         # Safety status publisher (structured status)
         self.safety_status_pub = self.create_publisher(String, '/safety_status', 10)
 
-        self.get_logger().info("SafetyManager started (fail-closed until robot status received).")
+        if self._sim_mode:
+            self.adapter_ready_sub = self.create_subscription(
+                RobotReadiness,
+                '/hw_adapter/ready',
+                self.adapter_ready_callback,
+                10
+            )
+            self.get_logger().info(
+                "safety running in SIM MODE: using /hw_adapter/ready for readiness gate"
+            )
+            self.get_logger().info(
+                "SafetyManager started (fail-closed until hw_adapter readiness received)."
+            )
+        else:
+            # V4 J5: Correct subscriber type: industrial_msgs/RobotStatus
+            self.status_sub = self.create_subscription(
+                RobotStatus,
+                '/yaskawa/robot_status',
+                self.status_callback,
+                10
+            )
+            self.get_logger().info("SafetyManager started (fail-closed until robot status received).")
 
     @property
     def is_robot_ready(self) -> bool:
@@ -75,6 +96,9 @@ class SafetyManager(Node):
 
     def status_callback(self, msg: RobotStatus):
         """V4 H1-Layer4: Update robot readiness from controller status."""
+        if self._sim_mode:
+            return
+
         with self._lock:
             self._status_received = True
 
@@ -108,6 +132,28 @@ class SafetyManager(Node):
                 return
 
             # All checks passed — robot is ready
+            self._robot_ready = True
+            self._last_error_reason = ""
+            self.publish_status("OK")
+
+    def adapter_ready_callback(self, msg: RobotReadiness):
+        """SIM MODE: update readiness from normalized hw_adapter readiness."""
+        if not self._sim_mode:
+            return
+
+        with self._lock:
+            self._adapter_ready_received = True
+
+            if not msg.ready:
+                self._robot_ready = False
+                self._last_error_reason = (
+                    msg.status_message
+                    if msg.status_message else
+                    "hw_adapter reported not ready (sim mode)"
+                )
+                self.publish_status(f"BLOCKED: {self._last_error_reason}")
+                return
+
             self._robot_ready = True
             self._last_error_reason = ""
             self.publish_status("OK")

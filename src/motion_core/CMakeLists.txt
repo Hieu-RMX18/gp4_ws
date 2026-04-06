@@ -23,7 +23,7 @@ find_package(moveit_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 
-add_library(${PROJECT_NAME}_components
+add_library(${PROJECT_NAME}_components SHARED
   src/planner_router.cpp
   src/ik_selector.cpp
   src/seed_manager.cpp
@@ -134,6 +134,18 @@ if(BUILD_TESTING)
       ${PROJECT_NAME}_components
     )
     target_include_directories(test_quality_gate PRIVATE
+      include
+    )
+  endif()
+
+  ament_add_gtest(test_move_rel_validator
+    test/test_move_rel_validator.cpp
+  )
+  if(TARGET test_move_rel_validator)
+    target_link_libraries(test_move_rel_validator
+      ${PROJECT_NAME}_components
+    )
+    target_include_directories(test_move_rel_validator PRIVATE
       include
     )
   endif()

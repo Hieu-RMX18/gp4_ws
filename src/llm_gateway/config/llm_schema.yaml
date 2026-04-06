@@ -11,6 +11,15 @@ properties:
       - HOME
       - PTP
       - LIN
+      - MOVE_REL
+      - GET_POSE
+      - SET_SPEED
+      - WAIT
+      - STOP
+      - MOVE_JOINT
+      - IO_SET
+      - ALARM_RESET
+      - MOVE_JOINTS
   target_pose:
     type: object
     additionalProperties: false
@@ -84,6 +93,34 @@ properties:
       - OMPL_RRTConnect
   require_approval:
     type: boolean
+  delta_x:
+    type: number
+  delta_y:
+    type: number
+  delta_z:
+    type: number
+  reference_frame:
+    type: string
+    enum:
+      - base_link
+  wait_duration_sec:
+    type: number
+    minimum: 0.0
+    maximum: 60.0
+  joint_index:
+    type: integer
+    minimum: 0
+    maximum: 5
+  joint_angle:
+    type: number
+  io_address:
+    type: integer
+    minimum: 0
+  io_value:
+    type: integer
+    enum:
+      - 0
+      - 1
 allOf:
   - if:
       properties:
@@ -102,3 +139,49 @@ allOf:
             - target_pose
         - required:
             - joint_target
+  - if:
+      properties:
+        primitive_type:
+          const: MOVE_REL
+    then:
+      required:
+        - delta_x
+        - delta_y
+        - delta_z
+  - if:
+      properties:
+        primitive_type:
+          const: SET_SPEED
+    then:
+      required:
+        - velocity_scale
+  - if:
+      properties:
+        primitive_type:
+          const: WAIT
+    then:
+      required:
+        - wait_duration_sec
+  - if:
+      properties:
+        primitive_type:
+          const: MOVE_JOINT
+    then:
+      required:
+        - joint_index
+        - joint_angle
+  - if:
+      properties:
+        primitive_type:
+          const: IO_SET
+    then:
+      required:
+        - io_address
+        - io_value
+  - if:
+      properties:
+        primitive_type:
+          const: MOVE_JOINTS
+    then:
+      required:
+        - joint_target

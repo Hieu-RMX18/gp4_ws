@@ -126,6 +126,9 @@ class Normalizer:
         "LIN": "PILZ_LIN",
         "PTP": "PILZ_PTP",
         "HOME": "PILZ_PTP",
+        "MOVE_REL": "PILZ_LIN",
+        "MOVE_JOINT": "PILZ_PTP",
+        "MOVE_JOINTS": "PILZ_PTP",
     }
 
     def __init__(self, default_velocity_scale: float = 0.1, default_acceleration_scale: float = 0.1):
@@ -146,14 +149,40 @@ class Normalizer:
             raise ValueError("Missing required field: primitive_type.")
 
         normalized = dict(command)
+        primitive_type = normalized["primitive_type"]
+
+        if primitive_type == "WAIT" and "wait_duration_sec" in normalized:
+            normalized["wait_duration_sec"] = float(normalized["wait_duration_sec"])
+        if primitive_type == "IO_SET":
+            if "io_address" in normalized:
+                normalized["io_address"] = int(normalized["io_address"])
+            if "io_value" in normalized:
+                normalized["io_value"] = int(normalized["io_value"])
+        if primitive_type == "MOVE_JOINT":
+            if "joint_index" in normalized:
+                normalized["joint_index"] = int(normalized["joint_index"])
+            if "joint_angle" in normalized:
+                normalized["joint_angle"] = float(normalized["joint_angle"])
+
+        # Non-motion primitives bypass planner and velocity defaults.
+        if primitive_type in {"ALARM_RESET", "STOP", "WAIT", "IO_SET", "GET_POSE"}:
+            normalized.setdefault("reference_frame", "base_link")
+            return normalized
+
         if "target_pose" in normalized:
             normalized["target_pose_msg"] = normalize_pose(normalized["target_pose"])
         if "joint_target" in normalized:
             normalized["joint_target"] = normalize_joints(normalized["joint_target"])
 
+        # MOVE_REL: passthrough delta fields as-is (meters, no unit detection)
+        if normalized["primitive_type"] == "MOVE_REL":
+            for field in ("delta_x", "delta_y", "delta_z"):
+                if field in normalized:
+                    normalized[field] = float(normalized[field])
+            normalized.setdefault("reference_frame", "base_link")
+
         normalized.setdefault("velocity_scale", self.default_velocity_scale)
         normalized.setdefault("acceleration_scale", self.default_acceleration_scale)
-        primitive_type = normalized["primitive_type"]
         normalized.setdefault(
             "planner_id",
             self._PLANNER_DEFAULTS.get(primitive_type, "OMPL_RRTConnect"),

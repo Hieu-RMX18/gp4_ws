@@ -5,7 +5,7 @@ llm_backend:
   # NEVER commit plaintext keys to the repository.
   api_key: "sk-secrect-key"
   api_mode: "openai_compatible"
-  model: "cx/gpt-5.2"
+  model: ""
   temperature: 0.0
   max_tokens: 3618
   require_json_only: true

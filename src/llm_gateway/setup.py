@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'llm_gateway_node = llm_gateway.llm_gateway_node:main',
+            'llm_text_cli = llm_gateway.text_cli:main',
         ],
     },
 )

@@ -26,7 +26,7 @@ from llm_gateway.semantic_validator import SemanticValidator
 
 
 class LLMGatewayNode(Node):
-    """Convert /llm_intent text into a validated ExecuteMotion goal."""
+    """Convert /llm_intent or /llm_text_input text into a validated ExecuteMotion goal."""
 
     def __init__(
         self,
@@ -74,6 +74,13 @@ class LLMGatewayNode(Node):
             10,
             callback_group=callback_group,
         )
+        self._text_input_subscriber = self.create_subscription(
+            String,
+            "/llm_text_input",
+            self.intent_callback,
+            10,
+            callback_group=callback_group,
+        )
         self._raw_subscriber = self.create_subscription(
             String,
             "/llm_raw_command",
@@ -83,6 +90,7 @@ class LLMGatewayNode(Node):
         )
         self._llm_debug_publisher = self.create_publisher(String, "/llm_debug", 10)
         self._status_publisher = self.create_publisher(String, "/gateway_status", 10)
+        self._command_publisher = self.create_publisher(String, "/llm_command", 10)
         self._validate_client = self.create_client(
             ValidateCommand,
             "/validate_command",
@@ -186,19 +194,21 @@ class LLMGatewayNode(Node):
         # GET_POSE routes to the dedicated query service — no motion side effects.
         primitive_type = normalized_command.get("primitive_type", "")
         if self._is_query_command(primitive_type):
+            self._publish_command(self._goal_mapper.to_command_payload(normalized_command))
             self._handle_get_pose_query(normalized_command, intent_text)
             return
+
+        command_payload = self._goal_mapper.to_command_payload(normalized_command)
 
         if not self._validate_client.wait_for_service(timeout_sec=self._safety_service_timeout_sec):
             self._reject(
                 "validate_service_unavailable",
                 "ValidateCommand service unavailable",
                 intent_text=intent_text,
-                validated_command=self._goal_mapper.to_command_payload(normalized_command),
+                validated_command=command_payload,
             )
             return
 
-        command_payload = self._goal_mapper.to_command_payload(normalized_command)
         request = self._build_validate_request(normalized_command, command_payload)
         self.publish_status("safety_validation_requested")
         validation_future = self._validate_client.call_async(request)
@@ -334,6 +344,7 @@ class LLMGatewayNode(Node):
 
         execution_command = self._prepare_execution_command(normalized_command)
         goal_payload = self._goal_mapper.to_command_payload(execution_command)
+        self._publish_command(goal_payload)
         self._publish_debug(
             {
                 "status": "validated",
@@ -474,6 +485,11 @@ class LLMGatewayNode(Node):
         }
         self._llm_debug_publisher.publish(
             String(data=json.dumps(compact_payload, ensure_ascii=True, separators=(",", ":")))
+        )
+
+    def _publish_command(self, command_payload: Dict[str, Any]) -> None:
+        self._command_publisher.publish(
+            String(data=json.dumps(command_payload, ensure_ascii=True, separators=(",", ":")))
         )
 
 

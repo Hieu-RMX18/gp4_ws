@@ -72,6 +72,9 @@ class GoalMapper:
             if "reference_frame" in command:
                 payload["reference_frame"] = str(command["reference_frame"])
 
+        if command.get("primitive_type") == "GET_POSE" and "reference_frame" in command:
+            payload["reference_frame"] = str(command["reference_frame"])
+
         if command.get("primitive_type") == "WAIT" and "wait_duration_sec" in command:
             payload["wait_duration_sec"] = float(command["wait_duration_sec"])
 

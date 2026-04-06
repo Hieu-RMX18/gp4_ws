@@ -37,10 +37,14 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
     node.set_parameters([Parameter("auto_clear_unimplemented_approval", value=True)])
     statuses = []
     debug_messages = []
+    command_messages = []
     node.publish_status = lambda status: statuses.append(status)
     node._llm_client.generate_response = MagicMock(return_value=openai_payload)
     node._llm_debug_publisher.publish = MagicMock(
         side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+    )
+    node._command_publisher.publish = MagicMock(
+        side_effect=lambda msg: command_messages.append(json.loads(msg.data))
     )
 
     sanitized_json = json.dumps(
@@ -83,6 +87,8 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
     assert validated_msg["validated_command"]["velocity_scale"] == 0.15
     assert validated_msg["validated_command"]["require_approval"] is False
     assert "dispatched" in statuses
+    assert command_messages[0]["primitive_type"] == "LIN"
+    assert command_messages[0]["velocity_scale"] == 0.15
 
     node.destroy_node()
 

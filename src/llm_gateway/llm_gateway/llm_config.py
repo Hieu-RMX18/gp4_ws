@@ -12,6 +12,7 @@ from ament_index_python.packages import get_package_share_directory
 
 
 _MODEL_PLACEHOLDER = "TEEN MODEL 9ROUTER"
+_DOTENV_FILENAME = ".env"
 
 
 def _default_config_path() -> str:
@@ -30,6 +31,76 @@ def _as_bool(value: Any, default: bool) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _parse_dotenv_file(dotenv_path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    with open(dotenv_path, "r", encoding="utf-8") as dotenv_file:
+        for raw_line in dotenv_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].strip()
+            if "=" not in line:
+                continue
+
+            key, raw_value = line.split("=", 1)
+            key = key.strip()
+            if not key:
+                continue
+
+            value = raw_value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                value = value[1:-1]
+            elif " #" in value:
+                value = value.split(" #", 1)[0].rstrip()
+
+            values[key] = value
+
+    return values
+
+
+def _iter_candidate_dotenv_paths(config_path: str) -> list[Path]:
+    explicit_env_file = os.getenv("GP4_LLM_ENV_FILE", "").strip()
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+
+    if explicit_env_file:
+        explicit_path = Path(explicit_env_file).expanduser().resolve()
+        candidates.append(explicit_path)
+        seen.add(explicit_path)
+
+    search_roots = [
+        Path(config_path).resolve().parent,
+        Path.cwd().resolve(),
+        Path(__file__).resolve().parent,
+    ]
+    for root in search_roots:
+        for parent in (root, *root.parents):
+            candidate = parent / _DOTENV_FILENAME
+            if candidate not in seen:
+                candidates.append(candidate)
+                seen.add(candidate)
+
+    return candidates
+
+
+def _load_dotenv_values(config_path: str) -> dict[str, str]:
+    for candidate in _iter_candidate_dotenv_paths(config_path):
+        if candidate.is_file():
+            return _parse_dotenv_file(candidate)
+    return {}
+
+
+def _pick_first_non_empty(*values: Any) -> str:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value)
+        if text:
+            return text
+    return ""
 
 
 @dataclass(frozen=True)
@@ -53,6 +124,7 @@ class LLMBackendConfig:
 
 def load_llm_backend_config(config_path: str | None = None) -> LLMBackendConfig:
     resolved_path = config_path or _default_config_path()
+    dotenv_values = _load_dotenv_values(resolved_path)
     with open(resolved_path, "r", encoding="utf-8") as config_file:
         raw_config = yaml.safe_load(config_file) or {}
     if not isinstance(raw_config, dict):
@@ -62,24 +134,33 @@ def load_llm_backend_config(config_path: str | None = None) -> LLMBackendConfig:
     if not isinstance(backend, dict):
         raise ValueError("llm_backend must be a mapping.")
 
+    def _lookup_env(env_name: str) -> str:
+        env_value = os.getenv(env_name)
+        if env_value:
+            return env_value
+        return dotenv_values.get(env_name, "")
+
     def _resolve_env_ref(value: Any) -> Any:
         """Resolve ${ENV_VAR} references in string values."""
         if not isinstance(value, str):
             return value
         if value.startswith("${") and value.endswith("}"):
             env_name = value[2:-1]
-            return os.getenv(env_name, "")
+            return _lookup_env(env_name)
         return value
 
     def pick(key: str, default: Any) -> Any:
         env_key = f"LLM_{key.upper()}"
-        raw = os.getenv(env_key, backend.get(key, default))
+        raw = _pick_first_non_empty(_lookup_env(env_key), backend.get(key, default))
         return _resolve_env_ref(raw)
 
-    # api_key: GP4_LLM_API_KEY takes priority, then LLM_API_KEY, then config file.
-    raw_api_key = os.getenv(
-        "GP4_LLM_API_KEY",
-        os.getenv("LLM_API_KEY", _resolve_env_ref(backend.get("api_key", "")))
+    # api_key: dedicated gateway env vars win, then generic OpenAI-compatible env,
+    # then the YAML value, which can also be written as ${ENV_VAR}.
+    raw_api_key = _pick_first_non_empty(
+        _lookup_env("GP4_LLM_API_KEY"),
+        _lookup_env("LLM_API_KEY"),
+        _lookup_env("OPENAI_API_KEY"),
+        _resolve_env_ref(backend.get("api_key", "")),
     )
 
     return LLMBackendConfig(

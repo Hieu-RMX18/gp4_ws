@@ -141,3 +141,18 @@ def test_normalizer_move_joints_planner_default(normalizer):
     # Degrees detected and converted to radians
     assert math.isclose(normalized["joint_target"][1], math.pi / 2.0, rel_tol=1e-9)
 
+
+def test_normalizer_cartesian_path_normalizes_waypoints(normalizer):
+    normalized = normalizer.normalize(
+        {
+            "primitive_type": "CARTESIAN_PATH",
+            "reference_frame": "base_link",
+            "waypoints": [
+                {"position": {"x": 0.30, "y": 0.00, "z": 0.30}},
+                {"position": {"x": 0.32, "y": 0.02, "z": 0.30}},
+            ],
+        }
+    )
+
+    assert normalized["planner_id"] == "PILZ_LIN"
+    assert len(normalized["waypoints_msg"]) == 2

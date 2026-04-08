@@ -125,6 +125,7 @@ class Normalizer:
     _PLANNER_DEFAULTS = {
         "LIN": "PILZ_LIN",
         "PTP": "PILZ_PTP",
+        "CARTESIAN_PATH": "PILZ_LIN",
         "HOME": "PILZ_PTP",
         "MOVE_REL": "PILZ_LIN",
         "MOVE_JOINT": "PILZ_PTP",
@@ -173,6 +174,13 @@ class Normalizer:
             normalized["target_pose_msg"] = normalize_pose(normalized["target_pose"])
         if "joint_target" in normalized:
             normalized["joint_target"] = normalize_joints(normalized["joint_target"])
+
+        # CARTESIAN_PATH: normalize each waypoint dict to Pose msg
+        if primitive_type == "CARTESIAN_PATH" and "waypoints" in normalized:
+            waypoints_msg = []
+            for wp in normalized["waypoints"]:
+                waypoints_msg.append(normalize_pose(wp))
+            normalized["waypoints_msg"] = waypoints_msg
 
         # MOVE_REL: passthrough delta fields as-is (meters, no unit detection)
         if normalized["primitive_type"] == "MOVE_REL":

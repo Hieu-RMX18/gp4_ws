@@ -4,19 +4,21 @@ Ensures the public primitive set is identical across:
   - llm_schema.yaml (schema validator)
   - semantic_validator.py (allowed primitives)
   - normalizer.py (planner defaults)
-  - prompt_builder.py (system prompt)
+  - prompt_builder.py (system prompt — via semantic intents)
+  - intent_router.py (IntentRouter producible primitives)
 
 If any layer drifts, this test fails immediately, preventing
 partial contract exposure.
 """
 
+import re
 from pathlib import Path
 
 import pytest
 import yaml
 
 from llm_gateway.normalizer import Normalizer
-from llm_gateway.prompt_builder import build_system_prompt
+from llm_gateway.prompt_builder import FROZEN_SEMANTIC_INTENTS, build_system_prompt
 from llm_gateway.semantic_validator import SemanticValidator
 
 
@@ -25,6 +27,7 @@ _FROZEN_PUBLIC_PRIMITIVES = {
     "HOME",
     "PTP",
     "LIN",
+    "CARTESIAN_PATH",
     "MOVE_REL",
     "GET_POSE",
     "SET_SPEED",
@@ -43,6 +46,25 @@ _NON_PLANNING_PRIMITIVES = {
     "STOP",
     "IO_SET",
     "ALARM_RESET",
+}
+
+# Mapping from semantic intents to the primitive_type(s) they produce.
+# draw_shape and draw_text produce PTP + CARTESIAN_PATH macros; all others are 1:1.
+_INTENT_TO_PRIMITIVES = {
+    "go_home": {"HOME"},
+    "stop": {"STOP"},
+    "alarm_reset": {"ALARM_RESET"},
+    "get_pose": {"GET_POSE"},
+    "set_speed": {"SET_SPEED"},
+    "wait": {"WAIT"},
+    "move_relative": {"MOVE_REL"},
+    "absolute_move_ptp": {"PTP"},
+    "absolute_move_lin": {"LIN"},
+    "move_joint": {"MOVE_JOINT"},
+    "move_joints": {"MOVE_JOINTS"},
+    "io_set": {"IO_SET"},
+    "draw_shape": {"PTP", "CARTESIAN_PATH"},  # macro expander
+    "draw_text": {"PTP", "CARTESIAN_PATH"},  # macro expander
 }
 
 
@@ -81,13 +103,66 @@ def test_normalizer_planner_defaults_cover_public_primitives():
         )
 
 
-def test_prompt_builder_mentions_all_public_primitives():
-    """The system prompt must mention every frozen public primitive."""
+def test_prompt_builder_mentions_all_semantic_intents():
+    """The system prompt must mention every frozen semantic intent.
+
+    v2.1 change: prompt outputs Semantic IR with 'intent' field, not
+    direct primitive_type. We verify intent names instead of primitive names.
+    """
     prompt = build_system_prompt("{}")
-    for prim in _FROZEN_PUBLIC_PRIMITIVES:
-        assert prim in prompt, (
-            f"Prompt builder does not mention public primitive '{prim}'"
+    for intent_name in FROZEN_SEMANTIC_INTENTS:
+        assert intent_name in prompt, (
+            f"Prompt builder does not mention semantic intent '{intent_name}'"
         )
+
+
+def test_intent_to_primitive_mapping_covers_all_primitives():
+    """Every frozen public primitive must be producible by at least one intent."""
+    producible = set()
+    for primitive_set in _INTENT_TO_PRIMITIVES.values():
+        producible |= primitive_set
+    assert producible >= _FROZEN_PUBLIC_PRIMITIVES, (
+        f"Intent-to-primitive mapping does not cover all primitives.\n"
+        f"  Uncovered: {_FROZEN_PUBLIC_PRIMITIVES - producible}"
+    )
+
+
+def test_intent_to_primitive_mapping_matches_frozen_intents():
+    """_INTENT_TO_PRIMITIVES keys must equal FROZEN_SEMANTIC_INTENTS."""
+    mapping_intents = set(_INTENT_TO_PRIMITIVES.keys())
+    assert mapping_intents == FROZEN_SEMANTIC_INTENTS, (
+        f"Intent-to-primitive mapping out of sync with FROZEN_SEMANTIC_INTENTS.\n"
+        f"  Extra in mapping: {mapping_intents - FROZEN_SEMANTIC_INTENTS}\n"
+        f"  Missing from mapping: {FROZEN_SEMANTIC_INTENTS - mapping_intents}"
+    )
+
+
+def test_intent_router_covers_all_frozen_intents():
+    """IntentRouter must handle every intent in FROZEN_SEMANTIC_INTENTS."""
+    from llm_gateway.intent_router import IntentRouter
+    import inspect
+
+    router = IntentRouter(
+        macro_policy_path=str(
+            Path(__file__).resolve().parents[1] / "config" / "macro_policy.yaml"
+        )
+    )
+
+    # Extract intent names from _route_single_intent source
+    source = inspect.getsource(router._route_single_intent)
+    single_intents = set(re.findall(r'intent\s*==\s*"(\w+)"', source))
+
+    # Extract macro intents from route() source
+    route_source = inspect.getsource(router.route)
+    meta_intents = set(re.findall(r'normalized_intent\s*==\s*"(\w+)"', route_source))
+    # "sequence" is a meta-intent, not in FROZEN_SEMANTIC_INTENTS
+    router_intents = single_intents | (meta_intents - {"sequence"})
+
+    assert router_intents == FROZEN_SEMANTIC_INTENTS, (
+        f"IntentRouter intent coverage does not match FROZEN_SEMANTIC_INTENTS.\n"
+        f"  Extra in router: {router_intents - FROZEN_SEMANTIC_INTENTS}\n"
+        f"  Missing from router: {FROZEN_SEMANTIC_INTENTS - router_intents}"
+    )
 
 
 def test_no_deprecated_schema_loaded_at_runtime():
@@ -96,3 +171,13 @@ def test_no_deprecated_schema_loaded_at_runtime():
     assert not deprecated_path.exists(), (
         "command_schema.json should have been renamed to .DEPRECATED"
     )
+
+
+def test_macro_policy_declares_draw_shape_and_draw_text():
+    policy_path = Path(__file__).resolve().parents[1] / "config" / "macro_policy.yaml"
+    with open(policy_path, "r", encoding="utf-8") as policy_file:
+        policy = yaml.safe_load(policy_file)
+
+    macros = policy["macros"]
+    assert "draw_shape" in macros
+    assert "draw_text" in macros

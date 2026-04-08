@@ -89,8 +89,8 @@ def parse_llm_output(text: str) -> Dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("Top-level payload must be a JSON object.")
 
-    # Direct command payload from the model.
-    if "primitive_type" in payload or "error" in payload:
+    # Direct command payload from the model (primitive or Semantic IR).
+    if "primitive_type" in payload or "error" in payload or "intent" in payload:
         return payload
 
     # Already canonical legacy wrapper.

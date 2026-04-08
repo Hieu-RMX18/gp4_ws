@@ -32,6 +32,10 @@ class GoalMapper:
         goal.io_address = int(command.get("io_address", 0))
         goal.io_value = int(command.get("io_value", 0))
 
+        # CARTESIAN_PATH: multi-waypoint smooth trajectory
+        if command.get("waypoints_msg"):
+            goal.waypoints = list(command["waypoints_msg"])
+
         return goal
 
     def to_command_payload(self, command: Dict[str, Any]) -> Dict[str, Any]:
@@ -46,6 +50,8 @@ class GoalMapper:
             payload["planner_id"] = str(command["planner_id"])
         if "require_approval" in command:
             payload["require_approval"] = bool(command["require_approval"])
+        if "reference_frame" in command:
+            payload["reference_frame"] = str(command["reference_frame"])
         if command.get("joint_target"):
             payload["joint_target"] = [float(value) for value in command["joint_target"]]
         if "target_pose_msg" in command:
@@ -69,11 +75,6 @@ class GoalMapper:
             for field in ("delta_x", "delta_y", "delta_z"):
                 if field in command:
                     payload[field] = float(command[field])
-            if "reference_frame" in command:
-                payload["reference_frame"] = str(command["reference_frame"])
-
-        if command.get("primitive_type") == "GET_POSE" and "reference_frame" in command:
-            payload["reference_frame"] = str(command["reference_frame"])
 
         if command.get("primitive_type") == "WAIT" and "wait_duration_sec" in command:
             payload["wait_duration_sec"] = float(command["wait_duration_sec"])
@@ -89,5 +90,9 @@ class GoalMapper:
                 payload["io_address"] = int(command["io_address"])
             if "io_value" in command:
                 payload["io_value"] = int(command["io_value"])
+
+        # CARTESIAN_PATH waypoints for debug
+        if command.get("primitive_type") == "CARTESIAN_PATH" and command.get("waypoints_msg"):
+            payload["waypoints_count"] = len(command["waypoints_msg"])
 
         return payload

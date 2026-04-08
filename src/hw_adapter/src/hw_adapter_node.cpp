@@ -367,14 +367,21 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory(
     report.message = reason.empty() ? "failed to enter trajectory mode" : std::move(reason);
     if (sim_mode_)
     {
+      // In sim_mode, MotoROS2 session services are unavailable by design.
+      // Bypass the trajectory mode gate and continue with execution.
       RCLCPP_WARN(
         get_logger(),
-        "SIM MODE detected ensure_trajectory_mode failure: %s",
+        "SIM MODE: bypassing ensure_trajectory_mode failure: %s",
         report.message.c_str());
+      report.message.clear();
+      // Fall through to trajectory execution below
     }
-    finalize("execution blocked: " + report.message);
-    RCLCPP_WARN(get_logger(), "%s", report.message.c_str());
-    return report;
+    else
+    {
+      finalize("execution blocked: " + report.message);
+      RCLCPP_WARN(get_logger(), "%s", report.message.c_str());
+      return report;
+    }
   }
 
   {

@@ -11,6 +11,7 @@ properties:
       - HOME
       - PTP
       - LIN
+      - CARTESIAN_PATH
       - MOVE_REL
       - GET_POSE
       - SET_SPEED
@@ -71,6 +72,60 @@ properties:
                 type: number
               yaw:
                 type: number
+  waypoints:
+    type: array
+    minItems: 1
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - position
+      properties:
+        position:
+          type: object
+          additionalProperties: false
+          required:
+            - x
+            - y
+            - z
+          properties:
+            x:
+              type: number
+            y:
+              type: number
+            z:
+              type: number
+        orientation:
+          anyOf:
+            - type: object
+              additionalProperties: false
+              required:
+                - x
+                - y
+                - z
+                - w
+              properties:
+                x:
+                  type: number
+                y:
+                  type: number
+                z:
+                  type: number
+                w:
+                  type: number
+            - type: object
+              additionalProperties: false
+              required:
+                - roll
+                - pitch
+                - yaw
+              properties:
+                roll:
+                  type: number
+                pitch:
+                  type: number
+                yaw:
+                  type: number
   joint_target:
     type: array
     minItems: 6
@@ -129,6 +184,13 @@ allOf:
     then:
       required:
         - target_pose
+  - if:
+      properties:
+        primitive_type:
+          const: CARTESIAN_PATH
+    then:
+      required:
+        - waypoints
   - if:
       properties:
         primitive_type:

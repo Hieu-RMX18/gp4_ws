@@ -13,7 +13,7 @@ class SemanticValidator:
     """Enforce phase-specific primitive, workspace, and scaling constraints."""
 
     _ALLOWED_PRIMITIVES = {
-        "HOME", "PTP", "LIN", "MOVE_REL", "GET_POSE",
+        "HOME", "PTP", "LIN", "MOVE_REL", "GET_POSE", "CARTESIAN_PATH",
         "SET_SPEED", "WAIT", "STOP", "MOVE_JOINT", "MOVE_JOINTS",
         "IO_SET", "ALARM_RESET",
     }
@@ -168,6 +168,20 @@ class SemanticValidator:
         if primitive_type == "HOME":
             if has_pose or has_joints:
                 raise ValueError("HOME must not include target_pose or joint_target.")
+            return True
+
+        # CARTESIAN_PATH: multi-waypoint smooth trajectory
+        if primitive_type == "CARTESIAN_PATH":
+            waypoints = command.get("waypoints_msg")
+            if not waypoints:
+                raise ValueError("CARTESIAN_PATH requires non-empty waypoints.")
+            for i, wp in enumerate(waypoints):
+                try:
+                    self._validate_pose(wp)
+                except ValueError as e:
+                    raise ValueError(
+                        f"CARTESIAN_PATH waypoint[{i}]: {e}"
+                    ) from e
             return True
 
         if primitive_type == "LIN" and not has_pose:

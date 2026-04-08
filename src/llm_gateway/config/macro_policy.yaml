@@ -1,0 +1,87 @@
+version: "2.3"
+macros:
+  draw_shape:
+    availability: sim_only
+    requires_current_pose: false
+    supported_frames:
+      - base_link
+    supported_planes:
+      - xy
+    supported_shapes:
+      - square
+      - triangle
+      - circle
+      - polygon
+      - rectangle
+      - arc
+      - polyline
+    default_orientation_preset: tool-down
+    circle_segments: 32
+    polygon_default_sides: 6
+    polygon_min_sides: 3
+    polygon_max_sides: 12
+    notes:
+      - "SIM-ONLY in v2.3."
+      - "All shapes expand to PTP + CARTESIAN_PATH for smooth continuous motion."
+      - "size_m means side length for square/triangle, diameter for circle/polygon."
+      - "rectangle uses width_m + height_m."
+      - "arc uses radius_m + sweep_deg."
+      - "polyline uses explicit XYZ points."
+
+  draw_text:
+    availability: sim_only
+    requires_current_pose: false
+    supported_frames:
+      - base_link
+    supported_planes:
+      - xy
+    default_orientation_preset: tool-down
+    approach_distance_m: 0.01
+    default_char_spacing_ratio: 0.20
+    supported_characters:
+      - A
+      - B
+      - C
+      - D
+      - E
+      - F
+      - G
+      - H
+      - I
+      - J
+      - K
+      - L
+      - M
+      - N
+      - O
+      - P
+      - Q
+      - R
+      - S
+      - T
+      - U
+      - V
+      - W
+      - X
+      - Y
+      - Z
+      - "0"
+      - "1"
+      - "2"
+      - "3"
+      - "4"
+      - "5"
+      - "6"
+      - "7"
+      - "8"
+      - "9"
+      - "."
+      - ","
+      - "-"
+      - _
+      - /
+      - " "
+    notes:
+      - "SIM-ONLY in v2.3."
+      - "Each disconnected stroke expands to PTP approach + CARTESIAN_PATH draw."
+      - "Travel between strokes is handled by pen-up PTP moves to the next approach point."

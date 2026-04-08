@@ -177,8 +177,9 @@ private:
     // B2: HOME/PTP/LIN/MOVE_REL are fully wired end-to-end.
     // CIRC is deferred — see PRIMITIVE_SHORTLIST.md.
     // Step 3.1: New primitives added for this sprint.
+    // CARTESIAN_PATH: multi-waypoint smooth path for draw_shape macros.
     return primitive == "HOME" || primitive == "PTP" || primitive == "LIN" ||
-           primitive == "MOVE_REL" ||
+           primitive == "MOVE_REL" || primitive == "CARTESIAN_PATH" ||
            primitive == "SET_SPEED" || primitive == "WAIT" || primitive == "STOP" ||
            primitive == "MOVE_JOINT" || primitive == "MOVE_JOINTS" ||
            primitive == "IO_SET" || primitive == "ALARM_RESET";
@@ -1100,7 +1101,48 @@ private:
     bool has_plan_start_state = false;
     double cartesian_fraction = QualityGate::kFractionNotApplicable;
 
-    if (effective_primitive == "HOME")
+    // ── CARTESIAN_PATH: smooth multi-waypoint trajectory for draw_shape ──
+    if (effective_primitive == "CARTESIAN_PATH")
+    {
+      if (goal->waypoints.empty())
+      {
+        abort_with_message(goal_handle, started_at,
+          "CARTESIAN_PATH requires non-empty waypoints array");
+        return;
+      }
+
+      RCLCPP_INFO(get_logger(),
+        "CARTESIAN_PATH: planning smooth path through %zu waypoints",
+        goal->waypoints.size());
+
+      // Use all waypoints for a single computeCartesianPath call
+      std::vector<geometry_msgs::msg::Pose> cartesian_waypoints;
+      cartesian_waypoints.reserve(goal->waypoints.size());
+      for (const auto & wp : goal->waypoints)
+      {
+        cartesian_waypoints.push_back(wp);
+      }
+
+      cartesian_fraction = move_group_->computeCartesianPath(
+        cartesian_waypoints,
+        kCartesianEefStep,
+        kCartesianJumpThreshold,
+        planned_trajectory_msg,
+        true);
+
+      if (cartesian_fraction < 0.0)
+      {
+        abort_with_message(goal_handle, started_at,
+          "CARTESIAN_PATH: computeCartesianPath failed");
+        return;
+      }
+
+      RCLCPP_INFO(get_logger(),
+        "CARTESIAN_PATH: planned with fraction=%.3f, points=%zu",
+        cartesian_fraction,
+        planned_trajectory_msg.joint_trajectory.points.size());
+    }
+    else if (effective_primitive == "HOME")
     {
       if (!move_group_->setNamedTarget("home"))
       {

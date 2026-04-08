@@ -1,11 +1,11 @@
 llm_backend:
   provider: "provider"
-  base_url: "http://"
-  # API key loaded from environment variable GP4_LLM_API_KEY
-  # NEVER commit plaintext keys to the repository.
-  api_key: "sk-secrect-key"
+  base_url: "http://localhost:20128/v1"
+  # API key is resolved from GP4_LLM_API_KEY / LLM_API_KEY / OPENAI_API_KEY.
+  # A nearby .env file is also supported, but the secret itself must stay out of git.
+  api_key: "${GP4_LLM_API_KEY}"
   api_mode: "openai_compatible"
-  model: ""
+  model: "gpt-5.4"
   temperature: 0.0
   max_tokens: 3618
   require_json_only: true

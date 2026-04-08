@@ -1,25 +1,22 @@
 """Tests for GET_POSE query path — separate from motion action pipeline.
 
-Tests:
-1. Schema validates GET_POSE with no extra fields
-2. Normalizer returns minimal dict (no velocity/planner/approval)
-3. Semantic validator accepts GET_POSE, rejects with pose/joints
-4. Semantic validator skips velocity_scale check for GET_POSE
-5. Gateway routes GET_POSE to query service, not motion action
-6. Gateway handles service unavailable (fail-closed)
-7. Gateway handles service failure response
-8. Gateway handles unsupported frame from service
+Tests are organized in two tiers:
+
+Tier 1 (source-only): schema, normalizer, semantic validator, parser tests.
+    No colcon workspace needed. No rclpy.init() side effects.
+
+Tier 2 (ros_integration): gateway-level mocked tests.
+    Require ``interfaces`` package. Marked with ``@pytest.mark.ros_integration``.
+    Skipped with visible reason when interfaces is unavailable.
 """
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-import rclpy
 
 from llm_gateway.normalizer import Normalizer
 from llm_gateway.parser import LLMParser
@@ -27,40 +24,7 @@ from llm_gateway.schema_validator import SchemaValidator
 from llm_gateway.semantic_validator import SemanticValidator
 
 
-@pytest.fixture(scope="module", autouse=True)
-def ros_context():
-    if not rclpy.ok():
-        rclpy.init()
-    yield
-    # Don't shutdown — other test modules may share the context
-
-
-@pytest.fixture(scope="session")
-def schema_path() -> str:
-    return str(Path(__file__).resolve().parents[1] / "config" / "llm_schema.yaml")
-
-
-@pytest.fixture
-def parser() -> LLMParser:
-    return LLMParser()
-
-
-@pytest.fixture
-def validator(schema_path: str) -> SchemaValidator:
-    return SchemaValidator(schema_path)
-
-
-@pytest.fixture
-def normalizer() -> Normalizer:
-    return Normalizer(default_velocity_scale=0.1, default_acceleration_scale=0.1)
-
-
-@pytest.fixture
-def semantic_validator() -> SemanticValidator:
-    return SemanticValidator()
-
-
-# ── Schema validation ──
+# ── Tier 1: Pure-logic tests (no ROS dependencies) ──────────────────────────
 
 
 def test_schema_accepts_get_pose_minimal(validator: SchemaValidator):
@@ -82,9 +46,6 @@ def test_schema_rejects_get_pose_with_target_pose(validator: SchemaValidator):
     assert valid  # Schema passes; semantic_validator is the enforcement point.
 
 
-# ── Normalizer ──
-
-
 def test_normalizer_get_pose_returns_minimal(normalizer: Normalizer):
     """Normalizer should return minimal dict for GET_POSE — no velocity/planner/approval."""
     cmd = {"primitive_type": "GET_POSE"}
@@ -103,9 +64,6 @@ def test_normalizer_get_pose_preserves_reference_frame(normalizer: Normalizer):
     cmd = {"primitive_type": "GET_POSE", "reference_frame": "tool0"}
     result = normalizer.normalize(cmd)
     assert result["reference_frame"] == "tool0"
-
-
-# ── Semantic validator ──
 
 
 def test_semantic_validator_accepts_get_pose(semantic_validator: SemanticValidator):
@@ -143,9 +101,6 @@ def test_semantic_validator_skips_velocity_check_for_get_pose(
     assert semantic_validator.validate(cmd) is True
 
 
-# ── Parser ──
-
-
 def test_parser_handles_get_pose_direct_json(parser: LLMParser):
     """Parser can extract GET_POSE from a direct JSON payload."""
     raw = json.dumps({"primitive_type": "GET_POSE"})
@@ -153,7 +108,7 @@ def test_parser_handles_get_pose_direct_json(parser: LLMParser):
     assert result["primitive_type"] == "GET_POSE"
 
 
-# ── Gateway integration (mocked) ──
+# ── Tier 2: Gateway integration tests (require interfaces) ──────────────────
 
 
 class ImmediateFuture:
@@ -170,8 +125,18 @@ class ImmediateFuture:
         return self._result
 
 
+def _ensure_rclpy():
+    """Initialize rclpy if not already initialized."""
+    import rclpy
+    if not rclpy.ok():
+        rclpy.init()
+
+
+@pytest.mark.ros_integration
 def test_gateway_routes_get_pose_to_query_service():
     """GET_POSE must go through query service, NOT ValidateCommand/ExecuteMotion."""
+    pytest.importorskip("interfaces", reason="requires colcon-sourced workspace with built interfaces")
+    _ensure_rclpy()
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
     node = LLMGatewayNode()
@@ -233,8 +198,11 @@ def test_gateway_routes_get_pose_to_query_service():
     node.destroy_node()
 
 
+@pytest.mark.ros_integration
 def test_gateway_fails_closed_when_get_pose_service_unavailable():
     """GET_POSE must fail-closed when the query service is unavailable."""
+    pytest.importorskip("interfaces", reason="requires colcon-sourced workspace with built interfaces")
+    _ensure_rclpy()
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
     node = LLMGatewayNode()
@@ -264,8 +232,11 @@ def test_gateway_fails_closed_when_get_pose_service_unavailable():
     node.destroy_node()
 
 
+@pytest.mark.ros_integration
 def test_gateway_handles_get_pose_service_failure():
     """GET_POSE must propagate service failure with explicit message."""
+    pytest.importorskip("interfaces", reason="requires colcon-sourced workspace with built interfaces")
+    _ensure_rclpy()
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
     node = LLMGatewayNode()
@@ -301,8 +272,11 @@ def test_gateway_handles_get_pose_service_failure():
     node.destroy_node()
 
 
+@pytest.mark.ros_integration
 def test_gateway_get_pose_does_not_affect_motion_path():
     """After GET_POSE, a motion command (HOME) should still use the motion action path."""
+    pytest.importorskip("interfaces", reason="requires colcon-sourced workspace with built interfaces")
+    _ensure_rclpy()
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
     node = LLMGatewayNode()

@@ -1,6 +1,7 @@
 # Goal
-string primitive_type        # "LIN", "PTP", "CIRC", "HOME", "MOVE_REL", "approach", "retract"
+string primitive_type        # "LIN", "PTP", "CIRC", "HOME", "MOVE_REL", "CARTESIAN_PATH", "approach", "retract"
 geometry_msgs/Pose target_pose
+geometry_msgs/Pose[] waypoints  # multi-waypoint Cartesian path (used by CARTESIAN_PATH primitive)
 float64[] joint_target       # optional, dùng cho PTP joint-space
 float64 velocity_scale       # 0.0 - 1.0
 float64 acceleration_scale   # 0.0 - 1.0

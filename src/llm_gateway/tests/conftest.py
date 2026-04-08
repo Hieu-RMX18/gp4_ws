@@ -1,12 +1,30 @@
+"""Shared test configuration and fixtures for the llm_gateway test suite.
+
+Test Environment Tiers
+──────────────────────
+Tier 1 — Source-only / lightweight mode:
+    Works with ``python3 -m pytest`` from the package root.
+    No colcon workspace or built ROS interfaces required.
+    rclpy must be importable (system-installed ros-humble-rclpy).
+
+Tier 2 — Colcon / built-workspace mode:
+    Requires ``source install/setup.bash`` so the custom ``interfaces``
+    package is on PYTHONPATH.  Tests marked ``@pytest.mark.ros_integration``
+    run only in this tier.
+
+Skip policy:
+    - Individual tests that need ``interfaces`` use
+      ``pytest.importorskip("interfaces")`` and carry
+      ``@pytest.mark.ros_integration`` for selective execution.
+    - ``test_integration.py`` uses a module-level guard that skips the
+      entire module when ``interfaces`` is unavailable.
+    - No test should be silently excluded from collection.
+"""
+
 import json
 from pathlib import Path
 
 import pytest
-
-from llm_gateway.normalizer import Normalizer
-from llm_gateway.parser import LLMParser
-from llm_gateway.semantic_validator import SemanticValidator
-from llm_gateway.schema_validator import SchemaValidator
 
 
 @pytest.fixture(scope="session")
@@ -14,23 +32,36 @@ def schema_path() -> str:
     return str(Path(__file__).resolve().parents[1] / "config" / "llm_schema.yaml")
 
 
+@pytest.fixture(scope="session")
+def macro_policy_path() -> str:
+    return str(Path(__file__).resolve().parents[1] / "config" / "macro_policy.yaml")
+
+
 @pytest.fixture
-def parser() -> LLMParser:
+def parser():
+    from llm_gateway.parser import LLMParser
+
     return LLMParser()
 
 
 @pytest.fixture
-def validator(schema_path: str) -> SchemaValidator:
+def validator(schema_path: str):
+    from llm_gateway.schema_validator import SchemaValidator
+
     return SchemaValidator(schema_path)
 
 
 @pytest.fixture
-def normalizer() -> Normalizer:
+def normalizer():
+    from llm_gateway.normalizer import Normalizer
+
     return Normalizer(default_velocity_scale=0.1, default_acceleration_scale=0.1)
 
 
 @pytest.fixture
-def semantic_validator() -> SemanticValidator:
+def semantic_validator():
+    from llm_gateway.semantic_validator import SemanticValidator
+
     return SemanticValidator()
 
 

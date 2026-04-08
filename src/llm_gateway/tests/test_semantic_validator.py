@@ -304,3 +304,18 @@ def test_move_joints_reject_missing_joint_target(semantic_validator):
     cmd = {"primitive_type": "MOVE_JOINTS"}
     with pytest.raises(ValueError, match="MOVE_JOINTS requires joint_target"):
         semantic_validator.validate(cmd)
+
+
+def test_semantic_validator_accepts_cartesian_path(normalizer, semantic_validator):
+    normalized = normalizer.normalize(
+        {
+            "primitive_type": "CARTESIAN_PATH",
+            "reference_frame": "base_link",
+            "waypoints": [
+                {"position": {"x": 0.30, "y": 0.00, "z": 0.30}},
+                {"position": {"x": 0.32, "y": 0.02, "z": 0.30}},
+            ],
+        }
+    )
+
+    assert semantic_validator.validate(normalized) is True

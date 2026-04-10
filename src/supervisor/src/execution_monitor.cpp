@@ -85,6 +85,10 @@ ExecutionMonitor::ExecutionMonitor(rclcpp::Node & node)
     node,
     "execution_monitor_check_period_ms",
     100);
+  const auto alert_heartbeat_period_ms = declare_or_get_parameter<int64_t>(
+    node,
+    "supervisor_alert_heartbeat_period_ms",
+    1000);
   const auto alert_topic = declare_or_get_parameter<std::string>(
     node,
     "supervisor_alert_topic",
@@ -125,8 +129,12 @@ ExecutionMonitor::ExecutionMonitor(rclcpp::Node & node)
   timeout_timer_ = node.create_wall_timer(
     std::chrono::milliseconds(check_period_ms > 0 ? check_period_ms : 100),
     std::bind(&ExecutionMonitor::timeout_check_callback, this));
+  heartbeat_timer_ = node.create_wall_timer(
+    std::chrono::milliseconds(alert_heartbeat_period_ms > 0 ? alert_heartbeat_period_ms : 1000),
+    std::bind(&ExecutionMonitor::publish_heartbeat, this));
 
   snapshot_.current_state = state_to_string(state_);
+  publish_heartbeat();
 
   RCLCPP_INFO(
     logger_,
@@ -433,6 +441,24 @@ void ExecutionMonitor::finalize_goal(
     snapshot_.allowed_duration_sec = 0.0;
     snapshot_.timeout_alert_active = false;
   }
+}
+
+void ExecutionMonitor::publish_heartbeat()
+{
+  ExecutionMonitorSnapshot local_snapshot;
+  {
+    std::lock_guard<std::mutex> lock(snapshot_mutex_);
+    if (snapshot_.last_alert_message.empty())
+    {
+      snapshot_.last_alert_message = "idle";
+    }
+    local_snapshot = snapshot_;
+  }
+
+  publish_alert(
+    local_snapshot.last_alert_level,
+    local_snapshot.last_alert_message,
+    "heartbeat");
 }
 
 void ExecutionMonitor::publish_alert(

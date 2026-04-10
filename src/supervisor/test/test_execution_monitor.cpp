@@ -159,6 +159,7 @@ protected:
       rclcpp::Parameter("execution_monitor_check_period_ms", 10),
       rclcpp::Parameter("execution_monitor_min_velocity_scale", 0.05),
       rclcpp::Parameter("execution_monitor_timeout_multiplier", 2.0),
+      rclcpp::Parameter("supervisor_alert_heartbeat_period_ms", 50),
     });
 
     node_ = std::make_shared<rclcpp::Node>("execution_monitor_test_node", options);
@@ -306,6 +307,17 @@ TEST_F(ExecutionMonitorFixture, NormalCompletionPathPublishesOkAlert)
   EXPECT_EQ(snapshot.consecutive_failure_count, 0U);
   EXPECT_EQ(snapshot.last_feedback_state, "executing");
   EXPECT_GT(snapshot.last_execution_time_sec, 0.0);
+}
+
+TEST_F(ExecutionMonitorFixture, IdleStatePublishesHeartbeatAlert)
+{
+  ASSERT_TRUE(wait_for_alert_message(
+      "idle",
+      diagnostic_msgs::msg::DiagnosticStatus::OK));
+
+  const auto snapshot = monitor_->snapshot();
+  EXPECT_EQ(snapshot.current_state, "IDLE");
+  EXPECT_EQ(snapshot.last_alert_message, "idle");
 }
 
 TEST_F(ExecutionMonitorFixture, TimeoutDetectionPublishesWarnAlert)

@@ -3,10 +3,13 @@
 
 # 2. Cho phép đẩy file .gitignore này lên
 !.gitignore
+!.env.example
 
 # 3. Cho phép thư mục src và file cấu hình cụ thể
 !src/
 !motoros2_config.yaml
+!hmi/
+!hmi/**
 
 # 4. (Tùy chọn) Chặn các folder rác bên trong src nếu có
 # Ví dụ: chặn các folder dependency bạn đã liệt kê trong ảnh 
@@ -33,6 +36,7 @@ __pycache__/
 # Secrets — never commit API keys or credentials
 .env
 .env.*
+!.env.example
 *.secret
 *.key
 secrets/

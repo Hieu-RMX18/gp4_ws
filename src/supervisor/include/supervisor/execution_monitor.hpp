@@ -79,6 +79,7 @@ private:
     bool success,
     const std::string & reason,
     const rclcpp::Time & completed_time);
+  void publish_heartbeat();
   void publish_alert(
     uint8_t level,
     const std::string & message,
@@ -111,6 +112,7 @@ private:
   rclcpp::Subscription<ExecuteMotionSendGoalResponse>::SharedPtr send_goal_response_sub_;
   rclcpp::Subscription<ExecuteMotionFeedbackMessage>::SharedPtr feedback_sub_;
   rclcpp::Subscription<action_msgs::msg::GoalStatusArray>::SharedPtr status_sub_;
+  rclcpp::TimerBase::SharedPtr heartbeat_timer_;
   rclcpp::TimerBase::SharedPtr timeout_timer_;
 };
 }  // namespace supervisor

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from ..services.telemetry_bridge_service import SNAPSHOT_SCHEMA_VERSION
 
@@ -35,7 +35,13 @@ class BridgeCapabilitiesModel(StrictModel):
     canAcquireLease: bool
     canSubmitCommands: bool
     canConfirmCommands: bool
+    canCancelCommands: bool = False
     canAbortCommands: bool
+    commandIngressAvailable: bool = False
+    confirmationAvailable: bool = False
+    executionAllowed: bool = False
+    replayAvailable: bool = False
+    simOnly: bool = False
 
 
 class JointPositionModel(StrictModel):
@@ -75,6 +81,137 @@ class RuntimeSnapshotModel(StrictModel):
     robotStatus: RobotStatusSnapshotModel
 
 
+class ChatMessageModel(StrictModel):
+    id: str
+    commandId: str | None
+    origin: Literal['system', 'operator', 'assistant']
+    timestamp: str
+    text: str
+    tag: str | None = None
+
+
+class PlanMetricsModel(StrictModel):
+    score: float | None
+    pathLengthRad: float | None
+    smoothness: float | None
+    clearanceM: float | None
+    cartesianCompletionPct: float | None
+    replanCount: int | None
+
+
+class ValidationSourceStatusModel(StrictModel):
+    name: str
+    label: str
+    topic: str
+    freshnessState: Literal['fresh', 'stale', 'unavailable']
+    active: bool
+    preferred: bool
+    detail: str | None
+
+
+class CommandValidationResultModel(StrictModel):
+    accepted: bool
+    leaseValid: bool
+    runtimeAllowed: bool
+    telemetryFresh: bool
+    requiresConfirmation: bool
+    riskLevel: Literal['low', 'medium', 'high', 'critical'] | None
+    blockingReasons: list[str]
+    confirmationReasons: list[str]
+    planFingerprint: str | None
+    executionAllowedNow: bool
+    criticalSources: list[ValidationSourceStatusModel]
+    optionalSources: list[ValidationSourceStatusModel]
+    eventDrivenSources: list[ValidationSourceStatusModel]
+
+
+class CommandExecutionResultModel(StrictModel):
+    accepted: bool
+    adapter: str
+    status: str
+    summary: str
+    dispatchedToRos: bool
+    commandId: str | None = None
+    planFingerprint: str | None = None
+    operatorId: str | None = None
+    sessionId: str | None = None
+    leaseId: str | None = None
+    correlationId: str | None = None
+
+
+class CommandViewModel(StrictModel):
+    commandId: str
+    sessionId: str
+    operatorId: str
+    rawText: str
+    intentSource: Literal['text', 'structured']
+    structuredIntent: dict[str, Any] | None = None
+    lifecycleState: Literal[
+        'RECEIVED',
+        'PARSING',
+        'VALIDATING',
+        'NEEDS_CONFIRMATION',
+        'CONFIRMED',
+        'EXECUTION_REQUESTED',
+        'EXECUTING',
+        'SUCCEEDED',
+        'FAILED',
+        'REJECTED',
+        'CANCELLED',
+        'EXPIRED',
+    ]
+    summaryLabel: str
+    plannerUsed: str | None
+    frameUsed: str | None
+    mode: Literal['sim', 'hardware', 'unknown']
+    riskLevel: Literal['low', 'medium', 'high', 'critical'] | None = None
+    planFingerprint: str | None = None
+    correlationId: str | None = None
+    rejectReason: str | None
+    parsedIntent: dict[str, Any] | None = None
+    validationResult: CommandValidationResultModel | None = None
+    planSummary: dict[str, Any] | None = None
+    metrics: PlanMetricsModel | None = None
+    confirmationExpiresAt: str | None = None
+    createdAt: str
+    confirmAt: str | None
+    executeAt: str | None
+    executionResult: CommandExecutionResultModel | None = None
+    finalState: Literal['SUCCEEDED', 'FAILED', 'REJECTED', 'CANCELLED', 'EXPIRED'] | None = None
+
+
+class ReplayListItemModel(StrictModel):
+    commandId: str
+    sessionId: str
+    operatorId: str
+    summaryLabel: str
+    lifecycleState: str
+    finalState: str | None
+    plannerUsed: str | None
+    frameUsed: str | None
+    mode: Literal['sim', 'hardware', 'unknown']
+    createdAt: str
+    executeAt: str | None
+    riskLevel: Literal['low', 'medium', 'high', 'critical'] | None = None
+
+
+class TimelineEventModel(StrictModel):
+    id: str
+    commandId: str | None
+    timestamp: str
+    fromState: str | None
+    toState: str | None
+    runtimeState: str | None
+    message: str
+    payload: dict[str, Any] | None = None
+
+
+class ReplayDetailModel(StrictModel):
+    command: CommandViewModel
+    timeline: list[TimelineEventModel]
+    runtimeEvents: list[TimelineEventModel]
+
+
 class HmiStateSnapshotModel(StrictModel):
     schemaVersion: Literal[SNAPSHOT_SCHEMA_VERSION]
     generatedAt: str
@@ -86,11 +223,11 @@ class HmiStateSnapshotModel(StrictModel):
     capabilities: BridgeCapabilitiesModel
     lease: LeaseViewModel
     runtime: RuntimeSnapshotModel
-    messages: list[dict[str, Any]]
-    activeCommand: dict[str, Any] | None
+    messages: list[ChatMessageModel]
+    activeCommand: CommandViewModel | None
     jointPositions: list[JointPositionModel]
-    planMetrics: dict[str, Any] | None
-    replayItems: list[dict[str, Any]]
+    planMetrics: PlanMetricsModel | None
+    replayItems: list[ReplayListItemModel]
 
 
 class RuntimeStateResponseModel(StrictModel):
@@ -118,6 +255,73 @@ class LeaseStateResponseModel(StrictModel):
     lease: LeaseViewModel
 
 
+class LeaseAcquireRequestModel(StrictModel):
+    sessionId: str
+    operatorId: str
+    requestedRole: Literal['controller', 'observer']
+    forceTakeover: bool = False
+    takeoverReason: str | None = None
+
+
+class LeaseRenewRequestModel(StrictModel):
+    sessionId: str
+    operatorId: str
+    leaseToken: str
+
+
+class LeaseReleaseRequestModel(StrictModel):
+    sessionId: str
+    operatorId: str
+    leaseToken: str
+
+
+class LeaseMutationResponseModel(StrictModel):
+    accepted: bool
+    lease: LeaseViewModel
+    reason: str | None
+
+
+class CommandIntentRequestModel(StrictModel):
+    sessionId: str
+    operatorId: str
+    leaseToken: str | None
+    intentText: str | None = None
+    structuredIntent: dict[str, Any] | None = None
+    mode: Literal['sim', 'hardware', 'unknown']
+
+    @model_validator(mode='after')
+    def validate_intent_payload(self) -> 'CommandIntentRequestModel':
+        if not (self.intentText and self.intentText.strip()) and self.structuredIntent is None:
+            raise ValueError('intentText or structuredIntent is required')
+        return self
+
+
+class CommandConfirmRequestModel(StrictModel):
+    sessionId: str
+    operatorId: str
+    leaseToken: str | None
+    planFingerprint: str
+
+
+class CommandCancelRequestModel(StrictModel):
+    sessionId: str
+    operatorId: str
+    leaseToken: str | None
+    reason: str | None = None
+
+
+class CommandMutationResponseModel(StrictModel):
+    accepted: bool
+    commandId: str
+    reason: str | None
+    snapshot: HmiStateSnapshotModel | None = None
+    command: CommandViewModel
+
+
+class CommandListResponseModel(StrictModel):
+    items: list[ReplayListItemModel]
+
+
 class SnapshotStreamEventModel(StrictModel):
     type: Literal['snapshot']
     snapshot: HmiStateSnapshotModel
@@ -131,4 +335,28 @@ class HeartbeatStreamEventModel(StrictModel):
     telemetryState: Literal['fresh', 'stale', 'unavailable']
 
 
-READ_ONLY_STREAM_EVENT_ADAPTER = TypeAdapter(SnapshotStreamEventModel | HeartbeatStreamEventModel)
+class LeaseStateStreamEventModel(StrictModel):
+    type: Literal['lease_state']
+    lease: LeaseViewModel
+    capabilities: BridgeCapabilitiesModel
+
+
+class CommandLifecycleStreamEventModel(StrictModel):
+    type: Literal['command_lifecycle']
+    command: CommandViewModel
+    messages: list[ChatMessageModel] = Field(default_factory=list)
+    planMetrics: PlanMetricsModel | None = None
+
+
+class ReplayUpdatedStreamEventModel(StrictModel):
+    type: Literal['replay_updated']
+    replayItems: list[ReplayListItemModel]
+
+
+HMI_STREAM_EVENT_ADAPTER = TypeAdapter(
+    SnapshotStreamEventModel
+    | HeartbeatStreamEventModel
+    | LeaseStateStreamEventModel
+    | CommandLifecycleStreamEventModel
+    | ReplayUpdatedStreamEventModel
+)

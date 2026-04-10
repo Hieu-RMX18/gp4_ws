@@ -1,26 +1,23 @@
 import type {
-  CommandActionRequest,
-  CommandActionResponse,
+  CommandCancelRequest,
+  CommandConfirmRequest,
+  CommandIntentRequest,
+  CommandMutationResponse,
+  ConnectionStateResponse,
   GP4BridgeClient,
   HmiStreamEvent,
-  LeaseView,
-  LeaseStateResponse,
   LeaseAcquireRequest,
   LeaseMutationResponse,
   LeaseReleaseRequest,
   LeaseRenewRequest,
-  RuntimeStateResponse,
-  ConnectionStateResponse,
+  LeaseStateResponse,
   ReplayDetail,
   ReplayListQuery,
   ReplayListResponse,
-  SubmitCommandRequest,
-  SubmitCommandResponse,
+  RuntimeStateResponse,
   TransportState,
 } from '../shared/contracts';
 
-const READ_ONLY_REASON =
-  'Telemetry bridge v1 is read-only. Lease, command, and replay write paths are disabled.';
 const SUPPORTED_SCHEMA_VERSION = 'telemetry.v1';
 const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8000;
@@ -35,26 +32,37 @@ function toWebSocketUrl(baseUrl: string, sessionId: string, operatorId: string):
   return httpUrl.toString();
 }
 
-function readOnlyLeaseView(): LeaseView {
-  return {
-    leaseId: null,
-    leaseToken: null,
-    role: 'observer',
-    ownsControl: false,
-    holderOperatorId: null,
-    holderSessionId: null,
-    acquiredAt: null,
-    expiresAt: null,
-    statusText: READ_ONLY_REASON,
-    canForceTakeover: false,
-  };
-}
-
 async function getJson<TResponse>(url: string): Promise<TResponse> {
   const response = await fetch(url);
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `Request failed with ${response.status}`);
+  }
+  return (await response.json()) as TResponse;
+}
+
+async function postJson<TResponse>(url: string, body: unknown): Promise<TResponse> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    let detail = `Request failed with ${response.status}`;
+    try {
+      const payload = (await response.json()) as { detail?: string };
+      if (payload.detail) {
+        detail = payload.detail;
+      }
+    } catch {
+      const text = await response.text();
+      if (text) {
+        detail = text;
+      }
+    }
+    throw new Error(detail);
   }
   return (await response.json()) as TResponse;
 }
@@ -76,7 +84,10 @@ function computeReconnectDelayMs(attempt: number): number {
   return Math.round(Math.min(RECONNECT_MAX_DELAY_MS, bounded * jitterFactor));
 }
 
-async function getVersionedJson<TResponse extends { schemaVersion: string }>(url: string, context: string): Promise<TResponse> {
+async function getVersionedJson<TResponse extends { schemaVersion: string }>(
+  url: string,
+  context: string,
+): Promise<TResponse> {
   const payload = await getJson<TResponse>(url);
   assertCompatibleSchemaVersion(payload, context);
   return payload;
@@ -90,6 +101,20 @@ function validateStreamEvent(event: HmiStreamEvent): HmiStreamEvent {
     assertCompatibleSchemaVersion(event, 'heartbeat');
   }
   return event;
+}
+
+function withQuery(
+  basePath: string,
+  route: string,
+  query: Record<string, string | undefined | null>,
+): string {
+  const url = new URL(`${basePath}${route}`, window.location.origin);
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      url.searchParams.set(key, value);
+    }
+  });
+  return url.toString();
 }
 
 export function createBridgeClient(basePath = '/api/hmi'): GP4BridgeClient {
@@ -193,78 +218,63 @@ export function createBridgeClient(basePath = '/api/hmi'): GP4BridgeClient {
       };
     },
 
-    acquireLease(_: LeaseAcquireRequest): Promise<LeaseMutationResponse> {
-      return Promise.resolve({
-        accepted: false,
-        lease: readOnlyLeaseView(),
-        reason: READ_ONLY_REASON,
-      });
+    acquireLease(request: LeaseAcquireRequest): Promise<LeaseMutationResponse> {
+      return postJson(`${basePath}/lease/acquire`, request);
     },
 
-    renewLease(_: LeaseRenewRequest): Promise<LeaseMutationResponse> {
-      return Promise.resolve({
-        accepted: false,
-        lease: readOnlyLeaseView(),
-        reason: READ_ONLY_REASON,
-      });
+    renewLease(request: LeaseRenewRequest): Promise<LeaseMutationResponse> {
+      return postJson(`${basePath}/lease/renew`, request);
     },
 
-    releaseLease(_: LeaseReleaseRequest): Promise<LeaseMutationResponse> {
-      return Promise.resolve({
-        accepted: false,
-        lease: readOnlyLeaseView(),
-        reason: READ_ONLY_REASON,
-      });
+    releaseLease(request: LeaseReleaseRequest): Promise<LeaseMutationResponse> {
+      return postJson(`${basePath}/lease/release`, request);
     },
 
-    submitCommand(_: SubmitCommandRequest): Promise<SubmitCommandResponse> {
-      return Promise.resolve({
-        accepted: false,
-        commandId: null,
-        reason: READ_ONLY_REASON,
-      });
+    submitCommand(request: CommandIntentRequest): Promise<CommandMutationResponse> {
+      return postJson(`${basePath}/commands/intent`, request);
     },
 
-    confirmCommand(commandId: string, _: CommandActionRequest): Promise<CommandActionResponse> {
-      return Promise.resolve({
-        accepted: false,
-        commandId,
-        reason: READ_ONLY_REASON,
-      });
+    confirmCommand(commandId: string, request: CommandConfirmRequest): Promise<CommandMutationResponse> {
+      return postJson(`${basePath}/commands/${encodeURIComponent(commandId)}/confirm`, request);
     },
 
-    abortCommand(commandId: string, _: CommandActionRequest): Promise<CommandActionResponse> {
-      return Promise.resolve({
-        accepted: false,
-        commandId,
-        reason: READ_ONLY_REASON,
-      });
+    abortCommand(commandId: string, request: CommandCancelRequest): Promise<CommandMutationResponse> {
+      return postJson(`${basePath}/commands/${encodeURIComponent(commandId)}/cancel`, request);
     },
 
     getRuntimeState(sessionId: string, operatorId: string): Promise<RuntimeStateResponse> {
-      const url = new URL(`${basePath}/runtime-state`, window.location.origin);
-      url.searchParams.set('session_id', sessionId);
-      url.searchParams.set('operator_id', operatorId);
-      return getVersionedJson(url.toString(), 'runtime-state');
+      return getVersionedJson(
+        withQuery(basePath, '/runtime-state', { session_id: sessionId, operator_id: operatorId }),
+        'runtime-state',
+      );
     },
 
     getConnectionState(): Promise<ConnectionStateResponse> {
-      return getVersionedJson(new URL(`${basePath}/connection-state`, window.location.origin).toString(), 'connection-state');
+      return getVersionedJson(withQuery(basePath, '/connection-state', {}), 'connection-state');
     },
 
     getLeaseState(sessionId: string, operatorId: string): Promise<LeaseStateResponse> {
-      const url = new URL(`${basePath}/lease-state`, window.location.origin);
-      url.searchParams.set('session_id', sessionId);
-      url.searchParams.set('operator_id', operatorId);
-      return getVersionedJson(url.toString(), 'lease-state');
+      return getVersionedJson(
+        withQuery(basePath, '/lease-state', { session_id: sessionId, operator_id: operatorId }),
+        'lease-state',
+      );
     },
 
-    listReplay(_: ReplayListQuery | undefined): Promise<ReplayListResponse> {
-      return Promise.resolve({ items: [] });
+    listReplay(query?: ReplayListQuery): Promise<ReplayListResponse> {
+      return getJson(
+        withQuery(basePath, '/replay', {
+          session_id: query?.sessionId,
+          operator_id: query?.operatorId,
+          final_state: query?.finalState,
+          from: query?.from,
+          to: query?.to,
+          limit: query?.limit?.toString(),
+        }),
+      );
     },
 
-    getReplayDetail(_: string): Promise<ReplayDetail> {
-      return Promise.reject(new Error('Replay detail is not exposed by telemetry bridge v1.'));
+    getReplayDetail(commandId: string): Promise<ReplayDetail> {
+      return getJson(`${basePath}/replay/${encodeURIComponent(commandId)}`);
     },
   };
 }

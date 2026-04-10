@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type {
-  CommandActionResponse,
+  CommandMutationResponse,
   GP4BridgeClient,
   HmiStateSnapshot,
   HmiStreamEvent,
   JointPosition,
   LeaseMutationResponse,
-  PlanMetrics,
   ReplayListItem,
-  RuntimeSnapshot,
   TransportState,
 } from '../../shared/contracts';
 
@@ -41,7 +39,13 @@ function createDisconnectedSnapshot(): HmiStateSnapshot {
       canAcquireLease: false,
       canSubmitCommands: false,
       canConfirmCommands: false,
+      canCancelCommands: false,
       canAbortCommands: false,
+      commandIngressAvailable: false,
+      confirmationAvailable: false,
+      executionAllowed: false,
+      replayAvailable: false,
+      simOnly: true,
     },
     lease: {
       leaseId: null,
@@ -78,15 +82,6 @@ function createDisconnectedSnapshot(): HmiStateSnapshot {
   };
 }
 
-function mergeJointPositions(current: JointPosition[], next?: JointPosition[]): JointPosition[] {
-  if (!next || next.length === 0) {
-    return current;
-  }
-
-  const nextMap = new Map(next.map((joint) => [joint.name, joint]));
-  return current.map((joint) => nextMap.get(joint.name) ?? joint);
-}
-
 function applyEvent(snapshot: HmiStateSnapshot, event: HmiStreamEvent): HmiStateSnapshot {
   switch (event.type) {
     case 'snapshot':
@@ -96,6 +91,7 @@ function applyEvent(snapshot: HmiStateSnapshot, event: HmiStreamEvent): HmiState
         ...snapshot,
         generatedAt: new Date().toISOString(),
         lease: event.lease,
+        capabilities: event.capabilities,
       };
     case 'heartbeat':
       return {
@@ -111,14 +107,6 @@ function applyEvent(snapshot: HmiStateSnapshot, event: HmiStreamEvent): HmiState
         activeCommand: event.command,
         planMetrics: event.planMetrics ?? event.command.metrics ?? snapshot.planMetrics,
         messages: event.messages ? [...snapshot.messages, ...event.messages] : snapshot.messages,
-      };
-    case 'runtime_state':
-      return {
-        ...snapshot,
-        generatedAt: new Date().toISOString(),
-        mode: event.runtime.mode,
-        runtime: event.runtime,
-        jointPositions: mergeJointPositions(snapshot.jointPositions, event.jointPositions),
       };
     case 'replay_updated':
       return {
@@ -153,11 +141,11 @@ export interface UseGp4BridgeResult {
   transportState: TransportState;
   isController: boolean;
   blockingRuntime: boolean;
-  submitCommand: (rawText: string) => Promise<CommandActionResponse | null>;
+  submitCommand: (rawText: string) => Promise<CommandMutationResponse>;
   acquireControllerLease: () => Promise<LeaseMutationResponse>;
   releaseLease: () => Promise<LeaseMutationResponse | null>;
-  confirmActiveCommand: () => Promise<CommandActionResponse | null>;
-  abortActiveCommand: (reason?: string) => Promise<CommandActionResponse | null>;
+  confirmActiveCommand: () => Promise<CommandMutationResponse | null>;
+  abortActiveCommand: (reason?: string) => Promise<CommandMutationResponse | null>;
   refreshReplay: () => Promise<ReplayListItem[]>;
 }
 
@@ -240,31 +228,24 @@ export function useGP4Bridge(
       sessionId,
       operatorId,
       leaseToken: state.lease.leaseToken,
-      rawText,
+      intentText: rawText,
       mode: state.mode,
     });
     if (response.snapshot) {
       setState(response.snapshot);
     }
-    if (!response.commandId) {
-      return null;
-    }
-    return {
-      accepted: response.accepted,
-      commandId: response.commandId,
-      reason: response.reason,
-      snapshot: response.snapshot,
-    };
+    return response;
   }, [client, operatorId, sessionId, state.lease.leaseToken, state.mode]);
 
   const confirmActiveCommand = useCallback(async () => {
-    if (!state.activeCommand) {
+    if (!state.activeCommand || !state.activeCommand.planFingerprint) {
       return null;
     }
     const response = await client.confirmCommand(state.activeCommand.commandId, {
       sessionId,
       operatorId,
       leaseToken: state.lease.leaseToken,
+      planFingerprint: state.activeCommand.planFingerprint,
     });
     if (response.snapshot) {
       setState(response.snapshot);
@@ -295,8 +276,8 @@ export function useGP4Bridge(
   }, [client]);
 
   const blockingRuntime = useMemo(() => {
-    return state.runtime.blocking || transportState !== 'connected' || state.capabilities.readOnly;
-  }, [state.capabilities.readOnly, state.runtime.blocking, transportState]);
+    return state.runtime.blocking || transportState !== 'connected';
+  }, [state.runtime.blocking, transportState]);
 
   return {
     state,

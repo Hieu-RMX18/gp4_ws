@@ -1,4 +1,17 @@
-# GP4 HMI Read-Only Telemetry Bridge v1
+# GP4 HMI telemetry bridge v1 + supervisor command ingress v2
+
+## Current state
+
+- Telemetry bridge v1 remains frozen for runtime-state, freshness, heartbeat, and schema-version behavior.
+- HMI v2 now adds a supervisor-owned command ingress path on top of that baseline.
+- Command ingress is **sim-only** in this build.
+- MotoROS2 / hardware freshness and hardware execution remain explicitly unverified.
+- Confirmed commands now validate through `/validate_command` and dispatch `/execute_motion` in **sim mode only**.
+
+Primary architecture note:
+
+- `hmi/HMI_V2_COMMAND_INGRESS.md`
+- `hmi/HARDWARE_TELEMETRY_VALIDATION.md`
 
 ## Backend dependencies
 
@@ -46,6 +59,9 @@ curl "http://127.0.0.1:8000/api/hmi/snapshot?session_id=session-dev&operator_id=
 curl "http://127.0.0.1:8000/api/hmi/runtime-state?session_id=session-dev&operator_id=operator-dev"
 curl "http://127.0.0.1:8000/api/hmi/connection-state"
 curl "http://127.0.0.1:8000/api/hmi/lease-state?session_id=session-dev&operator_id=operator-dev"
+curl -X POST "http://127.0.0.1:8000/api/hmi/lease/acquire" \
+  -H "Content-Type: application/json" \
+  -d '{"sessionId":"session-dev","operatorId":"operator-dev","requestedRole":"controller"}'
 ```
 
 WebSocket:
@@ -91,6 +107,27 @@ Deterministic interpretation:
 - `telemetryState=stale` => backend is up but one or more active sources are stale
 - `runtime.systemState=SAFETY_BLOCKED` => safety gate is actively blocking while transport may still be up
 
+### Sim-mode freshness baseline
+
+In sim mode, the supervisor treats these as freshness-critical:
+
+- `gateway_status`
+- `readiness`
+- `supervisor_alerts`
+- the active sim joint-state source
+
+These are non-blocking unless the backend explicitly marks them active:
+
+- `llm_debug`
+- `llm_command`
+
+These stay visible but are not freshness-critical in sim mode:
+
+- `robot_status`
+- inactive joint-state fallback/primary sources
+
+If any freshness-critical sim source is stale, command-capable actions fail closed.
+
 ## Storage policy
 
 Telemetry snapshots are intentionally compact:
@@ -131,7 +168,11 @@ Schema compatibility policy:
 Unit verification:
 
 ```bash
-python3 -m unittest -v hmi.backend.tests.test_telemetry_bridge_v1 hmi.backend.tests.test_ros_adapter hmi.backend.tests.test_audit_service
+python3 -m unittest -v \
+  hmi.backend.tests.test_telemetry_bridge_v1 \
+  hmi.backend.tests.test_ros_adapter \
+  hmi.backend.tests.test_supervisor_service \
+  hmi.backend.tests.test_audit_service
 cd /home/hieu2/gp4_ws/hmi/frontend && npm run build
 ```
 
@@ -191,3 +232,21 @@ Timing-sensitive scenarios:
 - `burst_joint_states_ws`
 
 These rely on freshness windows and scheduler timing, so they are the first to show machine-load or timing jitter issues.
+
+## Hardware telemetry validation gate
+
+Phase A for hardware remains open. Use the read-only capture tool and worksheet in:
+
+- `hmi/HARDWARE_TELEMETRY_VALIDATION.md`
+
+Capture command:
+
+```bash
+cd /home/hieu2/gp4_ws
+source install/setup.bash
+python3 hmi/tools/hardware_telemetry_validation.py \
+  --duration-sec 120 \
+  --output /tmp/gp4_hardware_telemetry_report.json
+```
+
+This does not enable execution. It only captures live MotoROS2 telemetry evidence.

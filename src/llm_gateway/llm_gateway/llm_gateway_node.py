@@ -68,6 +68,9 @@ class LLMGatewayNode(Node):
         self._safety_service_timeout_sec = (
             self.get_parameter("safety_service_timeout_sec").get_parameter_value().double_value
         )
+        self._status_heartbeat_period_sec = (
+            self.get_parameter("status_heartbeat_period_sec").get_parameter_value().double_value
+        )
 
         self._parser = parser or LLMParser()
         self._schema_validator = schema_validator or SchemaValidator(schema_path)
@@ -113,6 +116,14 @@ class LLMGatewayNode(Node):
         self._llm_debug_publisher = self.create_publisher(String, "/llm_debug", 10)
         self._status_publisher = self.create_publisher(String, "/gateway_status", 10)
         self._command_publisher = self.create_publisher(String, "/llm_command", 10)
+        self._last_status = "ready"
+        self._status_heartbeat_timer = None
+        if self._status_heartbeat_period_sec > 0.0:
+            self._status_heartbeat_timer = self.create_timer(
+                self._status_heartbeat_period_sec,
+                self._publish_status_heartbeat,
+                callback_group=callback_group,
+            )
         self._validate_client = self.create_client(
             ValidateCommand,
             "/validate_command",
@@ -132,6 +143,7 @@ class LLMGatewayNode(Node):
             callback_group=callback_group,
         )
 
+        self.publish_status(self._last_status)
         self.get_logger().info(f"LLMGatewayNode ready (runtime_mode={runtime_mode}).")
 
     def _declare_parameters(self) -> None:
@@ -141,6 +153,7 @@ class LLMGatewayNode(Node):
         self.declare_parameter("default_velocity_scale", 0.10)
         self.declare_parameter("default_acceleration_scale", 0.10)
         self.declare_parameter("safety_service_timeout_sec", 2.0)
+        self.declare_parameter("status_heartbeat_period_sec", 5.0)
         self.declare_parameter("auto_clear_unimplemented_approval", False)
 
     def _resolve_runtime_mode(self) -> str:
@@ -158,8 +171,13 @@ class LLMGatewayNode(Node):
         return "sim" if auto_clear else "hardware"
 
     def publish_status(self, status: str) -> None:
-        self.get_logger().info(f"gateway_status={status}")
+        if status != self._last_status:
+            self.get_logger().info(f"gateway_status={status}")
+        self._last_status = status
         self._status_publisher.publish(String(data=status))
+
+    def _publish_status_heartbeat(self) -> None:
+        self._status_publisher.publish(String(data=self._last_status))
 
     def intent_callback(self, msg: String) -> None:
         self.process_intent(msg.data)

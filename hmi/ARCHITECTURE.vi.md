@@ -1,5 +1,9 @@
 # GP4 HMI refactor scaffold
 
+> Cap nhat 2026-04-08: tai lieu scaffold ben duoi co mot so ten lifecycle cu cua pre-v2.
+> Ghi chu kien truc hien hanh cho command ingress nam o `hmi/HMI_V2_COMMAND_INGRESS.md`.
+> Telemetry v1 van la baseline; HMI v2 them supervisor-owned command ingress sim-only va giu hardware/MotoROS2 o trang thai chua xac minh.
+
 ## 1. Chiến lược refactor ngắn gọn
 
 Workspace hiện có ROS-side control flow (`llm_gateway`, `safety`, `motion_core`, `hw_adapter`, `supervisor`) nhưng **chưa có frontend TSX/HMI bridge đã check-in** để làm ranh giới an toàn giữa browser và robot. Vì vậy bản scaffold này đi theo hướng **refactor an toàn, không redesign**:
@@ -318,7 +322,7 @@ Trả về:
 - audit + replay: `hmi/backend/services/audit_service.py`
 - supervisor orchestration: `hmi/backend/services/supervisor_service.py`
 - runtime/state machine: `hmi/backend/domain/state_machine.py`
-- ROS boundary stub: `hmi/backend/ros/adapter.py`
+- ROS boundary adapter (telemetry + sim-only execution): `hmi/backend/ros/adapter.py`
 - HMI bridge API: `hmi/backend/api/app.py`
 
 ---
@@ -336,7 +340,7 @@ Trả về:
    - `/supervisor/alerts`
    - `/yaskawa/joint_states`
    - `/yaskawa/robot_status`
-5. Chỉ sau khi có confirmable backend flow mới nối `submit/confirm/abort` thật.
+5. `submit/confirm/abort` hiện đã nối thật cho **sim mode only**; hardware mode vẫn fail-closed.
 6. Khi backend bridge ổn định, mới đóng gói frontend vào Next.js/Vite project chính thức.
 
 ---

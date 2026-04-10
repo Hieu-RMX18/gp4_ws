@@ -10,9 +10,9 @@ from pydantic import ValidationError
 
 from hmi.backend.api.contracts import (
     ConnectionStateResponseModel,
+    HMI_STREAM_EVENT_ADAPTER,
     HmiStateSnapshotModel,
     LeaseStateResponseModel,
-    READ_ONLY_STREAM_EVENT_ADAPTER,
     RuntimeStateResponseModel,
 )
 from hmi.backend.domain.models import (
@@ -200,8 +200,8 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
             RuntimeStateResponseModel.model_validate(runtime)
             ConnectionStateResponseModel.model_validate(connection)
             LeaseStateResponseModel.model_validate(lease)
-            READ_ONLY_STREAM_EVENT_ADAPTER.validate_python({'type': 'snapshot', 'snapshot': snapshot})
-            READ_ONLY_STREAM_EVENT_ADAPTER.validate_python(heartbeat)
+            HMI_STREAM_EVENT_ADAPTER.validate_python({'type': 'snapshot', 'snapshot': snapshot})
+            HMI_STREAM_EVENT_ADAPTER.validate_python(heartbeat)
 
             broken_snapshot = deepcopy(snapshot)
             broken_snapshot['schemaVersion'] = 'telemetry.v999'

@@ -24,7 +24,13 @@ def generate_launch_description():
         default_value='/tmp/gp4_audit',
         description='Directory used by supervisor audit_logger for rosbag2 and JSONL output.',
     )
+    use_rviz_arg = DeclareLaunchArgument(
+        'use_rviz',
+        default_value='true',
+        description='Start RViz for MoveIt visualization in sim bringup.',
+    )
     audit_log_path = LaunchConfiguration('audit_log_path')
+    use_rviz = LaunchConfiguration('use_rviz')
     supervisor_params = os.path.join(
         supervisor_share,
         'config',
@@ -46,7 +52,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_fake_hardware': use_fake_hardware_value,
-            'use_rviz': 'true',
+            'use_rviz': use_rviz,
         }.items(),
     )
 
@@ -81,8 +87,8 @@ def generate_launch_description():
         name='hw_adapter_node',
         output='screen',
         parameters=[{
-            # Fake hardware: the active controller action server is
-            # gp4_arm_controller/follow_joint_trajectory (not /yaskawa/...)
+            # Fake hardware exposes FollowJointTrajectory on /controller_manager.
+            # Route hw_adapter there so confirmed sim commands execute end-to-end.
             "follow_joint_trajectory_action": "/controller_manager/follow_joint_trajectory",
             "dispatch_action_name": "/hw_adapter/dispatch_trajectory",
             "robot_status_topic": "/yaskawa/robot_status",
@@ -138,6 +144,7 @@ def generate_launch_description():
     return LaunchDescription([
         SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'),
         audit_log_path_arg,
+        use_rviz_arg,
         moveit_only,
         safety_node,
         llm_gateway_node,

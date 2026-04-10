@@ -218,7 +218,7 @@ def build_scenarios() -> dict[str, list[Phase]]:
             ),
             Phase(
                 name="all_topics_paused",
-                duration_sec=4.5,
+                duration_sec=6.0,
                 publish_gateway_status=False,
                 publish_llm_debug=False,
                 publish_llm_command=False,

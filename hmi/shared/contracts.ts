@@ -3,21 +3,23 @@ export type TransportState = 'connected' | 'connecting' | 'disconnected';
 export type ConnectionHealth = 'healthy' | 'degraded' | 'down';
 export type TelemetryState = 'fresh' | 'stale' | 'unavailable';
 export type LeaseRole = 'controller' | 'observer';
+export type CommandRiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
 export type CommandLifecycleState =
-  | 'IDLE'
   | 'RECEIVED'
-  | 'PARSED'
-  | 'VALIDATED'
-  | 'PLANNED'
-  | 'QUALITY_CHECKED'
-  | 'READY_FOR_CONFIRM'
+  | 'PARSING'
+  | 'VALIDATING'
+  | 'NEEDS_CONFIRMATION'
+  | 'CONFIRMED'
+  | 'EXECUTION_REQUESTED'
   | 'EXECUTING'
   | 'SUCCEEDED'
   | 'FAILED'
   | 'REJECTED'
   | 'CANCELLED'
-  | 'ABORTED';
+  | 'EXPIRED';
+
+export type TerminalCommandLifecycleState = 'SUCCEEDED' | 'FAILED' | 'REJECTED' | 'CANCELLED' | 'EXPIRED';
 
 export type SystemRuntimeState =
   | 'NORMAL'
@@ -29,17 +31,6 @@ export type SystemRuntimeState =
   | 'SAFETY_BLOCKED';
 
 export type MessageOrigin = 'system' | 'operator' | 'assistant';
-export type MessageTag =
-  | 'PARSED'
-  | 'VALIDATED'
-  | 'PLANNED'
-  | 'QUALITY_CHECKED'
-  | 'READY_FOR_CONFIRM'
-  | 'EXECUTING'
-  | 'SUCCEEDED'
-  | 'FAILED'
-  | 'REJECTED'
-  | 'DEBUG_REQUIRED';
 
 export interface BridgeConnection {
   name: 'ros2' | 'moveit2' | 'llm' | 'motoros2';
@@ -65,7 +56,13 @@ export interface BridgeCapabilities {
   canAcquireLease: boolean;
   canSubmitCommands: boolean;
   canConfirmCommands: boolean;
+  canCancelCommands: boolean;
   canAbortCommands: boolean;
+  commandIngressAvailable: boolean;
+  confirmationAvailable: boolean;
+  executionAllowed: boolean;
+  replayAvailable: boolean;
+  simOnly: boolean;
 }
 
 export interface TelemetrySourceStatus {
@@ -77,6 +74,16 @@ export interface TelemetrySourceStatus {
   freshnessState: TelemetryState;
   preferred: boolean;
   active: boolean;
+  detail: string | null;
+}
+
+export interface ValidationSourceStatus {
+  name: string;
+  label: string;
+  topic: string;
+  freshnessState: TelemetryState;
+  active: boolean;
+  preferred: boolean;
   detail: string | null;
 }
 
@@ -120,18 +127,37 @@ export interface ChatMessage {
   origin: MessageOrigin;
   timestamp: string;
   text: string;
-  tag?: MessageTag;
+  tag?: string | null;
 }
 
-export interface TimelineEvent {
-  id: string;
-  commandId: string | null;
-  timestamp: string;
-  fromState: CommandLifecycleState | null;
-  toState: CommandLifecycleState | null;
-  runtimeState: SystemRuntimeState | null;
-  message: string;
-  payload?: Record<string, unknown>;
+export interface CommandValidationResult {
+  accepted: boolean;
+  leaseValid: boolean;
+  runtimeAllowed: boolean;
+  telemetryFresh: boolean;
+  requiresConfirmation: boolean;
+  riskLevel: CommandRiskLevel | null;
+  blockingReasons: string[];
+  confirmationReasons: string[];
+  planFingerprint: string | null;
+  executionAllowedNow: boolean;
+  criticalSources: ValidationSourceStatus[];
+  optionalSources: ValidationSourceStatus[];
+  eventDrivenSources: ValidationSourceStatus[];
+}
+
+export interface CommandExecutionResult {
+  accepted: boolean;
+  adapter: string;
+  status: string;
+  summary: string;
+  dispatchedToRos: boolean;
+  commandId?: string | null;
+  planFingerprint?: string | null;
+  operatorId?: string | null;
+  sessionId?: string | null;
+  leaseId?: string | null;
+  correlationId?: string | null;
 }
 
 export interface CommandView {
@@ -139,20 +165,27 @@ export interface CommandView {
   sessionId: string;
   operatorId: string;
   rawText: string;
+  intentSource: 'text' | 'structured';
+  structuredIntent?: Record<string, unknown> | null;
   lifecycleState: CommandLifecycleState;
   summaryLabel: string;
   plannerUsed: string | null;
   frameUsed: string | null;
   mode: RuntimeMode;
+  riskLevel: CommandRiskLevel | null;
+  planFingerprint: string | null;
+  correlationId: string | null;
   rejectReason: string | null;
   parsedIntent?: Record<string, unknown> | null;
-  validationResult?: Record<string, unknown> | null;
+  validationResult?: CommandValidationResult | null;
   planSummary?: Record<string, unknown> | null;
   metrics?: PlanMetrics | null;
+  confirmationExpiresAt: string | null;
   createdAt: string;
   confirmAt: string | null;
   executeAt: string | null;
-  finalState: CommandLifecycleState | null;
+  executionResult?: CommandExecutionResult | null;
+  finalState: TerminalCommandLifecycleState | null;
 }
 
 export interface ReplayListItem {
@@ -160,13 +193,25 @@ export interface ReplayListItem {
   sessionId: string;
   operatorId: string;
   summaryLabel: string;
-  lifecycleState: CommandLifecycleState;
-  finalState: CommandLifecycleState | null;
+  lifecycleState: string;
+  finalState: string | null;
   plannerUsed: string | null;
   frameUsed: string | null;
   mode: RuntimeMode;
   createdAt: string;
   executeAt: string | null;
+  riskLevel: CommandRiskLevel | null;
+}
+
+export interface TimelineEvent {
+  id: string;
+  commandId: string | null;
+  timestamp: string;
+  fromState: string | null;
+  toState: string | null;
+  runtimeState: string | null;
+  message: string;
+  payload?: Record<string, unknown> | null;
 }
 
 export interface ReplayDetail {
@@ -238,15 +283,23 @@ export interface LeaseReleaseRequest {
   leaseToken: string;
 }
 
-export interface SubmitCommandRequest {
+export interface CommandIntentRequest {
   sessionId: string;
   operatorId: string;
   leaseToken: string | null;
-  rawText: string;
+  intentText?: string | null;
+  structuredIntent?: Record<string, unknown> | null;
   mode: RuntimeMode;
 }
 
-export interface CommandActionRequest {
+export interface CommandConfirmRequest {
+  sessionId: string;
+  operatorId: string;
+  leaseToken: string | null;
+  planFingerprint: string;
+}
+
+export interface CommandCancelRequest {
   sessionId: string;
   operatorId: string;
   leaseToken: string | null;
@@ -259,24 +312,18 @@ export interface LeaseMutationResponse {
   reason: string | null;
 }
 
-export interface SubmitCommandResponse {
-  accepted: boolean;
-  commandId: string | null;
-  reason: string | null;
-  snapshot?: HmiStateSnapshot;
-}
-
-export interface CommandActionResponse {
+export interface CommandMutationResponse {
   accepted: boolean;
   commandId: string;
   reason: string | null;
-  snapshot?: HmiStateSnapshot;
+  snapshot?: HmiStateSnapshot | null;
+  command: CommandView;
 }
 
 export interface ReplayListQuery {
   sessionId?: string;
   operatorId?: string;
-  finalState?: CommandLifecycleState;
+  finalState?: string;
   from?: string;
   to?: string;
   limit?: number;
@@ -289,9 +336,8 @@ export interface ReplayListResponse {
 export type HmiStreamEvent =
   | { type: 'snapshot'; snapshot: HmiStateSnapshot }
   | { type: 'heartbeat'; schemaVersion: string; generatedAt: string; transportState: TransportState; telemetryState: TelemetryState }
-  | { type: 'lease_state'; lease: LeaseView }
+  | { type: 'lease_state'; lease: LeaseView; capabilities: BridgeCapabilities }
   | { type: 'command_lifecycle'; command: CommandView; messages?: ChatMessage[]; planMetrics?: PlanMetrics | null }
-  | { type: 'runtime_state'; runtime: RuntimeSnapshot; jointPositions?: JointPosition[] }
   | { type: 'replay_updated'; replayItems: ReplayListItem[] }
   | { type: 'connection_state'; transportState: TransportState; connections?: BridgeConnection[] };
 
@@ -305,9 +351,9 @@ export interface GP4BridgeClient {
   acquireLease(request: LeaseAcquireRequest): Promise<LeaseMutationResponse>;
   renewLease(request: LeaseRenewRequest): Promise<LeaseMutationResponse>;
   releaseLease(request: LeaseReleaseRequest): Promise<LeaseMutationResponse>;
-  submitCommand(request: SubmitCommandRequest): Promise<SubmitCommandResponse>;
-  confirmCommand(commandId: string, request: CommandActionRequest): Promise<CommandActionResponse>;
-  abortCommand(commandId: string, request: CommandActionRequest): Promise<CommandActionResponse>;
+  submitCommand(request: CommandIntentRequest): Promise<CommandMutationResponse>;
+  confirmCommand(commandId: string, request: CommandConfirmRequest): Promise<CommandMutationResponse>;
+  abortCommand(commandId: string, request: CommandCancelRequest): Promise<CommandMutationResponse>;
   getRuntimeState(sessionId: string, operatorId: string): Promise<RuntimeStateResponse>;
   getConnectionState(): Promise<ConnectionStateResponse>;
   getLeaseState(sessionId: string, operatorId: string): Promise<LeaseStateResponse>;

@@ -211,6 +211,20 @@ def test_gateway_fails_closed_when_execute_motion_unavailable(openai_payload):
     node.destroy_node()
 
 
+def test_gateway_status_heartbeat_reuses_latest_status():
+    node = LLMGatewayNode()
+    published = []
+    node._status_publisher.publish = MagicMock(side_effect=lambda msg: published.append(msg.data))
+
+    node.publish_status("parsed")
+    node._publish_status_heartbeat()
+
+    assert node._last_status == "parsed"
+    assert published[-2:] == ["parsed", "parsed"]
+
+    node.destroy_node()
+
+
 def test_gateway_rejects_model_error_payload(model_error_payload):
     node = LLMGatewayNode()
     debug_messages = []

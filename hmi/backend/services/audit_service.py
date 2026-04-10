@@ -50,11 +50,19 @@ class AuditService:
                     raw_text TEXT NOT NULL,
                     parsed_intent_json TEXT,
                     validation_result_json TEXT,
+                    structured_intent_json TEXT,
                     reject_reason TEXT,
                     plan_summary_json TEXT,
+                    summary_label TEXT,
+                    lifecycle_state TEXT,
                     confirm_at TEXT,
+                    review_expires_at TEXT,
                     execute_at TEXT,
                     final_state TEXT,
+                    plan_fingerprint TEXT,
+                    correlation_id TEXT,
+                    risk_level TEXT,
+                    execution_result_json TEXT,
                     mode TEXT NOT NULL,
                     frame_used TEXT,
                     planner_used TEXT,
@@ -107,6 +115,31 @@ class AuditService:
                 ON telemetry_snapshots(created_at);
                 """
             )
+            self._ensure_column(connection, "commands", "structured_intent_json", "TEXT")
+            self._ensure_column(connection, "commands", "summary_label", "TEXT")
+            self._ensure_column(connection, "commands", "lifecycle_state", "TEXT")
+            self._ensure_column(connection, "commands", "review_expires_at", "TEXT")
+            self._ensure_column(connection, "commands", "plan_fingerprint", "TEXT")
+            self._ensure_column(connection, "commands", "correlation_id", "TEXT")
+            self._ensure_column(connection, "commands", "risk_level", "TEXT")
+            self._ensure_column(connection, "commands", "execution_result_json", "TEXT")
+
+    def _ensure_column(
+        self,
+        connection: sqlite3.Connection,
+        table_name: str,
+        column_name: str,
+        column_sql: str,
+    ) -> None:
+        existing_columns = {
+            row["name"]
+            for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+        if column_name in existing_columns:
+            return
+        connection.execute(
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}"
+        )
 
     def upsert_command(self, record: CommandRecord) -> None:
         now = utcnow_iso()
@@ -120,28 +153,44 @@ class AuditService:
                     raw_text,
                     parsed_intent_json,
                     validation_result_json,
+                    structured_intent_json,
                     reject_reason,
                     plan_summary_json,
+                    summary_label,
+                    lifecycle_state,
                     confirm_at,
+                    review_expires_at,
                     execute_at,
                     final_state,
+                    plan_fingerprint,
+                    correlation_id,
+                    risk_level,
+                    execution_result_json,
                     mode,
                     frame_used,
                     planner_used,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(command_id) DO UPDATE SET
                     session_id=excluded.session_id,
                     operator_id=excluded.operator_id,
                     raw_text=excluded.raw_text,
                     parsed_intent_json=excluded.parsed_intent_json,
                     validation_result_json=excluded.validation_result_json,
+                    structured_intent_json=excluded.structured_intent_json,
                     reject_reason=excluded.reject_reason,
                     plan_summary_json=excluded.plan_summary_json,
+                    summary_label=excluded.summary_label,
+                    lifecycle_state=excluded.lifecycle_state,
                     confirm_at=excluded.confirm_at,
+                    review_expires_at=excluded.review_expires_at,
                     execute_at=excluded.execute_at,
                     final_state=excluded.final_state,
+                    plan_fingerprint=excluded.plan_fingerprint,
+                    correlation_id=excluded.correlation_id,
+                    risk_level=excluded.risk_level,
+                    execution_result_json=excluded.execution_result_json,
                     mode=excluded.mode,
                     frame_used=excluded.frame_used,
                     planner_used=excluded.planner_used,
@@ -154,11 +203,19 @@ class AuditService:
                     record.raw_text,
                     _json_blob(record.parsed_intent),
                     _json_blob(record.validation_result),
+                    _json_blob(record.structured_intent),
                     record.reject_reason,
                     _json_blob(record.plan_summary),
+                    record.summary_label,
+                    record.lifecycle_state.value,
                     record.confirm_at.isoformat() if record.confirm_at else None,
+                    record.confirmation_expires_at.isoformat() if record.confirmation_expires_at else None,
                     record.execute_at.isoformat() if record.execute_at else None,
                     record.final_state.value if record.final_state else None,
+                    record.plan_fingerprint,
+                    record.correlation_id,
+                    record.risk_level.value if record.risk_level else None,
+                    _json_blob(record.execution_result),
                     record.mode.value,
                     record.frame_used,
                     record.planner_used,

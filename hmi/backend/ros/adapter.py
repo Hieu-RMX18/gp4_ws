@@ -3,10 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import importlib.util
+import json
 from math import degrees
 from pathlib import Path
+import re
 import sys
 from threading import Lock, Thread
+import time
 from typing import Any
 
 from ..domain.models import (
@@ -40,19 +43,27 @@ def _load_joint_state_type() -> Any:
 
 try:
     import rclpy
+    from geometry_msgs.msg import Pose
     from diagnostic_msgs.msg import DiagnosticStatus
     from industrial_msgs.msg import RobotMode as IndustrialRobotMode
     from industrial_msgs.msg import RobotStatus as IndustrialRobotStatus
+    from interfaces.action import ExecuteMotion
     from interfaces.msg import RobotReadiness as RobotReadinessMsg
+    from interfaces.srv import ValidateCommand
+    from rclpy.action import ActionClient
     from rclpy.executors import SingleThreadedExecutor
     from std_msgs.msg import String
     JointState = _load_joint_state_type()
 except Exception as exc:  # pragma: no cover - depends on sourced ROS environment
     rclpy = None
+    Pose = None
     DiagnosticStatus = None
     IndustrialRobotMode = None
     IndustrialRobotStatus = None
+    ExecuteMotion = None
     RobotReadinessMsg = None
+    ValidateCommand = None
+    ActionClient = None
     SingleThreadedExecutor = None
     JointState = None
     String = None
@@ -78,6 +89,12 @@ CONNECTION_FRESHNESS_SEC = {
     'llm': 30.0,
     'alerts': 5.0,
 }
+DEFAULT_MOTION_VELOCITY_SCALE = 0.10
+DEFAULT_MOTION_ACCELERATION_SCALE = 0.10
+DEFAULT_VALIDATE_TIMEOUT_SEC = 5.0
+DEFAULT_ACTION_WAIT_TIMEOUT_SEC = 5.0
+DEFAULT_EXECUTION_TIMEOUT_SEC = 120.0
+_JOINT_NAME_TO_INDEX = {name: index for index, name in enumerate(DEFAULT_JOINT_NAMES)}
 
 
 @dataclass(slots=True)
@@ -149,10 +166,11 @@ KNOWN_WORKSPACE_ENDPOINTS = {
 
 
 class WorkspaceRosAdapter:
-    """Read-only ROS adapter for the HMI telemetry bridge.
+    """ROS adapter for the HMI telemetry bridge and sim-only supervisor execution.
 
-    This adapter intentionally subscribes only to read-only telemetry topics and
-    never opens any command-capable publisher, service client, or action client.
+    Telemetry remains subscription-driven and read-oriented. The only write-capable
+    path this adapter opens is the supervisor-owned sim execution boundary:
+    ValidateCommand service -> ExecuteMotion action. Hardware mode stays blocked.
     """
 
     def __init__(
@@ -167,6 +185,8 @@ class WorkspaceRosAdapter:
         robot_status_topic: str = '/yaskawa/robot_status',
         joint_state_topics: tuple[str, ...] = ('/yaskawa/joint_states', '/joint_states'),
         preferred_joint_state_topic: str = '/yaskawa/joint_states',
+        validate_command_service: str = '/validate_command',
+        execute_motion_action: str = '/execute_motion',
     ) -> None:
         self._node_name = node_name
         self._gateway_status_topic = gateway_status_topic
@@ -177,6 +197,8 @@ class WorkspaceRosAdapter:
         self._robot_status_topic = robot_status_topic
         self._joint_state_topics = joint_state_topics
         self._preferred_joint_state_topic = preferred_joint_state_topic
+        self._validate_command_service = validate_command_service
+        self._execute_motion_action = execute_motion_action
 
         self._lock = Lock()
         self._state = _TelemetryState(start_error=_ROS_IMPORT_ERROR)
@@ -185,6 +207,10 @@ class WorkspaceRosAdapter:
         self._executor: Any = None
         self._thread: Thread | None = None
         self._subscriptions: list[Any] = []
+        self._validate_client: Any = None
+        self._execute_client: Any = None
+        self._goal_handles: dict[str, Any] = {}
+        self._goal_lock = Lock()
         self._stop_requested = False
 
     def start(self) -> None:
@@ -200,6 +226,7 @@ class WorkspaceRosAdapter:
             self._executor = SingleThreadedExecutor(context=self._context)
             self._executor.add_node(self._node)
             self._create_subscriptions()
+            self._create_command_clients()
             with self._lock:
                 self._state.ros_started_at = self._now()
                 self._state.start_error = None
@@ -233,9 +260,545 @@ class WorkspaceRosAdapter:
             self._thread.join(timeout=1.0)
         self._thread = None
         self._subscriptions = []
+        with self._goal_lock:
+            self._goal_handles.clear()
+        self._validate_client = None
+        self._execute_client = None
         self._executor = None
         self._node = None
         self._context = None
+
+    def submit_text_for_review(
+        self,
+        *,
+        raw_text: str,
+        session_id: str,
+        operator_id: str,
+        command_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "accepted": True,
+            "adapter": "workspace_stub",
+            "summary": (
+                "Supervisor retained intent for local parse/validation. "
+                "No ROS write-capable review path was invoked."
+            ),
+            "rawText": raw_text,
+            "sessionId": session_id,
+            "operatorId": operator_id,
+            "commandId": command_id,
+        }
+
+    def confirm_command(
+        self,
+        *,
+        command_id: str,
+        plan_fingerprint: str,
+        operator_id: str,
+        session_id: str,
+        lease_id: str,
+        correlation_id: str,
+        parsed_intent: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        runtime = self.read_runtime_snapshot()
+        if runtime.mode != RuntimeMode.SIM:
+            return self._execution_response(
+                accepted=False,
+                status='blocked',
+                summary='Supervisor execution remains blocked outside sim mode.',
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=False,
+            )
+
+        if parsed_intent is None:
+            return self._execution_response(
+                accepted=False,
+                status='blocked',
+                summary='Parsed intent is unavailable at the execution boundary.',
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=False,
+            )
+
+        try:
+            command_payload = self._build_command_payload(parsed_intent)
+        except ValueError as exc:
+            return self._execution_response(
+                accepted=False,
+                status='blocked',
+                summary=str(exc),
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=False,
+            )
+
+        validation_result = self._validate_motion_request(command_payload)
+        if not validation_result["accepted"]:
+            return self._execution_response(
+                accepted=False,
+                status='blocked',
+                summary=validation_result["summary"],
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=False,
+            )
+
+        return self._dispatch_execute_motion(
+            command_id=command_id,
+            plan_fingerprint=plan_fingerprint,
+            operator_id=operator_id,
+            session_id=session_id,
+            lease_id=lease_id,
+            correlation_id=correlation_id,
+            command_payload=command_payload,
+        )
+
+    def abort_command(self, *, command_id: str) -> tuple[bool, str]:
+        with self._goal_lock:
+            goal_handle = self._goal_handles.get(command_id)
+
+        if goal_handle is None:
+            return True, f"Command {command_id} cancelled before any ROS execution request."
+
+        try:
+            cancel_future = goal_handle.cancel_goal_async()
+            wrapped = self._wait_for_future(cancel_future, DEFAULT_ACTION_WAIT_TIMEOUT_SEC)
+        except Exception as exc:
+            return False, f"Failed to cancel ExecuteMotion goal for {command_id}: {exc}"
+
+        goals_canceling = getattr(wrapped, 'goals_canceling', [])
+        if goals_canceling:
+            return True, f"Cancellation requested for ExecuteMotion goal {command_id}."
+        return False, f"ExecuteMotion goal {command_id} did not accept cancellation."
+
+    def _execution_response(
+        self,
+        *,
+        accepted: bool,
+        status: str,
+        summary: str,
+        command_id: str,
+        plan_fingerprint: str,
+        operator_id: str,
+        session_id: str,
+        lease_id: str,
+        correlation_id: str,
+        dispatched_to_ros: bool,
+    ) -> dict[str, Any]:
+        return {
+            "accepted": accepted,
+            "adapter": "workspace_ros_adapter",
+            "status": status,
+            "summary": summary,
+            "commandId": command_id,
+            "planFingerprint": plan_fingerprint,
+            "operatorId": operator_id,
+            "sessionId": session_id,
+            "leaseId": lease_id,
+            "correlationId": correlation_id,
+            "dispatchedToRos": dispatched_to_ros,
+        }
+
+    def _build_command_payload(self, parsed_intent: dict[str, Any]) -> dict[str, Any]:
+        action = str(parsed_intent.get("action") or "").strip()
+        parameters = dict(parsed_intent.get("parameters") or {})
+
+        if action == "move_home":
+            return {
+                "primitive_type": "HOME",
+                "velocity_scale": DEFAULT_MOTION_VELOCITY_SCALE,
+                "acceleration_scale": DEFAULT_MOTION_ACCELERATION_SCALE,
+                "planner_id": "PILZ_PTP",
+                "require_approval": False,
+                "reference_frame": "base_link",
+            }
+
+        if action == "stop":
+            return {
+                "primitive_type": "STOP",
+                "require_approval": False,
+                "reference_frame": "base_link",
+            }
+
+        if action == "move_cartesian_delta":
+            frame = str(parameters.get("frame") or "base_link")
+            if frame not in {"", "base_link"}:
+                raise ValueError(
+                    f"Unsupported MOVE_REL reference frame '{frame}' for supervisor execution."
+                )
+            return {
+                "primitive_type": "MOVE_REL",
+                "delta_x": float(parameters.get("xMm", 0.0)) / 1000.0,
+                "delta_y": float(parameters.get("yMm", 0.0)) / 1000.0,
+                "delta_z": float(parameters.get("zMm", 0.0)) / 1000.0,
+                "reference_frame": "base_link",
+                "velocity_scale": DEFAULT_MOTION_VELOCITY_SCALE,
+                "acceleration_scale": DEFAULT_MOTION_ACCELERATION_SCALE,
+                "planner_id": "PILZ_LIN",
+                "require_approval": False,
+            }
+
+        if action == "move_joint_delta":
+            joint_index, _joint_name = self._resolve_joint_target(parameters)
+            if joint_index is None:
+                raise ValueError("Joint delta command did not resolve to a valid GP4 joint.")
+            target_deg = parameters.get("resolvedTargetDeg")
+            if target_deg is None:
+                target_deg = self._resolve_joint_target_deg(joint_index, parameters)
+            return {
+                "primitive_type": "MOVE_JOINT",
+                "joint_index": joint_index,
+                "joint_angle": float(target_deg) * 3.141592653589793 / 180.0,
+                "velocity_scale": DEFAULT_MOTION_VELOCITY_SCALE,
+                "acceleration_scale": DEFAULT_MOTION_ACCELERATION_SCALE,
+                "planner_id": "PILZ_PTP",
+                "require_approval": False,
+            }
+
+        raise ValueError(f"Unsupported supervisor action '{action}'.")
+
+    def _resolve_joint_target(
+        self,
+        parameters: dict[str, Any],
+    ) -> tuple[int | None, str | None]:
+        raw_index = parameters.get("jointIndexZeroBased")
+        if raw_index is not None:
+            try:
+                candidate = int(raw_index)
+            except (TypeError, ValueError):
+                candidate = None
+            if candidate is not None and 0 <= candidate < len(DEFAULT_JOINT_NAMES):
+                return candidate, DEFAULT_JOINT_NAMES[candidate]
+
+        raw_name = str(
+            parameters.get("jointNameResolved")
+            or parameters.get("joint")
+            or parameters.get("jointName")
+            or ""
+        ).strip().lower()
+        if raw_name:
+            canonical_index = _JOINT_NAME_TO_INDEX.get(raw_name)
+            if canonical_index is not None:
+                return canonical_index, DEFAULT_JOINT_NAMES[canonical_index]
+            match = re.fullmatch(r"joint[_\s-]*([1-6])(?:[_\s-].+)?", raw_name)
+            if match:
+                zero_based = int(match.group(1)) - 1
+                return zero_based, DEFAULT_JOINT_NAMES[zero_based]
+
+        raw_index = parameters.get("jointIndex")
+        if raw_index is not None:
+            try:
+                candidate = int(raw_index)
+            except (TypeError, ValueError):
+                candidate = None
+            if candidate is not None:
+                if 0 <= candidate < len(DEFAULT_JOINT_NAMES):
+                    return candidate, DEFAULT_JOINT_NAMES[candidate]
+                if 1 <= candidate <= len(DEFAULT_JOINT_NAMES):
+                    zero_based = candidate - 1
+                    return zero_based, DEFAULT_JOINT_NAMES[zero_based]
+
+        return None, None
+
+    def _resolve_joint_target_deg(self, joint_index: int, parameters: dict[str, Any]) -> float:
+        current_position_deg = parameters.get("currentPositionDeg")
+        if current_position_deg is None:
+            joint_name = DEFAULT_JOINT_NAMES[joint_index]
+            current_position_deg = self._read_joint_position_deg(joint_name)
+        if current_position_deg is None:
+            raise ValueError(
+                f"Fresh joint position for {DEFAULT_JOINT_NAMES[joint_index]} is unavailable."
+            )
+        delta_deg = float(parameters.get("deltaDeg", 0.0))
+        return float(current_position_deg) + delta_deg
+
+    def _read_joint_position_deg(self, joint_name: str) -> float | None:
+        for joint in self.read_joint_positions():
+            if joint.name == joint_name:
+                return joint.position_deg
+        return None
+
+    def _validate_motion_request(self, command_payload: dict[str, Any]) -> dict[str, Any]:
+        if self._node is None or ValidateCommand is None:
+            return {
+                "accepted": False,
+                "summary": "ROS node is unavailable; ValidateCommand cannot be called.",
+            }
+        if self._validate_client is None:
+            return {
+                "accepted": False,
+                "summary": "ValidateCommand client is not initialized.",
+            }
+        if not self._validate_client.wait_for_service(timeout_sec=DEFAULT_VALIDATE_TIMEOUT_SEC):
+            return {
+                "accepted": False,
+                "summary": f"ValidateCommand service unavailable at {self._validate_command_service}.",
+            }
+
+        request = ValidateCommand.Request()
+        request.command_json = json.dumps(command_payload, ensure_ascii=True, separators=(",", ":"))
+        request.primitive_type = str(command_payload["primitive_type"])
+        request.velocity_scale = float(command_payload.get("velocity_scale", 0.0))
+        if "target_pose" in command_payload and Pose is not None:
+            pose = self._dict_to_pose(command_payload["target_pose"])
+            request.target_pose = pose
+
+        try:
+            response = self._wait_for_future(
+                self._validate_client.call_async(request),
+                DEFAULT_VALIDATE_TIMEOUT_SEC,
+            )
+        except Exception as exc:
+            return {
+                "accepted": False,
+                "summary": f"ValidateCommand call failed: {exc}",
+            }
+
+        if not response.valid:
+            return {
+                "accepted": False,
+                "summary": response.reason or "ValidateCommand rejected the request.",
+            }
+
+        if response.sanitized_json:
+            try:
+                sanitized_payload = json.loads(response.sanitized_json)
+            except json.JSONDecodeError:
+                sanitized_payload = None
+            if isinstance(sanitized_payload, dict):
+                command_payload.clear()
+                command_payload.update(sanitized_payload)
+        return {
+            "accepted": True,
+            "summary": "ValidateCommand accepted the request.",
+        }
+
+    def _dispatch_execute_motion(
+        self,
+        *,
+        command_id: str,
+        plan_fingerprint: str,
+        operator_id: str,
+        session_id: str,
+        lease_id: str,
+        correlation_id: str,
+        command_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        if self._node is None or ExecuteMotion is None or ActionClient is None:
+            return self._execution_response(
+                accepted=False,
+                status='blocked',
+                summary='ROS node is unavailable; ExecuteMotion cannot be called.',
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=False,
+            )
+        if self._execute_client is None:
+            return self._execution_response(
+                accepted=False,
+                status='blocked',
+                summary='ExecuteMotion client is not initialized.',
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=False,
+            )
+        if not self._execute_client.wait_for_server(timeout_sec=DEFAULT_ACTION_WAIT_TIMEOUT_SEC):
+            return self._execution_response(
+                accepted=False,
+                status='blocked',
+                summary=f'ExecuteMotion action server unavailable at {self._execute_motion_action}.',
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=False,
+            )
+
+        goal = self._build_execute_motion_goal(command_payload)
+        try:
+            goal_handle = self._wait_for_future(
+                self._execute_client.send_goal_async(goal),
+                DEFAULT_ACTION_WAIT_TIMEOUT_SEC,
+            )
+        except Exception as exc:
+            return self._execution_response(
+                accepted=False,
+                status='failed',
+                summary=f'ExecuteMotion send failed: {exc}',
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=False,
+            )
+
+        if goal_handle is None or not goal_handle.accepted:
+            return self._execution_response(
+                accepted=False,
+                status='blocked',
+                summary='ExecuteMotion action server rejected the goal.',
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=False,
+            )
+
+        with self._goal_lock:
+            self._goal_handles[command_id] = goal_handle
+        try:
+            wrapped_result = self._wait_for_future(
+                goal_handle.get_result_async(),
+                DEFAULT_EXECUTION_TIMEOUT_SEC,
+            )
+        except Exception as exc:
+            return self._execution_response(
+                accepted=False,
+                status='failed',
+                summary=f'ExecuteMotion result wait failed: {exc}',
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=True,
+            )
+        finally:
+            with self._goal_lock:
+                self._goal_handles.pop(command_id, None)
+
+        result = getattr(wrapped_result, 'result', None)
+        if result is None:
+            return self._execution_response(
+                accepted=False,
+                status='failed',
+                summary='ExecuteMotion returned no result payload.',
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=True,
+            )
+
+        if getattr(result, 'success', False):
+            return self._execution_response(
+                accepted=True,
+                status='succeeded',
+                summary=str(result.message or 'ExecuteMotion completed successfully.'),
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=True,
+            )
+
+        summary = str(result.message or 'ExecuteMotion failed.')
+        if 'cancel' in summary.lower():
+            return self._execution_response(
+                accepted=False,
+                status='cancelled',
+                summary=summary,
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=True,
+            )
+
+        return self._execution_response(
+            accepted=False,
+            status='failed',
+            summary=summary,
+            command_id=command_id,
+            plan_fingerprint=plan_fingerprint,
+            operator_id=operator_id,
+            session_id=session_id,
+            lease_id=lease_id,
+            correlation_id=correlation_id,
+            dispatched_to_ros=True,
+        )
+
+    def _build_execute_motion_goal(self, command_payload: dict[str, Any]) -> Any:
+        goal = ExecuteMotion.Goal()
+        goal.primitive_type = str(command_payload["primitive_type"])
+        goal.velocity_scale = float(command_payload.get("velocity_scale", 0.0))
+        goal.acceleration_scale = float(command_payload.get("acceleration_scale", 0.0))
+        goal.planner_id = str(command_payload.get("planner_id", ""))
+        goal.require_approval = bool(command_payload.get("require_approval", False))
+        goal.reference_frame = str(command_payload.get("reference_frame", ""))
+        goal.delta_x = float(command_payload.get("delta_x", 0.0))
+        goal.delta_y = float(command_payload.get("delta_y", 0.0))
+        goal.delta_z = float(command_payload.get("delta_z", 0.0))
+        goal.wait_duration_sec = float(command_payload.get("wait_duration_sec", 0.0))
+        goal.joint_index = int(command_payload.get("joint_index", 0))
+        goal.joint_angle = float(command_payload.get("joint_angle", 0.0))
+        goal.io_address = int(command_payload.get("io_address", 0))
+        goal.io_value = int(command_payload.get("io_value", 0))
+        goal.joint_target = [float(value) for value in command_payload.get("joint_target", [])]
+
+        if "target_pose" in command_payload and Pose is not None:
+            goal.target_pose = self._dict_to_pose(command_payload["target_pose"])
+
+        return goal
+
+    def _dict_to_pose(self, payload: dict[str, Any]) -> Any:
+        pose = Pose()
+        position = payload.get("position", {})
+        orientation = payload.get("orientation", {})
+        pose.position.x = float(position.get("x", 0.0))
+        pose.position.y = float(position.get("y", 0.0))
+        pose.position.z = float(position.get("z", 0.0))
+        pose.orientation.x = float(orientation.get("x", 0.0))
+        pose.orientation.y = float(orientation.get("y", 0.0))
+        pose.orientation.z = float(orientation.get("z", 0.0))
+        pose.orientation.w = float(orientation.get("w", 1.0))
+        return pose
+
+    def _wait_for_future(self, future: Any, timeout_sec: float) -> Any:
+        deadline = time.monotonic() + max(timeout_sec, 0.0)
+        while not future.done():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("ROS future timed out.")
+            time.sleep(0.05)
+        return future.result()
 
     def read_connections(self) -> list[BridgeConnection]:
         with self._lock:
@@ -289,6 +852,12 @@ class WorkspaceRosAdapter:
         with self._lock:
             snapshot = self._copy_state_locked()
 
+        runtime_mode = self._derive_mode(snapshot)
+        joint_fallback_topic = self._joint_state_topics[-1]
+        preferred_joint_topic = (
+            joint_fallback_topic if runtime_mode == RuntimeMode.SIM else self._preferred_joint_state_topic
+        )
+
         return [
             self._build_source_status(
                 snapshot=snapshot,
@@ -306,6 +875,7 @@ class WorkspaceRosAdapter:
                 topic=self._llm_debug_topic,
                 last_seen_at=snapshot.llm.debug_at,
                 freshness_sec=CONNECTION_FRESHNESS_SEC['llm'],
+                active=self._is_fresh(snapshot.llm.debug_at, CONNECTION_FRESHNESS_SEC['llm']),
             ),
             self._build_source_status(
                 snapshot=snapshot,
@@ -314,6 +884,7 @@ class WorkspaceRosAdapter:
                 topic=self._llm_command_topic,
                 last_seen_at=snapshot.llm.command_at,
                 freshness_sec=CONNECTION_FRESHNESS_SEC['llm'],
+                active=self._is_fresh(snapshot.llm.command_at, CONNECTION_FRESHNESS_SEC['llm']),
             ),
             self._build_source_status(
                 snapshot=snapshot,
@@ -340,6 +911,11 @@ class WorkspaceRosAdapter:
                 topic=self._robot_status_topic,
                 last_seen_at=snapshot.robot_status.received_at,
                 freshness_sec=CONNECTION_FRESHNESS_SEC['robot_status'],
+                active=runtime_mode != RuntimeMode.SIM,
+                detail=(
+                    'SIM mode uses /hw_adapter/ready instead of raw /yaskawa/robot_status.'
+                    if runtime_mode == RuntimeMode.SIM else None
+                ),
             ),
             self._build_source_status(
                 snapshot=snapshot,
@@ -348,18 +924,23 @@ class WorkspaceRosAdapter:
                 topic=self._preferred_joint_state_topic,
                 last_seen_at=snapshot.joint_topic_received_at.get(self._preferred_joint_state_topic),
                 freshness_sec=CONNECTION_FRESHNESS_SEC['joint_states'],
-                preferred=True,
+                preferred=self._preferred_joint_state_topic == preferred_joint_topic,
                 active=snapshot.joint_source_topic == self._preferred_joint_state_topic,
+                detail=(
+                    f'SIM mode prefers {joint_fallback_topic}.'
+                    if runtime_mode == RuntimeMode.SIM and self._preferred_joint_state_topic != preferred_joint_topic
+                    else None
+                ),
             ),
             self._build_source_status(
                 snapshot=snapshot,
                 name='joint_states_fallback',
                 label='Joint states fallback',
-                topic=self._joint_state_topics[-1],
-                last_seen_at=snapshot.joint_topic_received_at.get(self._joint_state_topics[-1]),
+                topic=joint_fallback_topic,
+                last_seen_at=snapshot.joint_topic_received_at.get(joint_fallback_topic),
                 freshness_sec=CONNECTION_FRESHNESS_SEC['joint_states'],
-                preferred=self._joint_state_topics[-1] == self._preferred_joint_state_topic,
-                active=snapshot.joint_source_topic == self._joint_state_topics[-1],
+                preferred=joint_fallback_topic == preferred_joint_topic,
+                active=snapshot.joint_source_topic == joint_fallback_topic,
             ),
         ]
 
@@ -388,6 +969,19 @@ class WorkspaceRosAdapter:
                     10,
                 )
             )
+
+    def _create_command_clients(self) -> None:
+        if self._node is None or ValidateCommand is None or ExecuteMotion is None or ActionClient is None:
+            return
+        self._validate_client = self._node.create_client(
+            ValidateCommand,
+            self._validate_command_service,
+        )
+        self._execute_client = ActionClient(
+            self._node,
+            ExecuteMotion,
+            self._execute_motion_action,
+        )
 
     def _spin(self) -> None:  # pragma: no cover - requires ROS runtime
         assert self._executor is not None

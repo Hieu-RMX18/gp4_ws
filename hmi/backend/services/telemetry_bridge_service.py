@@ -6,7 +6,7 @@ from contextlib import suppress
 from copy import deepcopy
 from datetime import datetime, timezone
 from threading import Lock
-from typing import Any
+from typing import Any, Callable
 
 from ..domain.models import (
     BridgeCapabilities,
@@ -49,6 +49,7 @@ class TelemetryBridgeService:
         self._poll_interval_sec = poll_interval_sec
         self._heartbeat_interval_sec = heartbeat_interval_sec
         self._capabilities = BridgeCapabilities()
+        self._snapshot_overlay_provider: Callable[[str, str], dict[str, Any]] | None = None
         self._subscribers: dict[asyncio.Queue[dict[str, Any]], tuple[str, str]] = {}
         self._lock = Lock()
         self._stop_event = asyncio.Event()
@@ -79,6 +80,15 @@ class TelemetryBridgeService:
     @property
     def heartbeat_interval_sec(self) -> float:
         return self._heartbeat_interval_sec
+
+    def set_capabilities(self, capabilities: BridgeCapabilities) -> None:
+        self._capabilities = capabilities
+
+    def set_snapshot_overlay_provider(
+        self,
+        provider: Callable[[str, str], dict[str, Any]],
+    ) -> None:
+        self._snapshot_overlay_provider = provider
 
     def subscribe(self, session_id: str, operator_id: str) -> asyncio.Queue[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=8)
@@ -184,7 +194,12 @@ class TelemetryBridgeService:
         session_id: str,
         operator_id: str,
     ) -> dict[str, Any]:
-        return {
+        overlay = (
+            deepcopy(self._snapshot_overlay_provider(session_id, operator_id))
+            if self._snapshot_overlay_provider is not None
+            else {}
+        )
+        snapshot = {
             **deepcopy(base_snapshot),
             "capabilities": self._capabilities.to_dict(),
             "lease": self._serialize_lease_view(session_id, operator_id),
@@ -193,6 +208,8 @@ class TelemetryBridgeService:
             "planMetrics": None,
             "replayItems": [],
         }
+        snapshot.update(overlay)
+        return snapshot
 
     async def _broadcast_snapshot(self, base_snapshot: dict[str, Any]) -> None:
         with self._lock:
@@ -205,6 +222,26 @@ class TelemetryBridgeService:
                 "type": "snapshot",
                 "snapshot": self._build_hmi_snapshot(base_snapshot, session_id, operator_id),
             }
+            try:
+                if queue.full():
+                    queue.get_nowait()
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                continue
+
+    def broadcast_event(
+        self,
+        event_factory: Callable[[str, str], dict[str, Any] | None],
+    ) -> None:
+        with self._lock:
+            subscribers = list(self._subscribers.items())
+        if not subscribers:
+            return
+
+        for queue, (session_id, operator_id) in subscribers:
+            payload = event_factory(session_id, operator_id)
+            if payload is None:
+                continue
             try:
                 if queue.full():
                     queue.get_nowait()

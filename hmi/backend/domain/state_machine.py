@@ -8,7 +8,7 @@ TERMINAL_COMMAND_STATES = {
     CommandLifecycleState.FAILED,
     CommandLifecycleState.REJECTED,
     CommandLifecycleState.CANCELLED,
-    CommandLifecycleState.ABORTED,
+    CommandLifecycleState.EXPIRED,
 }
 
 BLOCKING_RUNTIME_STATES = {
@@ -19,48 +19,47 @@ BLOCKING_RUNTIME_STATES = {
 }
 
 ALLOWED_COMMAND_TRANSITIONS = {
-    CommandLifecycleState.IDLE: {CommandLifecycleState.RECEIVED},
     CommandLifecycleState.RECEIVED: {
-        CommandLifecycleState.PARSED,
+        CommandLifecycleState.PARSING,
         CommandLifecycleState.REJECTED,
-        CommandLifecycleState.ABORTED,
-    },
-    CommandLifecycleState.PARSED: {
-        CommandLifecycleState.VALIDATED,
-        CommandLifecycleState.REJECTED,
-        CommandLifecycleState.ABORTED,
-    },
-    CommandLifecycleState.VALIDATED: {
-        CommandLifecycleState.PLANNED,
-        CommandLifecycleState.REJECTED,
-        CommandLifecycleState.ABORTED,
-    },
-    CommandLifecycleState.PLANNED: {
-        CommandLifecycleState.QUALITY_CHECKED,
-        CommandLifecycleState.REJECTED,
-        CommandLifecycleState.ABORTED,
-    },
-    CommandLifecycleState.QUALITY_CHECKED: {
-        CommandLifecycleState.READY_FOR_CONFIRM,
-        CommandLifecycleState.REJECTED,
-        CommandLifecycleState.ABORTED,
-    },
-    CommandLifecycleState.READY_FOR_CONFIRM: {
-        CommandLifecycleState.EXECUTING,
         CommandLifecycleState.CANCELLED,
-        CommandLifecycleState.ABORTED,
+    },
+    CommandLifecycleState.PARSING: {
+        CommandLifecycleState.VALIDATING,
+        CommandLifecycleState.REJECTED,
+        CommandLifecycleState.CANCELLED,
+    },
+    CommandLifecycleState.VALIDATING: {
+        CommandLifecycleState.NEEDS_CONFIRMATION,
+        CommandLifecycleState.REJECTED,
+        CommandLifecycleState.CANCELLED,
+        CommandLifecycleState.EXPIRED,
+    },
+    CommandLifecycleState.NEEDS_CONFIRMATION: {
+        CommandLifecycleState.CONFIRMED,
+        CommandLifecycleState.CANCELLED,
+        CommandLifecycleState.EXPIRED,
+    },
+    CommandLifecycleState.CONFIRMED: {
+        CommandLifecycleState.EXECUTION_REQUESTED,
+        CommandLifecycleState.FAILED,
+        CommandLifecycleState.CANCELLED,
+    },
+    CommandLifecycleState.EXECUTION_REQUESTED: {
+        CommandLifecycleState.EXECUTING,
+        CommandLifecycleState.FAILED,
+        CommandLifecycleState.CANCELLED,
     },
     CommandLifecycleState.EXECUTING: {
         CommandLifecycleState.SUCCEEDED,
         CommandLifecycleState.FAILED,
         CommandLifecycleState.CANCELLED,
-        CommandLifecycleState.ABORTED,
     },
     CommandLifecycleState.SUCCEEDED: set(),
     CommandLifecycleState.FAILED: set(),
     CommandLifecycleState.REJECTED: set(),
     CommandLifecycleState.CANCELLED: set(),
-    CommandLifecycleState.ABORTED: set(),
+    CommandLifecycleState.EXPIRED: set(),
 }
 
 
@@ -79,4 +78,3 @@ def is_terminal_command_state(state: CommandLifecycleState) -> bool:
 
 def is_blocking_runtime_state(state: SystemRuntimeState) -> bool:
     return state in BLOCKING_RUNTIME_STATES
-

@@ -18,19 +18,25 @@ class LeaseRole(str, Enum):
 
 
 class CommandLifecycleState(str, Enum):
-    IDLE = "IDLE"
     RECEIVED = "RECEIVED"
-    PARSED = "PARSED"
-    VALIDATED = "VALIDATED"
-    PLANNED = "PLANNED"
-    QUALITY_CHECKED = "QUALITY_CHECKED"
-    READY_FOR_CONFIRM = "READY_FOR_CONFIRM"
+    PARSING = "PARSING"
+    VALIDATING = "VALIDATING"
+    NEEDS_CONFIRMATION = "NEEDS_CONFIRMATION"
+    CONFIRMED = "CONFIRMED"
+    EXECUTION_REQUESTED = "EXECUTION_REQUESTED"
     EXECUTING = "EXECUTING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     REJECTED = "REJECTED"
     CANCELLED = "CANCELLED"
-    ABORTED = "ABORTED"
+    EXPIRED = "EXPIRED"
+
+
+class CommandRiskLevel(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
 
 
 class SystemRuntimeState(str, Enum):
@@ -68,7 +74,13 @@ class BridgeCapabilities:
     can_acquire_lease: bool = False
     can_submit_commands: bool = False
     can_confirm_commands: bool = False
+    can_cancel_commands: bool = False
     can_abort_commands: bool = False
+    command_ingress_available: bool = False
+    confirmation_available: bool = False
+    execution_allowed: bool = False
+    replay_available: bool = False
+    sim_only: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,7 +88,13 @@ class BridgeCapabilities:
             "canAcquireLease": self.can_acquire_lease,
             "canSubmitCommands": self.can_submit_commands,
             "canConfirmCommands": self.can_confirm_commands,
+            "canCancelCommands": self.can_cancel_commands,
             "canAbortCommands": self.can_abort_commands,
+            "commandIngressAvailable": self.command_ingress_available,
+            "confirmationAvailable": self.confirmation_available,
+            "executionAllowed": self.execution_allowed,
+            "replayAvailable": self.replay_available,
+            "simOnly": self.sim_only,
         }
 
 
@@ -205,15 +223,22 @@ class CommandRecord:
     summary_label: str
     mode: RuntimeMode
     created_at: datetime
+    intent_source: str = "text"
+    correlation_id: str | None = None
     planner_used: str | None = None
     frame_used: str | None = None
+    risk_level: CommandRiskLevel | None = None
+    plan_fingerprint: str | None = None
     reject_reason: str | None = None
+    structured_intent: dict[str, Any] | None = None
     parsed_intent: dict[str, Any] | None = None
     validation_result: dict[str, Any] | None = None
     plan_summary: dict[str, Any] | None = None
     metrics: PlanMetrics | None = None
+    confirmation_expires_at: datetime | None = None
     confirm_at: datetime | None = None
     execute_at: datetime | None = None
+    execution_result: dict[str, Any] | None = None
     final_state: CommandLifecycleState | None = None
 
 

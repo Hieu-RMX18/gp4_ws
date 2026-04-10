@@ -22,7 +22,7 @@ gp4_arm_controller:
     state_interfaces:
       - position
       - velocity
-    state_publish_rate: 50.0
+    state_publish_rate: 100.0
     action_monitor_rate: 20.0
     allow_partial_joints_goal: false
     open_loop_control: true

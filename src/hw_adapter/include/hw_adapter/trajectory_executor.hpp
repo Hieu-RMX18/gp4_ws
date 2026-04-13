@@ -24,6 +24,7 @@ struct TrajectoryExecutionResult
 {
   bool accepted = false;
   bool completed = false;
+  bool canceled = false;
   bool success = false;
   int32_t error_code = 0;
   std::string message = "trajectory not executed";

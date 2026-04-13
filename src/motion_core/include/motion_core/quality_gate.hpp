@@ -12,8 +12,8 @@ namespace motion_core
 class QualityGate
 {
 public:
-  // V4 G2: Internal point budget is 190 (MotoROS2 hard limit is 200, but we stay below)
-  static constexpr std::size_t kMaxTrajectoryPoints = 190;
+  // Hard safety ceiling for MotoROS2 dispatch compatibility.
+  static constexpr std::size_t kMaxTrajectoryPoints = 200;
   static constexpr double kMinimumCartesianFraction = 0.95;
   static constexpr double kFractionNotApplicable = -1.0;
 

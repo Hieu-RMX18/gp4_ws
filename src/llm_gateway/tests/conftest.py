@@ -55,7 +55,7 @@ def validator(schema_path: str):
 def normalizer():
     from llm_gateway.normalizer import Normalizer
 
-    return Normalizer(default_velocity_scale=0.1, default_acceleration_scale=0.1)
+    return Normalizer(default_velocity_scale=0.06, default_acceleration_scale=0.06)
 
 
 @pytest.fixture
@@ -73,7 +73,7 @@ def canonical_command() -> dict:
             "position": {"x": 0.35, "y": 0.1, "z": 0.2},
             "orientation": {"x": 0.0, "y": 0.707, "z": 0.0, "w": 0.707},
         },
-        "velocity_scale": 0.2,
+        "velocity_scale": 0.06,
     }
 
 

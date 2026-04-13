@@ -13,8 +13,8 @@ def test_semantic_validator_rejects_out_of_bounds_pose(
     normalizer, semantic_validator, canonical_command
 ):
     invalid = copy.deepcopy(canonical_command)
-    # Must exceed safety_rules.yaml x_max (0.8), not hardcoded _DEFAULT_BOUNDS (0.6)
-    invalid["target_pose"]["position"]["x"] = 0.85
+    # Must exceed safety_rules.yaml x_max (0.38), not hardcoded _DEFAULT_BOUNDS (0.6)
+    invalid["target_pose"]["position"]["x"] = 0.39
     normalized = normalizer.normalize(invalid)
 
     with pytest.raises(ValueError, match="target_pose.position.x"):
@@ -45,8 +45,8 @@ def test_semantic_validator_accepts_valid_move_rel(normalizer, semantic_validato
         "primitive_type": "MOVE_REL",
         "delta_x": 0.0,
         "delta_y": 0.0,
-        "delta_z": 0.10,
-        "velocity_scale": 0.1,
+        "delta_z": 0.03,
+        "velocity_scale": 0.06,
     }
     normalized = normalizer.normalize(cmd)
     assert semantic_validator.validate(normalized) is True
@@ -56,10 +56,10 @@ def test_semantic_validator_accepts_move_rel_multi_axis(normalizer, semantic_val
     """MOVE_REL with multiple non-zero deltas passes."""
     cmd = {
         "primitive_type": "MOVE_REL",
-        "delta_x": 0.05,
+        "delta_x": 0.02,
         "delta_y": 0.0,
-        "delta_z": 0.02,
-        "velocity_scale": 0.1,
+        "delta_z": 0.01,
+        "velocity_scale": 0.06,
     }
     normalized = normalizer.normalize(cmd)
     assert semantic_validator.validate(normalized) is True
@@ -72,7 +72,7 @@ def test_semantic_validator_rejects_move_rel_zero_delta(normalizer, semantic_val
         "delta_x": 0.0,
         "delta_y": 0.0,
         "delta_z": 0.0,
-        "velocity_scale": 0.1,
+        "velocity_scale": 0.06,
     }
     normalized = normalizer.normalize(cmd)
     with pytest.raises(ValueError, match="at least one delta component must be non-zero"):
@@ -80,13 +80,13 @@ def test_semantic_validator_rejects_move_rel_zero_delta(normalizer, semantic_val
 
 
 def test_semantic_validator_rejects_move_rel_oversized_delta(normalizer, semantic_validator):
-    """MOVE_REL with delta norm > 0.20m is rejected."""
+    """MOVE_REL with delta norm > 0.03m is rejected."""
     cmd = {
         "primitive_type": "MOVE_REL",
-        "delta_x": 0.15,
-        "delta_y": 0.15,
+        "delta_x": 0.03,
+        "delta_y": 0.02,
         "delta_z": 0.0,
-        "velocity_scale": 0.1,
+        "velocity_scale": 0.06,
     }
     normalized = normalizer.normalize(cmd)
     with pytest.raises(ValueError, match="delta norm"):
@@ -99,9 +99,9 @@ def test_semantic_validator_rejects_move_rel_unsupported_frame(normalizer, seman
         "primitive_type": "MOVE_REL",
         "delta_x": 0.0,
         "delta_y": 0.0,
-        "delta_z": 0.05,
+        "delta_z": 0.03,
         "reference_frame": "tool0",
-        "velocity_scale": 0.1,
+        "velocity_scale": 0.06,
     }
     normalized = normalizer.normalize(cmd)
     with pytest.raises(ValueError, match="unsupported reference_frame"):
@@ -113,9 +113,9 @@ def test_semantic_validator_rejects_move_rel_missing_delta(semantic_validator):
     cmd = {
         "primitive_type": "MOVE_REL",
         "delta_x": 0.0,
-        "delta_z": 0.05,
-        "velocity_scale": 0.1,
-        "acceleration_scale": 0.1,
+        "delta_z": 0.03,
+        "velocity_scale": 0.06,
+        "acceleration_scale": 0.06,
         "planner_id": "PILZ_LIN",
         "require_approval": True,
     }
@@ -129,12 +129,12 @@ def test_semantic_validator_rejects_move_rel_with_target_pose(normalizer, semant
         "primitive_type": "MOVE_REL",
         "delta_x": 0.0,
         "delta_y": 0.0,
-        "delta_z": 0.05,
+        "delta_z": 0.03,
         "target_pose": {
             "position": {"x": 0.3, "y": 0.0, "z": 0.4},
             "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
         },
-        "velocity_scale": 0.1,
+        "velocity_scale": 0.06,
     }
     normalized = normalizer.normalize(cmd)
     with pytest.raises(ValueError, match="MOVE_REL must not include target_pose"):
@@ -145,14 +145,14 @@ def test_semantic_validator_rejects_move_rel_with_target_pose(normalizer, semant
 
 
 def test_set_speed_valid_at_015(semantic_validator):
-    """SET_SPEED with valid velocity_scale 0.15 passes."""
-    cmd = {"primitive_type": "SET_SPEED", "velocity_scale": 0.15}
+    """SET_SPEED with valid velocity_scale 0.06 passes."""
+    cmd = {"primitive_type": "SET_SPEED", "velocity_scale": 0.06}
     assert semantic_validator.validate(cmd) is True
 
 
 def test_set_speed_rejected_above_030(semantic_validator):
-    """SET_SPEED with velocity_scale above 0.30 is rejected."""
-    cmd = {"primitive_type": "SET_SPEED", "velocity_scale": 0.80}
+    """SET_SPEED with velocity_scale above 0.06 is rejected."""
+    cmd = {"primitive_type": "SET_SPEED", "velocity_scale": 0.08}
     with pytest.raises(ValueError, match="SET_SPEED.*velocity_scale"):
         semantic_validator.validate(cmd)
 

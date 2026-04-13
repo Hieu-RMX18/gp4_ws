@@ -18,24 +18,35 @@ class SemanticValidator:
         "IO_SET", "ALARM_RESET",
     }
     _MIN_VELOCITY_SCALE = 0.05
-    _MAX_VELOCITY_SCALE = 0.30
+    _MAX_VELOCITY_SCALE = 0.06
 
     # MOVE_REL: max single-command translation norm (meters)
-    _MAX_MOVE_REL_DELTA = 0.20
+    _MAX_MOVE_REL_DELTA = 0.03
 
     # GP4 has 6 joints (0..5)
     _NUM_JOINTS = 6
 
     # Fallback bounds — overridden by safety_rules.yaml at construction
     _DEFAULT_BOUNDS = {
-        "x": (0.0, 0.6),
-        "y": (-0.3, 0.3),
-        "z": (0.2, 0.6),
+        "x": (-0.25, 0.38),
+        "y": (-0.25, 0.34),
+        "z": (0.10, 0.50),
     }
 
     def __init__(self, safety_rules: dict | None = None):
         if safety_rules is None:
             safety_rules = self._load_safety_rules()
+        motion_limits = safety_rules.get("motion_limits", {})
+        legacy_limits = safety_rules.get("joint_limits_override", {})
+        self._max_velocity_scale = float(
+            motion_limits.get(
+                "max_velocity_scale",
+                legacy_limits.get("max_velocity_scale", self._MAX_VELOCITY_SCALE),
+            )
+        )
+        self._max_move_rel_delta = float(
+            motion_limits.get("max_move_rel_translation", self._MAX_MOVE_REL_DELTA)
+        )
         workspace_bounds = self._DEFAULT_BOUNDS
         ws = safety_rules.get("workspace_bounds")
         if not isinstance(ws, dict) or not ws:
@@ -94,10 +105,10 @@ class SemanticValidator:
         # ── SET_SPEED: velocity_scale in bounds, stateless ──
         if primitive_type == "SET_SPEED":
             vs = float(command.get("velocity_scale", 0.0))
-            if not (self._MIN_VELOCITY_SCALE <= vs <= self._MAX_VELOCITY_SCALE):
+            if not (self._MIN_VELOCITY_SCALE <= vs <= self._max_velocity_scale):
                 raise ValueError(
                     f"SET_SPEED: velocity_scale {vs:.2f} must be within "
-                    f"[{self._MIN_VELOCITY_SCALE:.2f}, {self._MAX_VELOCITY_SCALE:.2f}]."
+                    f"[{self._MIN_VELOCITY_SCALE:.2f}, {self._max_velocity_scale:.2f}]."
                 )
             return True
 
@@ -156,10 +167,10 @@ class SemanticValidator:
 
         # ── Motion primitives (HOME, PTP, LIN) require velocity_scale ──
         velocity_scale = float(command.get("velocity_scale", 0.0))
-        if not (self._MIN_VELOCITY_SCALE <= velocity_scale <= self._MAX_VELOCITY_SCALE):
+        if not (self._MIN_VELOCITY_SCALE <= velocity_scale <= self._max_velocity_scale):
             raise ValueError(
                 "velocity_scale must be within "
-                f"[{self._MIN_VELOCITY_SCALE:.2f}, {self._MAX_VELOCITY_SCALE:.2f}]."
+                f"[{self._MIN_VELOCITY_SCALE:.2f}, {self._max_velocity_scale:.2f}]."
             )
 
         has_pose = "target_pose_msg" in command
@@ -218,10 +229,10 @@ class SemanticValidator:
             )
 
         delta_norm = math.sqrt(dx * dx + dy * dy + dz * dz)
-        if delta_norm > self._MAX_MOVE_REL_DELTA:
+        if delta_norm > self._max_move_rel_delta:
             raise ValueError(
                 f"MOVE_REL: delta norm {delta_norm:.4f} m exceeds "
-                f"limit {self._MAX_MOVE_REL_DELTA} m."
+                f"limit {self._max_move_rel_delta} m."
             )
 
         ref_frame = command.get("reference_frame", "base_link")
@@ -257,4 +268,3 @@ class SemanticValidator:
             # Zero quaternion is a supported sentinel for position-only intents.
             # motion_core resolves this to current tool orientation before IK.
             return
-

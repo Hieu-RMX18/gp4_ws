@@ -17,6 +17,7 @@ find_package(interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
+find_package(angles REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_core REQUIRED)
 find_package(moveit_msgs REQUIRED)
@@ -24,6 +25,8 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 
 add_library(${PROJECT_NAME}_components SHARED
+  src/angle_branch_utils.cpp
+  src/execution_orchestrator.cpp
   src/planner_router.cpp
   src/ik_selector.cpp
   src/seed_manager.cpp
@@ -47,6 +50,7 @@ ament_target_dependencies(${PROJECT_NAME}_components
   geometry_msgs
   sensor_msgs
   trajectory_msgs
+  angles
   moveit_ros_planning_interface
   moveit_core
   moveit_msgs
@@ -74,6 +78,7 @@ ament_target_dependencies(motion_core_node
   geometry_msgs
   sensor_msgs
   trajectory_msgs
+  angles
   moveit_ros_planning_interface
   moveit_core
   moveit_msgs
@@ -149,6 +154,34 @@ if(BUILD_TESTING)
       include
     )
   endif()
+
+  ament_add_gtest(test_angle_branch_utils
+    test/test_angle_branch_utils.cpp
+  )
+  if(TARGET test_angle_branch_utils)
+    target_link_libraries(test_angle_branch_utils
+      ${PROJECT_NAME}_components
+    )
+    target_include_directories(test_angle_branch_utils PRIVATE
+      include
+    )
+    ament_target_dependencies(test_angle_branch_utils
+      angles
+      moveit_core
+    )
+  endif()
+
+  ament_add_gtest(test_execution_orchestrator
+    test/test_execution_orchestrator.cpp
+  )
+  if(TARGET test_execution_orchestrator)
+    target_link_libraries(test_execution_orchestrator
+      ${PROJECT_NAME}_components
+    )
+    target_include_directories(test_execution_orchestrator PRIVATE
+      include
+    )
+  endif()
 endif()
 
 install(DIRECTORY include/
@@ -174,6 +207,7 @@ ament_export_dependencies(
   geometry_msgs
   sensor_msgs
   trajectory_msgs
+  angles
   moveit_ros_planning_interface
   moveit_core
   moveit_msgs

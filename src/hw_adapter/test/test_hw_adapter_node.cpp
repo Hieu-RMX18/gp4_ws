@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <functional>
 #include <memory>
 #include <string>
@@ -20,6 +21,7 @@
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 
+#include "interfaces/action/dispatch_trajectory.hpp"
 #include "hw_adapter/hw_adapter_node.hpp"
 
 namespace
@@ -27,6 +29,8 @@ namespace
 using namespace std::chrono_literals;
 using FollowJointTrajectory = control_msgs::action::FollowJointTrajectory;
 using GoalHandleFjt = rclcpp_action::ServerGoalHandle<FollowJointTrajectory>;
+using DispatchTrajectory = interfaces::action::DispatchTrajectory;
+using DispatchGoalHandle = rclcpp_action::ClientGoalHandle<DispatchTrajectory>;
 
 trajectory_msgs::msg::JointTrajectory make_trajectory()
 {
@@ -226,7 +230,8 @@ protected:
     const std::string & robot_status_topic,
     const std::string & action_name,
     const std::string & start_service,
-    const std::string & stop_service = std::string())
+    const std::string & stop_service = std::string(),
+    const std::string & dispatch_action_name = "/hw_adapter/dispatch_trajectory")
   {
     rclcpp::NodeOptions options;
     options.parameter_overrides({
@@ -234,7 +239,8 @@ protected:
       rclcpp::Parameter("follow_joint_trajectory_action", action_name),
       rclcpp::Parameter("start_traj_mode_service", start_service),
       rclcpp::Parameter("reset_error_service", "/test_hw_adapter/reset_error_unused"),
-      rclcpp::Parameter("stop_motion_service", stop_service)});
+      rclcpp::Parameter("stop_motion_service", stop_service),
+      rclcpp::Parameter("dispatch_action_name", dispatch_action_name)});
     return options;
   }
 };
@@ -262,11 +268,6 @@ TEST_F(HwAdapterNodeTest, orchestrator_blocks_when_not_ready)
 
   auto hw_node = std::make_shared<hw_adapter::HwAdapterNode>(
     make_node_options(robot_status_topic, action_name, start_service));
-
-  rclcpp::executors::SingleThreadedExecutor executor;
-  executor.add_node(server_node);
-  executor.add_node(hw_node);
-  ExecutorThread spin_thread(executor);
 
   const auto report = hw_node->execute_trajectory(make_trajectory(), 300ms);
 
@@ -397,4 +398,174 @@ TEST_F(HwAdapterNodeTest, fatal_error_path_calls_stop_motion)
   // V4 J4-Recovery: after fatal error, recovery FSM runs. In test environment
   // (no reset_error service), recovery will fail. Status message contains "fatal".
   EXPECT_NE(snapshot.status_message.find("fatal"), std::string::npos);
+}
+
+TEST_F(HwAdapterNodeTest, dispatch_action_rejects_overlapping_goals)
+{
+  const std::string robot_status_topic = "/test_hw_adapter/dispatch_overlap_status";
+  const std::string action_name = "/test_hw_adapter/dispatch_overlap_fjt";
+  const std::string start_service = "/test_hw_adapter/dispatch_overlap_start";
+  const std::string dispatch_action_name = "/test_hw_adapter/dispatch_overlap";
+
+  auto server_node = std::make_shared<rclcpp::Node>("hw_adapter_dispatch_overlap_server");
+  auto publisher_node = std::make_shared<rclcpp::Node>("hw_adapter_dispatch_overlap_publisher");
+  auto client_node = std::make_shared<rclcpp::Node>("hw_adapter_dispatch_overlap_client");
+
+  auto start_server = server_node->create_service<motoros2_interfaces::srv::StartTrajMode>(
+    start_service,
+    [](
+      const std::shared_ptr<motoros2_interfaces::srv::StartTrajMode::Request>,
+      std::shared_ptr<motoros2_interfaces::srv::StartTrajMode::Response> response)
+    {
+      response->result_code.value = motoros2_interfaces::msg::MotionReadyEnum::READY;
+      response->message = "Ready";
+    });
+  (void)start_server;
+
+  FollowJointTrajectoryServerHarness action_server(
+    server_node,
+    action_name,
+    FollowJointTrajectoryServerHarness::Behavior::kHoldForCancel);
+
+  auto status_publisher =
+    publisher_node->create_publisher<industrial_msgs::msg::RobotStatus>(robot_status_topic, rclcpp::QoS(10));
+
+  auto hw_node = std::make_shared<hw_adapter::HwAdapterNode>(
+    make_node_options(robot_status_topic, action_name, start_service, std::string(), dispatch_action_name));
+  auto dispatch_client =
+    rclcpp_action::create_client<DispatchTrajectory>(client_node, dispatch_action_name);
+
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(server_node);
+  executor.add_node(publisher_node);
+  executor.add_node(client_node);
+  executor.add_node(hw_node);
+  ExecutorThread spin_thread(executor);
+
+  ASSERT_TRUE(wait_until([&status_publisher]() {return status_publisher->get_subscription_count() > 0;}, 500ms));
+  status_publisher->publish(make_ready_status());
+  ASSERT_TRUE(wait_until([&hw_node]() {return hw_node->robot_status_monitor().is_ready();}, 500ms));
+  ASSERT_TRUE(dispatch_client->wait_for_action_server(500ms));
+
+  DispatchTrajectory::Goal first_goal;
+  first_goal.trajectory = make_trajectory();
+  first_goal.timeout_sec = 1.0;
+  auto first_goal_future = dispatch_client->async_send_goal(first_goal);
+  ASSERT_TRUE(wait_until(
+    [&first_goal_future]() {
+      return first_goal_future.wait_for(0ms) == std::future_status::ready;
+    },
+    500ms));
+  auto first_goal_handle = first_goal_future.get();
+  ASSERT_NE(first_goal_handle, nullptr);
+
+  DispatchTrajectory::Goal second_goal;
+  second_goal.trajectory = make_trajectory();
+  second_goal.timeout_sec = 1.0;
+  auto second_goal_future = dispatch_client->async_send_goal(second_goal);
+  ASSERT_TRUE(wait_until(
+    [&second_goal_future]() {
+      return second_goal_future.wait_for(0ms) == std::future_status::ready;
+    },
+    500ms));
+  auto second_goal_handle = second_goal_future.get();
+  EXPECT_EQ(second_goal_handle, nullptr);
+
+  auto cancel_future = dispatch_client->async_cancel_goal(first_goal_handle);
+  ASSERT_TRUE(wait_until(
+    [&cancel_future]() {
+      return cancel_future.wait_for(0ms) == std::future_status::ready;
+    },
+    500ms));
+  auto first_result_future = dispatch_client->async_get_result(first_goal_handle);
+  ASSERT_TRUE(wait_until(
+    [&first_result_future]() {
+      return first_result_future.wait_for(0ms) == std::future_status::ready;
+    },
+    1500ms));
+  const auto first_result = first_result_future.get();
+  EXPECT_EQ(first_result.code, rclcpp_action::ResultCode::CANCELED);
+  EXPECT_GT(action_server.cancel_count(), 0);
+}
+
+TEST_F(HwAdapterNodeTest, dispatch_action_cancel_propagates_to_follow_joint_trajectory)
+{
+  const std::string robot_status_topic = "/test_hw_adapter/dispatch_cancel_status";
+  const std::string action_name = "/test_hw_adapter/dispatch_cancel_fjt";
+  const std::string start_service = "/test_hw_adapter/dispatch_cancel_start";
+  const std::string dispatch_action_name = "/test_hw_adapter/dispatch_cancel";
+
+  auto server_node = std::make_shared<rclcpp::Node>("hw_adapter_dispatch_cancel_server");
+  auto publisher_node = std::make_shared<rclcpp::Node>("hw_adapter_dispatch_cancel_publisher");
+  auto client_node = std::make_shared<rclcpp::Node>("hw_adapter_dispatch_cancel_client");
+
+  auto start_server = server_node->create_service<motoros2_interfaces::srv::StartTrajMode>(
+    start_service,
+    [](
+      const std::shared_ptr<motoros2_interfaces::srv::StartTrajMode::Request>,
+      std::shared_ptr<motoros2_interfaces::srv::StartTrajMode::Response> response)
+    {
+      response->result_code.value = motoros2_interfaces::msg::MotionReadyEnum::READY;
+      response->message = "Ready";
+    });
+  (void)start_server;
+
+  FollowJointTrajectoryServerHarness action_server(
+    server_node,
+    action_name,
+    FollowJointTrajectoryServerHarness::Behavior::kHoldForCancel);
+
+  auto status_publisher =
+    publisher_node->create_publisher<industrial_msgs::msg::RobotStatus>(robot_status_topic, rclcpp::QoS(10));
+
+  auto hw_node = std::make_shared<hw_adapter::HwAdapterNode>(
+    make_node_options(robot_status_topic, action_name, start_service, std::string(), dispatch_action_name));
+  auto dispatch_client =
+    rclcpp_action::create_client<DispatchTrajectory>(client_node, dispatch_action_name);
+
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(server_node);
+  executor.add_node(publisher_node);
+  executor.add_node(client_node);
+  executor.add_node(hw_node);
+  ExecutorThread spin_thread(executor);
+
+  ASSERT_TRUE(wait_until([&status_publisher]() {return status_publisher->get_subscription_count() > 0;}, 500ms));
+  status_publisher->publish(make_ready_status());
+  ASSERT_TRUE(wait_until([&hw_node]() {return hw_node->robot_status_monitor().is_ready();}, 500ms));
+  ASSERT_TRUE(dispatch_client->wait_for_action_server(500ms));
+
+  DispatchTrajectory::Goal goal;
+  goal.trajectory = make_trajectory();
+  goal.timeout_sec = 1.0;
+  auto goal_future = dispatch_client->async_send_goal(goal);
+  ASSERT_TRUE(wait_until(
+    [&goal_future]() {
+      return goal_future.wait_for(0ms) == std::future_status::ready;
+    },
+    500ms));
+  auto goal_handle = goal_future.get();
+  ASSERT_NE(goal_handle, nullptr);
+
+  auto cancel_future = dispatch_client->async_cancel_goal(goal_handle);
+  ASSERT_TRUE(wait_until(
+    [&cancel_future]() {
+      return cancel_future.wait_for(0ms) == std::future_status::ready;
+    },
+    500ms));
+
+  auto result_future = dispatch_client->async_get_result(goal_handle);
+  ASSERT_TRUE(wait_until(
+    [&result_future]() {
+      return result_future.wait_for(0ms) == std::future_status::ready;
+    },
+    1500ms));
+  const auto result = result_future.get();
+  EXPECT_EQ(result.code, rclcpp_action::ResultCode::CANCELED);
+  ASSERT_NE(result.result, nullptr);
+  EXPECT_FALSE(result.result->success);
+  EXPECT_GT(action_server.cancel_count(), 0);
+
+  const auto snapshot = hw_node->orchestration_snapshot();
+  EXPECT_FALSE(snapshot.execution_in_progress);
 }

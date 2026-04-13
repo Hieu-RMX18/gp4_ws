@@ -2,6 +2,7 @@ import os
 import threading
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from std_msgs.msg import String
@@ -78,7 +79,7 @@ class SafetyManager(Node):
                 RobotStatus,
                 '/yaskawa/robot_status',
                 self.status_callback,
-                10
+                qos_profile_sensor_data
             )
             self.get_logger().info("SafetyManager started (fail-closed until robot status received).")
 

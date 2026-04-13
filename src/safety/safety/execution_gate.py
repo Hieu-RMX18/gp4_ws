@@ -8,7 +8,7 @@ from .workspace_guard import WorkspaceGuard
 
 # MOVE_REL delta safety limits — must match motion_core/move_rel_validator.hpp.
 # Defense-in-depth: gate rejects bad deltas before they reach motion_core.
-_MOVE_REL_MAX_DELTA_NORM = 0.20
+_MOVE_REL_MAX_DELTA_NORM = 0.03
 _MOVE_REL_ALLOWED_FRAMES = {"", "base_link"}
 
 
@@ -24,12 +24,12 @@ class ExecutionGate:
     computed from (current_pose + delta) inside motion_core at planning
     time.  Fail-closed is maintained by three layers of defense:
 
-      1. This gate validates delta magnitude (≤ 0.20 m) and reference
+      1. This gate validates delta magnitude (≤ 0.03 m) and reference
          frame (base_link only) right here — catching bad commands before
          they reach motion_core.
       2. motion_core validates the resolved target against the same
-         workspace bounds used by WorkspaceGuard, immediately before
-         planning (see move_rel_validator.hpp).
+         workspace bounds and keepout zones used by WorkspaceGuard,
+         immediately before planning (see move_rel_validator.hpp).
       3. MoveIt planning itself rejects unreachable / collision targets.
 
     If any layer rejects, the command does not execute.
@@ -40,6 +40,12 @@ class ExecutionGate:
         self.node = node
         self.validator = validator
         self.guard = guard
+        self._max_move_rel_delta_norm = float(
+            self.validator.safety_rules.get("motion_limits", {}).get(
+                "max_move_rel_translation",
+                _MOVE_REL_MAX_DELTA_NORM,
+            )
+        )
         # Reference to SafetyManager for readiness checks
         self._safety_manager = safety_manager
 
@@ -141,8 +147,7 @@ class ExecutionGate:
         self.node.get_logger().info(f"Command validated successfully: {prim_type}")
         return response
 
-    @staticmethod
-    def _validate_move_rel_deltas(cmd_data: dict) -> tuple:
+    def _validate_move_rel_deltas(self, cmd_data: dict) -> tuple:
         """Defense-in-depth: validate MOVE_REL deltas and frame at the safety gate.
 
         Returns (bool, str) — (True, "") on success, (False, reason) on failure.
@@ -168,10 +173,10 @@ class ExecutionGate:
             return False, "MOVE_REL: all deltas are zero"
 
         norm = math.sqrt(dx * dx + dy * dy + dz * dz)
-        if norm > _MOVE_REL_MAX_DELTA_NORM:
+        if norm > self._max_move_rel_delta_norm:
             return False, (
                 f"MOVE_REL: delta norm {norm:.4f} m exceeds "
-                f"limit {_MOVE_REL_MAX_DELTA_NORM} m"
+                f"limit {self._max_move_rel_delta_norm} m"
             )
 
         return True, ""

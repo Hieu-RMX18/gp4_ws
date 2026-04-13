@@ -20,8 +20,8 @@ from launch.actions import (
     SetEnvironmentVariable,
 )
 from launch.conditions import IfCondition
-from launch.event import Shutdown
-from launch.event_handlers import OnProcessExit, OnProcessStart
+from launch.events import Shutdown
+from launch.event_handlers import OnProcessStart
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
@@ -36,16 +36,24 @@ def _normalized_move_group_parameters(moveit_config):
     parameters = moveit_config.to_dict()
     controllers_config = _load_yaml(moveit_config.package_path / 'config' / 'moveit_controllers.yaml')
     manager_key = 'moveit_simple_controller_manager'
-    manager_config = dict(controllers_config.get(manager_key, {}))
-    controller_names = list(manager_config.get('controller_names', []))
-
-    for controller_name in controller_names:
-        if controller_name in manager_config:
-            continue
-        controller_config = controllers_config.get(controller_name)
-        if controller_config is not None:
-            manager_config[controller_name] = controller_config
-            parameters.pop(controller_name, None)
+    # Real hardware path: execute directly against MotoROS2 FollowJointTrajectory.
+    # Avoid dependency on ros2_control hardware plugin in companion PC workspace.
+    manager_config = {
+        'controller_names': ['yaskawa'],
+        'yaskawa': {
+            'type': 'FollowJointTrajectory',
+            'action_ns': 'follow_joint_trajectory',
+            'default': True,
+            'joints': [
+                'joint_1_s',
+                'joint_2_l',
+                'joint_3_u',
+                'joint_4_r',
+                'joint_5_b',
+                'joint_6_t',
+            ],
+        },
+    }
 
     parameters['trajectory_execution'] = controllers_config.get(
         'trajectory_execution',
@@ -56,6 +64,20 @@ def _normalized_move_group_parameters(moveit_config):
         parameters.get('moveit_controller_manager'),
     )
     parameters[manager_key] = manager_config
+    # Real hardware safety boundary: move_group may plan and publish scene state,
+    # but must not execute trajectories directly. All execution must flow through
+    # execution_gate -> motion_core -> hw_adapter.
+    parameters['allow_trajectory_execution'] = False
+    # Match the robust planner wiring used by moveit_only.launch.py.
+    # Without explicit planning_plugin per pipeline, MoveIt may pick CHOMP
+    # for all pipelines and abort simple pose goals.
+    parameters['planning_plugin'] = 'pilz_industrial_motion_planner/CommandPlanner'
+    parameters['default_planning_pipeline'] = 'pilz_industrial_motion_planner'
+    parameters.setdefault('ompl', {})['planning_plugin'] = 'ompl_interface/OMPLPlanner'
+    parameters.setdefault('pilz_industrial_motion_planner', {})[
+        'planning_plugin'
+    ] = 'pilz_industrial_motion_planner/CommandPlanner'
+    parameters.setdefault('chomp', {})['planning_plugin'] = 'chomp_interface/CHOMPPlanner'
     return parameters
 
 
@@ -109,6 +131,7 @@ def generate_launch_description():
     robot_ip = LaunchConfiguration('robot_ip')
     agent_ip = LaunchConfiguration('agent_ip')
     use_rviz = LaunchConfiguration('use_rviz')
+    gp4_bringup_share = get_package_share_directory('gp4_bringup')
 
     moveit_config = (
         MoveItConfigsBuilder('motoman_gp4', package_name='gp4_moveit_config')
@@ -120,10 +143,16 @@ def generate_launch_description():
         )
         .to_moveit_configs()
     )
-    gp4_bringup_share = Path(get_package_share_directory('gp4_bringup'))
-    ros2_controllers_file = str(moveit_config.package_path / 'config' / 'ros2_controllers.yaml')
-    arm_controller_params_file = str(gp4_bringup_share / 'config' / 'gp4_arm_controller_spawner.yaml')
     move_group_parameters = _normalized_move_group_parameters(moveit_config)
+    planning_scene_monitor_parameters = {
+        "publish_planning_scene": True,
+        "publish_geometry_updates": True,
+        "publish_state_updates": True,
+        "publish_transforms_updates": True,
+        # Required for external MoveGroupInterface clients to resolve robot model.
+        "publish_robot_description": True,
+        "publish_robot_description_semantic": True,
+    }
 
     robot_state_publisher = Node(
         package='robot_state_publisher',
@@ -133,43 +162,22 @@ def generate_launch_description():
         parameters=[moveit_config.robot_description],
     )
 
-    controller_manager = Node(
-        package='controller_manager',
-        executable='ros2_control_node',
-        name='controller_manager',
+    # Bridge MotoROS2 joint states into the conventional /joint_states topic
+    # expected by MoveGroupInterface clients started via `ros2 run`.
+    joint_state_publisher = Node(
+        package='joint_state_publisher',
+        executable='joint_state_publisher',
+        name='joint_state_publisher',
         output='screen',
         parameters=[
             moveit_config.robot_description,
-            ros2_controllers_file,
+            {
+                # Use local robot_description parameter (not topic wait mode).
+                'use_robot_description_topic': False,
+                'rate': 50,
+                'source_list': ['/yaskawa/joint_states'],
+            },
         ],
-    )
-
-    joint_state_broadcaster_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=[
-            'joint_state_broadcaster',
-            '--controller-manager',
-            '/controller_manager',
-            '--controller-manager-timeout',
-            '30',
-        ],
-        output='screen',
-    )
-
-    gp4_arm_controller_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=[
-            'gp4_arm_controller',
-            '--controller-manager',
-            '/controller_manager',
-            '--controller-manager-timeout',
-            '30',
-            '--param-file',
-            arm_controller_params_file,
-        ],
-        output='screen',
     )
 
     move_group = Node(
@@ -177,7 +185,10 @@ def generate_launch_description():
         executable='move_group',
         name='move_group',
         output='screen',
-        parameters=[move_group_parameters],
+        parameters=[move_group_parameters, planning_scene_monitor_parameters],
+        remappings=[
+            ('/joint_states', '/yaskawa/joint_states'),
+        ],
     )
 
     rviz = Node(
@@ -224,6 +235,8 @@ def generate_launch_description():
                 # motion_core sends validated trajectories to hw_adapter (not directly to controller)
                 "dispatch_action_name": "/hw_adapter/dispatch_trajectory",
                 "dispatch_timeout_sec": 60.0,
+                "scene_objects_path": os.path.join(gp4_bringup_share, 'config', 'scene_objects.yaml'),
+                "require_planning_scene": True,
             },
         ],
     )
@@ -235,28 +248,11 @@ def generate_launch_description():
         use_rviz_arg,
         OpaqueFunction(function=_check_rmw_and_agent),
         robot_state_publisher,
+        joint_state_publisher,
         RegisterEventHandler(
             OnProcessStart(
                 target_action=robot_state_publisher,
-                on_start=[controller_manager],
-            )
-        ),
-        RegisterEventHandler(
-            OnProcessStart(
-                target_action=controller_manager,
-                on_start=[joint_state_broadcaster_spawner, hw_adapter_node],
-            )
-        ),
-        RegisterEventHandler(
-            OnProcessExit(
-                target_action=joint_state_broadcaster_spawner,
-                on_exit=[gp4_arm_controller_spawner],
-            )
-        ),
-        RegisterEventHandler(
-            OnProcessExit(
-                target_action=gp4_arm_controller_spawner,
-                on_exit=[move_group, rviz, motion_core_node],
+                on_start=[hw_adapter_node, move_group, rviz, motion_core_node],
             )
         ),
     ])

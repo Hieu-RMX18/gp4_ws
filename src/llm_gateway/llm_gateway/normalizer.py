@@ -25,6 +25,24 @@ def _is_likely_degrees(angles: List[float]) -> bool:
     return any(abs(value) > (2.0 * math.pi) for value in angles)
 
 
+def _wrap_to_pi(angle_rad: float) -> float:
+    """Normalize angle to (-pi, pi]. Example: 450deg -> 90deg."""
+    wrapped = math.fmod(angle_rad + math.pi, 2.0 * math.pi)
+    if wrapped < 0.0:
+        wrapped += 2.0 * math.pi
+    wrapped -= math.pi
+    if wrapped <= -math.pi:
+        wrapped += 2.0 * math.pi
+    return wrapped
+
+
+def _normalize_single_joint_angle(raw_value: Any, field: str) -> float:
+    angle = _to_float(raw_value, field)
+    if _is_likely_degrees([angle]):
+        angle = math.radians(angle)
+    return _wrap_to_pi(angle)
+
+
 def _rpy_to_quaternion(roll_rad: float, pitch_rad: float, yaw_rad: float) -> Quaternion:
     cy = math.cos(yaw_rad * 0.5)
     sy = math.sin(yaw_rad * 0.5)
@@ -109,14 +127,14 @@ def normalize_pose(raw_pose: Dict[str, Any]) -> Pose:
 
 
 def normalize_joints(raw_joints: List[Any]) -> List[float]:
-    """Normalize joint list; degrees are converted to radians when detected."""
+    """Normalize joint list to radians in (-pi, pi]."""
     if not isinstance(raw_joints, list):
         raise ValueError("joint_target must be a list.")
 
     joints = [_to_float(value, f"joint_target[{index}]") for index, value in enumerate(raw_joints)]
     if _is_likely_degrees(joints):
-        return [math.radians(value) for value in joints]
-    return joints
+        joints = [math.radians(value) for value in joints]
+    return [_wrap_to_pi(value) for value in joints]
 
 
 class Normalizer:
@@ -132,7 +150,7 @@ class Normalizer:
         "MOVE_JOINTS": "PILZ_PTP",
     }
 
-    def __init__(self, default_velocity_scale: float = 0.1, default_acceleration_scale: float = 0.1):
+    def __init__(self, default_velocity_scale: float = 0.06, default_acceleration_scale: float = 0.06):
         self.default_velocity_scale = float(default_velocity_scale)
         self.default_acceleration_scale = float(default_acceleration_scale)
 
@@ -151,6 +169,8 @@ class Normalizer:
 
         normalized = dict(command)
         primitive_type = normalized["primitive_type"]
+        if "plan_only" in normalized:
+            normalized["plan_only"] = bool(normalized["plan_only"])
 
         if primitive_type == "WAIT" and "wait_duration_sec" in normalized:
             normalized["wait_duration_sec"] = float(normalized["wait_duration_sec"])
@@ -163,11 +183,15 @@ class Normalizer:
             if "joint_index" in normalized:
                 normalized["joint_index"] = int(normalized["joint_index"])
             if "joint_angle" in normalized:
-                normalized["joint_angle"] = float(normalized["joint_angle"])
+                normalized["joint_angle"] = _normalize_single_joint_angle(
+                    normalized["joint_angle"], "joint_angle"
+                )
 
         # Non-motion primitives bypass planner and velocity defaults.
         if primitive_type in {"ALARM_RESET", "STOP", "WAIT", "IO_SET", "GET_POSE"}:
             normalized.setdefault("reference_frame", "base_link")
+            if normalized.get("plan_only"):
+                normalized["require_approval"] = True
             return normalized
 
         if "target_pose" in normalized:
@@ -198,4 +222,6 @@ class Normalizer:
         # Default to explicit downstream approval because llm_gateway is not
         # the final safety authority for real hardware execution.
         normalized.setdefault("require_approval", True)
+        if normalized.get("plan_only"):
+            normalized["require_approval"] = True
         return normalized

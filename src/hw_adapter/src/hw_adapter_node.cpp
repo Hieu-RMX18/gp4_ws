@@ -3,13 +3,27 @@
 
 #include "hw_adapter/hw_adapter_node.hpp"
 
+#include <atomic>
 #include <chrono>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 namespace hw_adapter
 {
+std::string HwAdapterNode::goal_uuid_to_string(const rclcpp_action::GoalUUID & goal_id)
+{
+  std::ostringstream stream;
+  stream << std::hex << std::setfill('0');
+  for (const auto byte : goal_id)
+  {
+    stream << std::setw(2) << static_cast<int>(byte);
+  }
+  return stream.str();
+}
+
 HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
 : rclcpp::Node("hw_adapter_node", options),
   backend_capabilities_(*this)
@@ -34,7 +48,26 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
   const auto tool_poll_period_ms = declare_parameter<int64_t>("tool_poll_period_ms", 250);
   const auto dispatch_action_name =
     declare_parameter<std::string>("dispatch_action_name", "/hw_adapter/dispatch_trajectory");
+  const auto trajectory_safe_budget_param =
+    declare_parameter<int64_t>("trajectory_safe_budget_points", 180);
+  const auto trajectory_hard_limit_param =
+    declare_parameter<int64_t>("trajectory_hard_limit_points", 200);
   sim_mode_ = sim_mode;
+
+  trajectory_safe_budget_points_ =
+    trajectory_safe_budget_param > 1 ? static_cast<std::size_t>(trajectory_safe_budget_param) : 180U;
+  trajectory_hard_limit_points_ =
+    trajectory_hard_limit_param > 1 ? static_cast<std::size_t>(trajectory_hard_limit_param) : 200U;
+  if (trajectory_hard_limit_points_ < trajectory_safe_budget_points_)
+  {
+    RCLCPP_WARN(
+      get_logger(),
+      "trajectory_hard_limit_points (%zu) < trajectory_safe_budget_points (%zu); "
+      "forcing hard limit to safe budget.",
+      trajectory_hard_limit_points_,
+      trajectory_safe_budget_points_);
+    trajectory_hard_limit_points_ = trajectory_safe_budget_points_;
+  }
 
   if (!sim_mode_)
   {
@@ -128,16 +161,19 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
 
   RCLCPP_INFO(
     get_logger(),
-    "hw_adapter_node initialized for %s on %s; DispatchTrajectory action: %s",
+    "hw_adapter_node initialized for %s on %s; DispatchTrajectory action: %s; "
+    "trajectory budget safe=%zu hard=%zu",
     backend_capabilities_.controller_variant().c_str(),
     trajectory_action_name.c_str(),
-    dispatch_action_name.c_str());
+    dispatch_action_name.c_str(),
+    trajectory_safe_budget_points_,
+    trajectory_hard_limit_points_);
 }
 
 // --- DispatchTrajectory action callbacks ---
 
 rclcpp_action::GoalResponse HwAdapterNode::handle_dispatch_goal(
-  const rclcpp_action::GoalUUID &,
+  const rclcpp_action::GoalUUID & uuid,
   std::shared_ptr<const DispatchTrajectory::Goal> goal)
 {
   if (!goal || goal->trajectory.points.empty())
@@ -148,21 +184,35 @@ rclcpp_action::GoalResponse HwAdapterNode::handle_dispatch_goal(
 
   {
     std::lock_guard<std::mutex> lock(orchestration_mutex_);
-    if (execution_in_progress_)
+    if (execution_in_progress_ || dispatch_goal_reserved_)
     {
+      last_status_message_ = "dispatch rejected: execution already in progress";
       RCLCPP_WARN(get_logger(),
-        "Rejecting DispatchTrajectory: execution already in progress.");
+        "Rejecting DispatchTrajectory goal_id=%s: execution already in progress or reserved.",
+        goal_uuid_to_string(uuid).c_str());
       return rclcpp_action::GoalResponse::REJECT;
     }
+
+    dispatch_goal_reserved_ = true;
+    last_status_message_ = "dispatch goal accepted; reserving single execution slot";
   }
+
+  RCLCPP_INFO(
+    get_logger(),
+    "Accepted DispatchTrajectory goal_id=%s points=%zu",
+    goal_uuid_to_string(uuid).c_str(),
+    goal->trajectory.points.size());
 
   return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
 }
 
 rclcpp_action::CancelResponse HwAdapterNode::handle_dispatch_cancel(
-  const std::shared_ptr<GoalHandleDispatchTrajectory>)
+  const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle)
 {
-  RCLCPP_INFO(get_logger(), "DispatchTrajectory cancel requested.");
+  RCLCPP_INFO(
+    get_logger(),
+    "DispatchTrajectory cancel requested for goal_id=%s.",
+    goal_uuid_to_string(goal_handle->get_goal_id()).c_str());
   return rclcpp_action::CancelResponse::ACCEPT;
 }
 
@@ -177,6 +227,7 @@ void HwAdapterNode::execute_dispatch(
 {
   const auto started_at = std::chrono::steady_clock::now();
   const auto goal = goal_handle->get_goal();
+  const std::string dispatch_goal_id = goal_uuid_to_string(goal_handle->get_goal_id());
 
   // Publish feedback: readiness check
   auto feedback = std::make_shared<DispatchTrajectory::Feedback>();
@@ -186,9 +237,61 @@ void HwAdapterNode::execute_dispatch(
   const double timeout_sec = (goal->timeout_sec > 0.0) ? goal->timeout_sec : 30.0;
   const auto timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::duration<double>(timeout_sec));
+  RCLCPP_INFO(
+    get_logger(),
+    "DispatchTrajectory goal_id=%s dispatch_start timeout=%.2fs points=%zu",
+    dispatch_goal_id.c_str(),
+    timeout_sec,
+    goal->trajectory.points.size());
+
+  if (goal_handle->is_canceling())
+  {
+    {
+      std::lock_guard<std::mutex> lock(orchestration_mutex_);
+      dispatch_goal_reserved_ = false;
+      last_status_message_ = "dispatch canceled before execution start";
+    }
+
+    auto result = std::make_shared<DispatchTrajectory::Result>();
+    result->success = false;
+    result->message = "DispatchTrajectory canceled before execution start";
+    result->execution_time_sec = 0.0;
+    feedback->state = "canceled";
+    goal_handle->publish_feedback(feedback);
+    goal_handle->canceled(result);
+    return;
+  }
+
+  std::atomic<bool> execution_finished{false};
+  std::atomic<bool> cancel_stop_requested{false};
+  std::thread cancel_watcher([this, goal_handle, &execution_finished, &cancel_stop_requested, dispatch_goal_id]() {
+    while (!execution_finished.load())
+    {
+      if (goal_handle->is_canceling())
+      {
+        cancel_stop_requested.store(true);
+        std::string stop_reason;
+        const bool stopped = session_manager_ && session_manager_->stop_motion(stop_reason);
+        RCLCPP_WARN(
+          get_logger(),
+          "DispatchTrajectory goal_id=%s cancel watcher stop_motion attempted=%s success=%s detail=%s",
+          dispatch_goal_id.c_str(),
+          session_manager_ ? "true" : "false",
+          stopped ? "true" : "false",
+          stop_reason.empty() ? "<none>" : stop_reason.c_str());
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+  });
 
   // Delegate to the existing execute_trajectory orchestration
-  const auto report = execute_trajectory(goal->trajectory, timeout_ms);
+  const auto report = execute_trajectory_internal(goal->trajectory, timeout_ms, true);
+  execution_finished.store(true);
+  if (cancel_watcher.joinable())
+  {
+    cancel_watcher.join();
+  }
 
   const auto ended_at = std::chrono::steady_clock::now();
   const double execution_time_sec =
@@ -199,16 +302,39 @@ void HwAdapterNode::execute_dispatch(
   result->message = report.message;
   result->execution_time_sec = execution_time_sec;
 
+  if (goal_handle->is_canceling() || cancel_stop_requested.load())
+  {
+    result->success = false;
+    if (result->message.empty())
+    {
+      result->message = "DispatchTrajectory canceled";
+    }
+    feedback->state = "canceled";
+    goal_handle->publish_feedback(feedback);
+    goal_handle->canceled(result);
+    return;
+  }
+
   if (report.success)
   {
     feedback->state = "done";
     goal_handle->publish_feedback(feedback);
+    RCLCPP_INFO(
+      get_logger(),
+      "DispatchTrajectory goal_id=%s dispatch_end success=true message=%s",
+      dispatch_goal_id.c_str(),
+      report.message.c_str());
     goal_handle->succeed(result);
   }
   else
   {
     feedback->state = "failed";
     goal_handle->publish_feedback(feedback);
+    RCLCPP_WARN(
+      get_logger(),
+      "DispatchTrajectory goal_id=%s dispatch_end success=false message=%s",
+      dispatch_goal_id.c_str(),
+      report.message.c_str());
     goal_handle->abort(result);
   }
 }
@@ -259,7 +385,7 @@ bool HwAdapterNode::is_ready_for_execution(std::string & reason) const
 {
   {
     std::lock_guard<std::mutex> lock(orchestration_mutex_);
-    if (execution_in_progress_)
+    if (execution_in_progress_ || dispatch_goal_reserved_)
     {
       reason = "hw_adapter is already executing; asynchronous motion is unsupported";
       return false;
@@ -295,6 +421,14 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory(
   const trajectory_msgs::msg::JointTrajectory & trajectory,
   std::chrono::milliseconds timeout)
 {
+  return execute_trajectory_internal(trajectory, timeout, false);
+}
+
+HwAdapterExecutionReport HwAdapterNode::execute_trajectory_internal(
+  const trajectory_msgs::msg::JointTrajectory & trajectory,
+  std::chrono::milliseconds timeout,
+  const bool dispatch_reservation_expected)
+{
   HwAdapterExecutionReport report;
 
   {
@@ -303,6 +437,25 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory(
     {
       report.blocked = true;
       report.message = "hw_adapter is already executing; asynchronous motion is unsupported";
+      last_status_message_ = report.message;
+      return report;
+    }
+
+    if (dispatch_reservation_expected)
+    {
+      if (!dispatch_goal_reserved_)
+      {
+        report.blocked = true;
+        report.message = "dispatch execution reservation was lost before the worker thread started";
+        last_status_message_ = report.message;
+        return report;
+      }
+      dispatch_goal_reserved_ = false;
+    }
+    else if (dispatch_goal_reserved_)
+    {
+      report.blocked = true;
+      report.message = "hw_adapter already has a reserved dispatch goal awaiting execution";
       last_status_message_ = report.message;
       return report;
     }
@@ -317,6 +470,7 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory(
 
   auto finalize = [this, &report](const std::string & status_message) {
       std::lock_guard<std::mutex> lock(orchestration_mutex_);
+      dispatch_goal_reserved_ = false;
       execution_in_progress_ = false;
       last_execution_success_ = report.success;
       last_error_was_fatal_ = report.fatal_error;
@@ -339,6 +493,29 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory(
     finalize("execution blocked: " + report.message);
     RCLCPP_WARN(get_logger(), "%s", report.message.c_str());
     return report;
+  }
+
+  const std::size_t point_count = trajectory.points.size();
+  if (point_count > trajectory_hard_limit_points_)
+  {
+    report.blocked = true;
+    report.message =
+      "trajectory has " + std::to_string(point_count) +
+      " points, exceeding hard limit " + std::to_string(trajectory_hard_limit_points_);
+    finalize("execution rejected before dispatch: " + report.message);
+    RCLCPP_WARN(get_logger(), "%s", report.message.c_str());
+    return report;
+  }
+
+  if (point_count > trajectory_safe_budget_points_)
+  {
+    RCLCPP_WARN(
+      get_logger(),
+      "trajectory has %zu points above safe budget %zu (hard limit %zu); "
+      "expect upstream mitigation policy (downsample or split).",
+      point_count,
+      trajectory_safe_budget_points_,
+      trajectory_hard_limit_points_);
   }
 
   if (!trajectory_executor_->validate_trajectory_request(trajectory, reason))
@@ -444,7 +621,7 @@ HwAdapterOrchestrationSnapshot HwAdapterNode::build_snapshot_locked() const
   snapshot.robot_ready = sim_mode_ || (robot_status_monitor_ && robot_status_monitor_->is_ready());
   snapshot.session_ready = session_manager_ && session_manager_->is_session_ready();
   snapshot.tool_state_available = tool_state_monitor_ && tool_state_monitor_->has_tool_state();
-  snapshot.execution_in_progress = execution_in_progress_;
+  snapshot.execution_in_progress = execution_in_progress_ || dispatch_goal_reserved_;
   snapshot.execution_allowed = snapshot.robot_ready && !snapshot.execution_in_progress;
   snapshot.last_execution_success = last_execution_success_;
   snapshot.last_error_was_fatal = last_error_was_fatal_;
@@ -467,7 +644,7 @@ HwAdapterOrchestrationSnapshot HwAdapterNode::build_snapshot_locked() const
 bool HwAdapterNode::should_stop_motion_on_failure(
   const TrajectoryExecutionResult & result) const
 {
-  return !result.success && (result.accepted || result.completed);
+  return !result.success && !result.canceled && (result.accepted || result.completed);
 }
 
 RecoveryResult HwAdapterNode::attempt_recovery()

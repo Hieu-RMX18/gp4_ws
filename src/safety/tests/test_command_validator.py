@@ -4,14 +4,14 @@ from safety.command_validator import CommandValidator
 
 def test_valid_home_command(safety_rules):
     validator = CommandValidator(safety_rules)
-    cmd = json.dumps({"primitive_type": "HOME", "velocity_scale": 0.2})
+    cmd = json.dumps({"primitive_type": "HOME", "velocity_scale": 0.06})
     valid, reason = validator.validate(cmd)
     assert valid is True
     assert reason == ""
 
 def test_velocity_scale_exceeds(safety_rules):
     validator = CommandValidator(safety_rules)
-    cmd = json.dumps({"primitive_type": "HOME", "velocity_scale": 0.6})
+    cmd = json.dumps({"primitive_type": "HOME", "velocity_scale": 0.08})
     valid, reason = validator.validate(cmd)
     assert valid is False
     assert "exceeds max allowed" in reason
@@ -27,16 +27,16 @@ def test_malformed_json(safety_rules):
 # ── SET_SPEED tests ──
 
 def test_set_speed_valid_at_015(safety_rules):
-    """SET_SPEED with velocity_scale 0.15 passes safety check."""
+    """SET_SPEED with velocity_scale 0.06 passes safety check."""
     validator = CommandValidator(safety_rules)
-    cmd = json.dumps({"primitive_type": "SET_SPEED", "velocity_scale": 0.15})
+    cmd = json.dumps({"primitive_type": "SET_SPEED", "velocity_scale": 0.06})
     valid, reason = validator.validate(cmd)
     assert valid is True
 
 def test_set_speed_rejected_above_030(safety_rules):
-    """SET_SPEED with velocity_scale 0.80 exceeds max_velocity_scale 0.3."""
+    """SET_SPEED with velocity_scale 0.08 exceeds commissioning max_velocity_scale 0.06."""
     validator = CommandValidator(safety_rules)
-    cmd = json.dumps({"primitive_type": "SET_SPEED", "velocity_scale": 0.80})
+    cmd = json.dumps({"primitive_type": "SET_SPEED", "velocity_scale": 0.08})
     valid, reason = validator.validate(cmd)
     assert valid is False
     assert "exceeds max allowed" in reason
@@ -80,7 +80,7 @@ def test_move_joint_requires_velocity(safety_rules):
     validator = CommandValidator(safety_rules)
     cmd = json.dumps({"primitive_type": "MOVE_JOINT", "joint_index": 2, "joint_angle": 0.5})
     valid, reason = validator.validate(cmd)
-    # velocity_scale defaults to 1.0 (>0.3), so rejected
+    # velocity_scale defaults to 1.0 (>0.06), so rejected
     assert valid is False
     assert "exceeds max allowed" in reason
 
@@ -90,7 +90,30 @@ def test_move_joint_valid_with_velocity(safety_rules):
     cmd = json.dumps({
         "primitive_type": "MOVE_JOINT",
         "joint_index": 2, "joint_angle": 0.5,
-        "velocity_scale": 0.15
+        "velocity_scale": 0.06
+    })
+    valid, reason = validator.validate(cmd)
+    assert valid is True
+
+def test_move_joint_rejects_acceleration_above_commissioning_cap(safety_rules):
+    validator = CommandValidator(safety_rules)
+    cmd = json.dumps({
+        "primitive_type": "MOVE_JOINT",
+        "joint_index": 2, "joint_angle": 0.5,
+        "velocity_scale": 0.06,
+        "acceleration_scale": 0.08
+    })
+    valid, reason = validator.validate(cmd)
+    assert valid is False
+    assert "acceleration_scale" in reason and "exceeds max allowed" in reason
+
+def test_move_joint_accepts_valid_acceleration_scale(safety_rules):
+    validator = CommandValidator(safety_rules)
+    cmd = json.dumps({
+        "primitive_type": "MOVE_JOINT",
+        "joint_index": 2, "joint_angle": 0.5,
+        "velocity_scale": 0.06,
+        "acceleration_scale": 0.06
     })
     valid, reason = validator.validate(cmd)
     assert valid is True
@@ -103,7 +126,6 @@ def test_move_joints_requires_velocity(safety_rules):
         "joint_target": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     })
     valid, reason = validator.validate(cmd)
-    # velocity_scale defaults to 1.0 (>0.3), so rejected
+    # velocity_scale defaults to 1.0 (>0.06), so rejected
     assert valid is False
     assert "exceeds max allowed" in reason
-

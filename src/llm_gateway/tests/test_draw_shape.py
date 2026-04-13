@@ -1,4 +1,4 @@
-"""Tests for draw_shape macro routing and geometry."""
+"""Tests for DRAW_SHAPE routing and deterministic geometry compilation."""
 
 import math
 from pathlib import Path
@@ -10,25 +10,51 @@ def _macro_policy_path() -> str:
     return str(Path(__file__).resolve().parents[1] / "config" / "macro_policy.yaml")
 
 
-def _router(runtime_mode: str):
+def _router(runtime_mode: str = "hardware"):
     from llm_gateway.intent_router import IntentRouter
 
     return IntentRouter(macro_policy_path=_macro_policy_path(), runtime_mode=runtime_mode)
 
 
-def _draw_payload(shape: str = "square", **overrides) -> dict:
+def _draw_payload(shape_type: str = "square", **overrides) -> dict:
     base = {
         "intent": "draw_shape",
-        "shape": shape,
-        "plane": "xy",
-        "reference_frame": "base_link",
-        "size_m": 0.05,
-        "start_pose": {
-            "position": {"x": 0.30, "y": 0.00, "z": 0.30},
+        "shape_type": shape_type,
+        "units": "m",
+        "frame_id": "base_link",
+        "workplane": {
+            "mode": "base",
+            "origin": {
+                "position": {"x": 0.30, "y": 0.00, "z": 0.30},
+            },
+        },
+        "params": {
+            "side_m": 0.05,
         },
     }
     base.update(overrides)
     return base
+
+
+def _all_draw_positions(result) -> list[dict]:
+    positions = []
+    for command in result.commands:
+        primitive = command["primitive_type"]
+        if primitive in {"PTP", "LIN"}:
+            positions.append(command["target_pose"]["position"])
+        elif primitive == "CARTESIAN_PATH":
+            positions.extend(waypoint["position"] for waypoint in command["waypoints"])
+    return positions
+
+
+def _collect_draw_line_points(result) -> list[dict]:
+    points = []
+    for command in result.commands:
+        if command["primitive_type"] == "LIN":
+            points.append(command["target_pose"]["position"])
+        elif command["primitive_type"] == "CARTESIAN_PATH":
+            points.extend(waypoint["position"] for waypoint in command["waypoints"])
+    return points
 
 
 def _distance(p1: dict, p2: dict) -> float:
@@ -39,332 +65,184 @@ def _distance(p1: dict, p2: dict) -> float:
     )
 
 
-def _all_positions(result) -> list[dict]:
-    positions = []
-    for command in result.commands:
-        if command["primitive_type"] == "PTP":
-            positions.append(command["target_pose"]["position"])
-        elif command["primitive_type"] == "CARTESIAN_PATH":
-            positions.extend(waypoint["position"] for waypoint in command["waypoints"])
-    return positions
-
-
-def _all_orientations(result) -> list[dict]:
-    orientations = []
-    for command in result.commands:
-        if command["primitive_type"] == "PTP":
-            orientations.append(command["target_pose"]["orientation"])
-        elif command["primitive_type"] == "CARTESIAN_PATH":
-            orientations.extend(waypoint["orientation"] for waypoint in command["waypoints"])
-    return orientations
-
-
-def _cartesian_command(result) -> dict:
-    assert [command["primitive_type"] for command in result.commands] == ["PTP", "CARTESIAN_PATH"]
-    return result.commands[1]
-
-
-def test_macro_policy_declares_draw_shape_sim_only():
+def test_macro_policy_declares_draw_shape_contract():
     from llm_gateway.intent_router import load_macro_policy
 
     policy = load_macro_policy(_macro_policy_path())
     draw_shape = policy["macros"]["draw_shape"]
 
-    assert draw_shape["availability"] == "sim_only"
-    assert draw_shape["requires_current_pose"] is False
-    assert draw_shape["supported_frames"] == ["base_link"]
-    assert draw_shape["supported_planes"] == ["xy"]
-    assert set(draw_shape["supported_shapes"]) == {
-        "square",
-        "triangle",
-        "circle",
-        "polygon",
-        "rectangle",
-        "arc",
-        "polyline",
-    }
+    assert draw_shape["availability"] == "all"
+    assert "base" in draw_shape["supported_workplane_modes"]
+    assert "tool" in draw_shape["supported_workplane_modes"]
+    assert "explicit_pose" in draw_shape["supported_workplane_modes"]
+    assert draw_shape["default_units"] == "m"
 
 
-def test_rejects_draw_shape_in_hardware_mode():
+def test_accepts_draw_shape_in_hardware_mode():
     router = _router(runtime_mode="hardware")
 
-    with pytest.raises(ValueError, match="sim-only"):
-        router.route(_draw_payload())
-
-
-def test_accepts_draw_shape_in_sim_mode():
-    router = _router(runtime_mode="sim")
-
-    result = router.route(_draw_payload())
+    result = router.route(_draw_payload("square"))
 
     assert result.route_type == "sequence"
     assert result.metadata["macro_name"] == "draw_shape"
-    assert result.metadata["requires_current_pose"] is False
+    assert result.metadata["shape_type"] == "square"
+    assert result.metadata["summary"]["draw_stroke_count"] >= 1
 
 
-def test_rejects_unsupported_shape():
-    router = _router(runtime_mode="sim")
+def test_rejects_unsupported_shape_type():
+    router = _router()
 
-    with pytest.raises(ValueError, match="unsupported shape"):
-        router.route(_draw_payload(shape="star"))
+    with pytest.raises(ValueError, match="unsupported_shape_type"):
+        router.route(_draw_payload(shape_type="star"))
 
 
-def test_rejects_unsupported_plane():
-    router = _router(runtime_mode="sim")
+def test_rejects_invalid_polygon_sides():
+    router = _router()
 
-    with pytest.raises(ValueError, match="unsupported plane"):
-        router.route(_draw_payload(plane="xz"))
+    with pytest.raises(ValueError, match="invalid_polygon_sides"):
+        router.route(
+            _draw_payload(
+                shape_type="polygon",
+                params={"n_sides": 2, "radius_m": 0.03},
+            )
+        )
 
 
-def test_rejects_unsupported_frame():
-    router = _router(runtime_mode="sim")
+def test_square_draws_closed_path_with_expected_edge_lengths():
+    router = _router()
 
-    with pytest.raises(ValueError, match="unsupported reference_frame"):
-        router.route(_draw_payload(reference_frame="tool0"))
+    result = router.route(_draw_payload("square", params={"side_m": 0.05}))
+    points = _collect_draw_line_points(result)
 
+    # Last retract LIN is above draw plane, so use first five in-plane points.
+    in_plane = [point for point in points if math.isclose(point["z"], 0.30, abs_tol=1e-9)]
+    assert len(in_plane) >= 5
+    assert in_plane[0] == in_plane[-1]
 
-def test_rejects_missing_start_pose_for_square():
-    router = _router(runtime_mode="sim")
-    payload = _draw_payload("square")
-    del payload["start_pose"]
+    edges = [_distance(in_plane[index], in_plane[index + 1]) for index in range(len(in_plane) - 1)]
+    # Keep first 4 polygon edges.
+    for edge in edges[:4]:
+        assert math.isclose(edge, 0.05, abs_tol=1e-6)
 
-    with pytest.raises(ValueError, match="start_pose"):
-        router.route(payload)
 
+def test_circle_points_stay_on_declared_radius():
+    router = _router()
+    radius_m = 0.03
 
-def test_rejects_zero_size_m_for_square():
-    router = _router(runtime_mode="sim")
+    result = router.route(
+        _draw_payload(
+            "circle",
+            params={"radius_m": radius_m},
+        )
+    )
 
-    with pytest.raises(ValueError, match="size_m"):
-        router.route(_draw_payload("square", size_m=0.0))
-
-
-def test_square_sequence_structure():
-    router = _router(runtime_mode="sim")
-
-    result = router.route(_draw_payload("square"))
-
-    assert [command["primitive_type"] for command in result.commands] == ["PTP", "CARTESIAN_PATH"]
-
-
-def test_square_closes_back_to_start():
-    router = _router(runtime_mode="sim")
-
-    result = router.route(_draw_payload("square"))
-
-    positions = _all_positions(result)
-    assert positions[0] == positions[-1]
-
-
-def test_square_edge_lengths_match_size_m():
-    router = _router(runtime_mode="sim")
-
-    result = router.route(_draw_payload("square", size_m=0.05))
-    positions = _all_positions(result)
-    edges = [_distance(positions[index], positions[index + 1]) for index in range(len(positions) - 1)]
-
-    for edge in edges:
-        assert math.isclose(edge, 0.05, abs_tol=1e-9)
-
-
-def test_triangle_sequence_structure():
-    router = _router(runtime_mode="sim")
-
-    result = router.route(_draw_payload("triangle"))
-
-    assert [command["primitive_type"] for command in result.commands] == ["PTP", "CARTESIAN_PATH"]
-
-
-def test_triangle_is_equilateral():
-    router = _router(runtime_mode="sim")
-
-    result = router.route(_draw_payload("triangle", size_m=0.06))
-    positions = _all_positions(result)
-    edges = [_distance(positions[index], positions[index + 1]) for index in range(len(positions) - 1)]
-
-    assert len(edges) == 3
-    assert math.isclose(edges[0], edges[1], abs_tol=1e-9)
-    assert math.isclose(edges[1], edges[2], abs_tol=1e-9)
-
-
-def test_circle_default_segments_use_single_cartesian_path():
-    router = _router(runtime_mode="sim")
-
-    result = router.route(_draw_payload("circle"))
-
-    assert [command["primitive_type"] for command in result.commands] == ["PTP", "CARTESIAN_PATH"]
-    assert len(_cartesian_command(result)["waypoints"]) == 32
-
-
-def test_circle_custom_segments():
-    router = _router(runtime_mode="sim")
-
-    result = router.route(_draw_payload("circle", segments=16))
-
-    assert len(_cartesian_command(result)["waypoints"]) == 16
-
-
-def test_circle_rejects_too_few_segments():
-    router = _router(runtime_mode="sim")
-
-    with pytest.raises(ValueError, match="segments must be >= 8"):
-        router.route(_draw_payload("circle", segments=4))
-
-
-def test_circle_waypoints_equidistant_from_center():
-    router = _router(runtime_mode="sim")
-    size_m = 0.06
-    radius = size_m / 2.0
-
-    result = router.route(_draw_payload("circle", size_m=size_m))
-    positions = _all_positions(result)
-    center_x = 0.30 + radius
-    center_y = 0.0
-
-    for position in positions:
-        distance = math.sqrt((position["x"] - center_x) ** 2 + (position["y"] - center_y) ** 2)
-        assert math.isclose(distance, radius, abs_tol=1e-9)
-
-
-def test_polygon_default_sides_is_6():
-    router = _router(runtime_mode="sim")
-
-    result = router.route(_draw_payload("polygon"))
-
-    assert len(_cartesian_command(result)["waypoints"]) == 6
-
-
-def test_polygon_rejects_out_of_range_sides():
-    router = _router(runtime_mode="sim")
-
-    with pytest.raises(ValueError, match="polygon sides must be in"):
-        router.route(_draw_payload("polygon", sides=2))
-
-    with pytest.raises(ValueError, match="polygon sides must be in"):
-        router.route(_draw_payload("polygon", sides=13))
-
-
-def test_polygon_vertices_are_equidistant_from_center():
-    router = _router(runtime_mode="sim")
-    size_m = 0.08
-    radius = size_m / 2.0
-
-    result = router.route(_draw_payload("polygon", sides=6, size_m=size_m))
-    positions = _all_positions(result)
-    center_x = 0.30 + radius
-    center_y = 0.0
-
-    for position in positions:
-        distance = math.sqrt((position["x"] - center_x) ** 2 + (position["y"] - center_y) ** 2)
-        assert math.isclose(distance, radius, abs_tol=1e-9)
-
-
-def test_rectangle_requires_width_and_height():
-    router = _router(runtime_mode="sim")
-
-    with pytest.raises(ValueError, match="width_m"):
-        router.route(_draw_payload("rectangle", size_m=None, width_m=0.0, height_m=0.04))
-
-    with pytest.raises(ValueError, match="height_m"):
-        router.route(_draw_payload("rectangle", size_m=None, width_m=0.05, height_m=0.0))
-
-
-def test_rectangle_dimensions_and_closure():
-    router = _router(runtime_mode="sim")
-
-    result = router.route(_draw_payload("rectangle", width_m=0.05, height_m=0.08))
-    positions = _all_positions(result)
-
-    assert [command["primitive_type"] for command in result.commands] == ["PTP", "CARTESIAN_PATH"]
-    assert positions[0] == positions[-1]
-    assert math.isclose(_distance(positions[0], positions[1]), 0.05, abs_tol=1e-9)
-    assert math.isclose(_distance(positions[1], positions[2]), 0.08, abs_tol=1e-9)
-
-
-def test_arc_default_sweep_is_open_path():
-    router = _router(runtime_mode="sim")
-
-    result = router.route(_draw_payload("arc", radius_m=0.03, sweep_deg=180))
-    positions = _all_positions(result)
-
-    assert [command["primitive_type"] for command in result.commands] == ["PTP", "CARTESIAN_PATH"]
-    assert positions[0] != positions[-1]
-    assert math.isclose(positions[0]["x"], 0.30, abs_tol=1e-9)
-    assert math.isclose(positions[-1]["x"], 0.36, abs_tol=1e-9)
-
-
-def test_arc_points_stay_on_radius():
-    router = _router(runtime_mode="sim")
-    radius_m = 0.04
-
-    result = router.route(_draw_payload("arc", radius_m=radius_m, sweep_deg=90))
-    positions = _all_positions(result)
+    draw_points = [
+        point for point in _collect_draw_line_points(result) if math.isclose(point["z"], 0.30, abs_tol=1e-9)
+    ]
     center_x = 0.30 + radius_m
-    center_y = 0.0
+    center_y = 0.00
 
-    for position in positions:
-        distance = math.sqrt((position["x"] - center_x) ** 2 + (position["y"] - center_y) ** 2)
-        assert math.isclose(distance, radius_m, abs_tol=1e-9)
-
-
-def test_polyline_requires_at_least_two_points():
-    router = _router(runtime_mode="sim")
-
-    with pytest.raises(ValueError, match="at least 2 points"):
-        router.route(_draw_payload("polyline", size_m=None, start_pose=None, points=[{"x": 0.3, "y": 0.0, "z": 0.3}]))
+    for point in draw_points:
+        distance = math.sqrt((point["x"] - center_x) ** 2 + (point["y"] - center_y) ** 2)
+        assert math.isclose(distance, radius_m, abs_tol=2e-3)
 
 
-def test_polyline_preserves_ordering():
-    router = _router(runtime_mode="sim")
-    points = [
-        {"x": 0.30, "y": 0.00, "z": 0.30},
-        {"x": 0.32, "y": 0.01, "z": 0.30},
-        {"x": 0.34, "y": 0.03, "z": 0.30},
+def test_arc_uses_non_closed_path_with_requested_sweep():
+    router = _router()
+
+    result = router.route(
+        _draw_payload(
+            "arc",
+            params={"radius_m": 0.03, "sweep_deg": 180.0},
+        )
+    )
+    draw_points = [
+        point for point in _collect_draw_line_points(result) if math.isclose(point["z"], 0.30, abs_tol=1e-9)
     ]
 
-    result = router.route(_draw_payload("polyline", size_m=None, start_pose=None, points=points))
+    assert draw_points[0] != draw_points[-1]
+    assert math.isclose(draw_points[0]["x"], 0.30, abs_tol=1e-6)
+    assert math.isclose(draw_points[-1]["x"], 0.36, abs_tol=1e-3)
 
-    assert [command["primitive_type"] for command in result.commands] == ["PTP", "CARTESIAN_PATH"]
-    assert _all_positions(result) == points
+
+def test_polyline_preserves_point_ordering():
+    router = _router()
+    result = router.route(
+        _draw_payload(
+            "polyline",
+            params={
+                "points": [
+                    {"x": 0.0, "y": 0.0},
+                    {"x": 0.02, "y": 0.01},
+                    {"x": 0.05, "y": 0.03},
+                ],
+            },
+        )
+    )
+
+    draw_points = [
+        point for point in _collect_draw_line_points(result) if math.isclose(point["z"], 0.30, abs_tol=1e-9)
+    ]
+    assert draw_points[0]["x"] == pytest.approx(0.30)
+    assert draw_points[1]["x"] == pytest.approx(0.32)
+    assert draw_points[2]["x"] == pytest.approx(0.35)
 
 
-@pytest.mark.parametrize("shape,overrides", [
-    ("square", {}),
-    ("triangle", {}),
-    ("circle", {}),
-    ("polygon", {"sides": 5}),
-    ("rectangle", {"width_m": 0.05, "height_m": 0.08}),
-    ("arc", {"radius_m": 0.03, "sweep_deg": 180}),
-    ("polyline", {"size_m": None, "start_pose": None, "points": [
-        {"x": 0.30, "y": 0.00, "z": 0.30},
-        {"x": 0.33, "y": 0.02, "z": 0.30},
-    ]}),
-])
-def test_all_shapes_use_tool_down_orientation(shape: str, overrides: dict):
+def test_tool_workplane_requires_origin_or_start_pose():
+    router = _router()
+
+    with pytest.raises(ValueError, match="missing_workplane"):
+        router.route(
+            {
+                "intent": "draw_shape",
+                "shape_type": "square",
+                "units": "m",
+                "frame_id": "base_link",
+                "workplane": {"mode": "tool"},
+                "params": {"side_m": 0.05},
+            }
+        )
+
+
+def test_plan_only_sets_require_approval_on_all_segments():
     router = _router(runtime_mode="sim")
 
-    result = router.route(_draw_payload(shape, **overrides))
+    result = router.route(
+        _draw_payload(
+            "rectangle",
+            execution_mode="plan_only",
+            params={"width_m": 0.05, "height_m": 0.08},
+        )
+    )
 
-    for orientation in _all_orientations(result):
-        assert orientation == {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0}
+    for command in result.commands:
+        assert command["require_approval"] is True
+        assert command["plan_only"] is True
 
 
-@pytest.mark.parametrize("shape,overrides", [
-    ("square", {}),
-    ("triangle", {}),
-    ("circle", {}),
-    ("polygon", {"sides": 5}),
-    ("rectangle", {"width_m": 0.05, "height_m": 0.08}),
-    ("arc", {"radius_m": 0.03, "sweep_deg": 180}),
-    ("polyline", {"size_m": None, "start_pose": None, "points": [
-        {"x": 0.30, "y": 0.00, "z": 0.30},
-        {"x": 0.33, "y": 0.02, "z": 0.30},
-    ]}),
-])
-def test_all_shapes_carry_reference_frame(shape: str, overrides: dict):
-    router = _router(runtime_mode="sim")
+def test_dense_circle_is_chunked_into_multiple_segments():
+    router = _router()
 
-    result = router.route(_draw_payload(shape, **overrides))
+    result = router.route(
+        _draw_payload(
+            "circle",
+            params={"radius_m": 0.10},
+            stroke={"drawing_speed_scale": 0.10, "travel_speed_scale": 0.15},
+        )
+    )
+
+    cartesian_commands = [command for command in result.commands if command["primitive_type"] == "CARTESIAN_PATH"]
+    assert len(cartesian_commands) >= 1
+    # The compiler always annotates chunk metadata for cartesian chunks.
+    for command in cartesian_commands:
+        assert command["chunk_index"] >= 1
+        assert command["stroke_index"] >= 1
+
+
+def test_all_generated_commands_carry_reference_frame():
+    router = _router()
+
+    result = router.route(_draw_payload("triangle", params={"side_m": 0.05}))
 
     for command in result.commands:
         assert command["reference_frame"] == "base_link"

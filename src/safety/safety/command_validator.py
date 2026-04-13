@@ -13,7 +13,16 @@ _VELOCITY_BYPASS_PRIMITIVES = {
 class CommandValidator:
     def __init__(self, safety_rules: dict):
         self.safety_rules = safety_rules
-        self.max_velocity = self.safety_rules.get("joint_limits_override", {}).get("max_velocity_scale", 0.5)
+        motion_limits = self.safety_rules.get("motion_limits", {})
+        legacy_limits = self.safety_rules.get("joint_limits_override", {})
+        self.max_velocity = motion_limits.get(
+            "max_velocity_scale",
+            legacy_limits.get("max_velocity_scale", 0.5),
+        )
+        self.max_acceleration = motion_limits.get(
+            "max_acceleration_scale",
+            legacy_limits.get("max_acceleration_scale", 0.5),
+        )
 
     def validate(self, command_json: str) -> tuple[bool, str]:
         if not command_json:
@@ -42,5 +51,20 @@ class CommandValidator:
             
         if velocity_scale <= 0.0:
             return False, "velocity_scale must be positive"
+
+        if "acceleration_scale" in cmd:
+            try:
+                acceleration_scale = float(cmd["acceleration_scale"])
+            except (ValueError, TypeError):
+                return False, "Invalid acceleration_scale format"
+
+            if acceleration_scale > self.max_acceleration:
+                return False, (
+                    f"acceleration_scale {acceleration_scale} exceeds "
+                    f"max allowed {self.max_acceleration}"
+                )
+
+            if acceleration_scale <= 0.0:
+                return False, "acceleration_scale must be positive"
 
         return True, ""

@@ -1,8 +1,11 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cctype>
 #include <cmath>
+#include <exception>
 #include <future>
+#include <iomanip>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -26,6 +29,8 @@
 #include <interfaces/srv/io_set.hpp>
 
 #include "motion_core/ik_selector.hpp"
+#include "motion_core/angle_branch_utils.hpp"
+#include "motion_core/execution_orchestrator.hpp"
 #include "motion_core/move_rel_validator.hpp"
 #include "motion_core/orientation_filter.hpp"
 #include "motion_core/planner_router.hpp"
@@ -49,15 +54,8 @@ public:
   MotionCoreNode()
   : rclcpp::Node("motion_core_node"),
     seed_manager_(*this),
-    quality_gate_(kInternalMaxTrajectoryPoints, QualityGate::kMinimumCartesianFraction)
+    quality_gate_(kTrajectoryHardLimitPoints, QualityGate::kMinimumCartesianFraction)
   {
-    action_server_ = rclcpp_action::create_server<ExecuteMotion>(
-      this,
-      "execute_motion",
-      std::bind(&MotionCoreNode::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
-      std::bind(&MotionCoreNode::handle_cancel, this, std::placeholders::_1),
-      std::bind(&MotionCoreNode::handle_accepted, this, std::placeholders::_1));
-
     // V4 Contract: motion_core does NOT execute directly on hardware.
     // It sends validated trajectories to hw_adapter via DispatchTrajectory action.
     dispatch_action_name_ = declare_parameter<std::string>(
@@ -103,36 +101,75 @@ public:
       RCLCPP_ERROR(get_logger(), "Failed to initialize MoveGroup in initialize(): %s", reason.c_str());
     }
 
-    // V4 J9: Load planning scene from YAML on startup
-    const auto scene_path = declare_parameter<std::string>(
-      "scene_objects_path", "");
-    if (!scene_path.empty())
+    // Single-owner planning-scene policy:
+    //   - required mode blocks planning until scene load succeeds
+    //   - optional mode allows degraded planning in an empty scene
+    require_planning_scene_ = declare_parameter<bool>("require_planning_scene", true);
+    scene_objects_path_ = declare_parameter<std::string>("scene_objects_path", "");
+
+    if (!scene_objects_path_.empty())
     {
-      const auto result = scene_manager_.load_and_apply(scene_path);
-      if (result != SceneLoadResult::OK)
+      scene_load_result_ = scene_manager_.load_and_apply(scene_objects_path_);
+      if (scene_load_result_ != SceneLoadResult::OK)
       {
-        RCLCPP_ERROR(get_logger(),
-          "Planning scene load FAILED (%s) — planning will be blocked until scene is loaded",
-          scene_load_result_name(result));
+        if (require_planning_scene_)
+        {
+          RCLCPP_ERROR(
+            get_logger(),
+            "Planning scene load failed (%s) from '%s' and require_planning_scene=true; "
+            "motion planning is fail-closed until a valid scene is loaded.",
+            scene_load_result_name(scene_load_result_),
+            scene_objects_path_.c_str());
+        }
+        else
+        {
+          RCLCPP_WARN(
+            get_logger(),
+            "Planning scene load failed (%s) from '%s' but require_planning_scene=false; "
+            "planning will continue in degraded mode.",
+            scene_load_result_name(scene_load_result_),
+            scene_objects_path_.c_str());
+        }
       }
     }
     else
     {
-      RCLCPP_WARN(get_logger(),
-        "No scene_objects_path configured — planning scene empty (no collision objects)");
+      scene_load_result_ = SceneLoadResult::SCENE_NOT_READY;
+      if (require_planning_scene_)
+      {
+        RCLCPP_ERROR(
+          get_logger(),
+          "No scene_objects_path configured while require_planning_scene=true; "
+          "planning is blocked (fail-closed).");
+      }
+      else
+      {
+        RCLCPP_WARN(
+          get_logger(),
+          "No scene_objects_path configured — planning scene empty (degraded mode allowed).");
+      }
     }
+
+    action_server_ = rclcpp_action::create_server<ExecuteMotion>(
+      this,
+      "execute_motion",
+      std::bind(&MotionCoreNode::handle_goal, this, std::placeholders::_1, std::placeholders::_2),
+      std::bind(&MotionCoreNode::handle_cancel, this, std::placeholders::_1),
+      std::bind(&MotionCoreNode::handle_accepted, this, std::placeholders::_1));
+    RCLCPP_INFO(get_logger(), "execute_motion action server ready");
   }
 
 private:
-  static constexpr double kMaxVelocityScale = 0.3;
-  static constexpr double kMaxAccelerationScale = 0.2;
+  static constexpr double kMaxVelocityScale = 0.06;
+  static constexpr double kMaxAccelerationScale = 0.06;
   static constexpr double kPlanningTimeSec = 5.0;
   static constexpr double kCartesianEefStep = 0.005;
   // V4 G0: jump_threshold must be >= 1.5 in Cartesian planning config.
   static constexpr double kCartesianJumpThreshold = 1.5;
   static constexpr const char * kPlanningGroup = "gp4_arm";
-  // V4 G2: Internal point budget is 180-190, NOT the MotoROS2 hard limit of 200.
-  static constexpr std::size_t kInternalMaxTrajectoryPoints = 190;
+  // Production point-budget policy.
+  static constexpr std::size_t kTrajectorySafeBudgetPoints = 180;
+  static constexpr std::size_t kTrajectoryHardLimitPoints = 200;
 
   rclcpp_action::Server<ExecuteMotion>::SharedPtr action_server_;
   // V4: NO FollowJointTrajectory client. Execution goes through hw_adapter only.
@@ -149,9 +186,13 @@ private:
   IkSelector ik_selector_;
   TrajectoryPostProcessor trajectory_post_processor_;
   QualityGate quality_gate_;
+  ExecutionOrchestrator execution_orchestrator_;
 
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
   PlanningSceneManager scene_manager_{get_logger()};
+  bool require_planning_scene_{true};
+  SceneLoadResult scene_load_result_{SceneLoadResult::SCENE_NOT_READY};
+  std::string scene_objects_path_;
   std::string dispatch_action_name_;
   double dispatch_timeout_sec_{60.0};
   std::string alarm_reset_service_name_;
@@ -200,6 +241,20 @@ private:
     std::string planner_id;
   };
 
+  enum class StageStatus
+  {
+    kSuccess,
+    kFailure,
+    kCanceled,
+  };
+
+  struct StageResult
+  {
+    StageStatus status = StageStatus::kFailure;
+    std::string reason;
+    std::string note;
+  };
+
   static PlannerSelection resolve_planner_selection(const std::string & planner_id)
   {
     std::string normalized = planner_id;
@@ -234,6 +289,130 @@ private:
     }
 
     return {"", planner_id};
+  }
+
+  static std::string goal_uuid_to_string(const rclcpp_action::GoalUUID & goal_id)
+  {
+    std::ostringstream stream;
+    stream << std::hex << std::setfill('0');
+    for (const auto byte : goal_id)
+    {
+      stream << std::setw(2) << static_cast<int>(byte);
+    }
+    return stream.str();
+  }
+
+  static double max_abs_value(const std::vector<double> & values)
+  {
+    double max_value = 0.0;
+    for (const double value : values)
+    {
+      max_value = std::max(max_value, std::abs(value));
+    }
+    return max_value;
+  }
+
+  static std::string format_joint_vector(const std::vector<double> & joints)
+  {
+    std::ostringstream stream;
+    stream << "[";
+    for (std::size_t index = 0; index < joints.size(); ++index)
+    {
+      if (index > 0U)
+      {
+        stream << ", ";
+      }
+      stream << std::fixed << std::setprecision(4) << joints[index];
+    }
+    stream << "]";
+    return stream.str();
+  }
+
+  static bool is_geometry_sensitive_primitive(const std::string & primitive)
+  {
+    return primitive == "LIN" || primitive == "MOVE_REL" || primitive == "CARTESIAN_PATH";
+  }
+
+  void log_joint_branch_selection(
+    const std::string & primitive,
+    const std::uint64_t sequence,
+    const std::vector<std::string> & joint_names,
+    const std::vector<double> & current,
+    const std::vector<double> & requested,
+    const BranchPreservedJointVectorResult & branch_result) const
+  {
+    RCLCPP_INFO(
+      get_logger(),
+      "%s goal_seq=%lu branch-preserved target selection: current=%s requested=%s chosen=%s max_abs_delta=%.4f",
+      primitive.c_str(),
+      static_cast<unsigned long>(sequence),
+      format_joint_vector(current).c_str(),
+      format_joint_vector(requested).c_str(),
+      format_joint_vector(branch_result.chosen_targets).c_str(),
+      max_abs_value(branch_result.deltas_from_current));
+
+    for (std::size_t index = 0; index < branch_result.chosen_targets.size(); ++index)
+    {
+      const std::string joint_name =
+        index < joint_names.size() ? joint_names[index] : ("joint_" + std::to_string(index));
+      RCLCPP_DEBUG(
+        get_logger(),
+        "%s goal_seq=%lu joint=%s current=%.6f requested=%.6f chosen=%.6f delta=%.6f helper=%s",
+        primitive.c_str(),
+        static_cast<unsigned long>(sequence),
+        joint_name.c_str(),
+        current[index],
+        requested[index],
+        branch_result.chosen_targets[index],
+        branch_result.deltas_from_current[index],
+        branch_result.helper_used[index].c_str());
+    }
+  }
+
+  std::string interrupt_reason(
+    const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
+    const std::uint64_t sequence,
+    const std::string & stage) const
+  {
+    if (goal_handle->is_canceling())
+    {
+      return "goal canceled during " + stage;
+    }
+
+    if (execution_orchestrator_.stop_requested(sequence))
+    {
+      return "STOP requested during " + stage;
+    }
+
+    return {};
+  }
+
+  bool ensure_scene_ready(std::string & reason) const
+  {
+    reason.clear();
+    if (!require_planning_scene_)
+    {
+      return true;
+    }
+
+    if (scene_manager_.is_scene_loaded())
+    {
+      return true;
+    }
+
+    std::ostringstream stream;
+    stream << "planning scene is required but not loaded";
+    if (!scene_objects_path_.empty())
+    {
+      stream << " (path='" << scene_objects_path_ << "', status="
+             << scene_load_result_name(scene_load_result_) << ")";
+    }
+    else
+    {
+      stream << " (scene_objects_path is empty)";
+    }
+    reason = stream.str();
+    return false;
   }
 
   bool ensure_move_group(std::string & reason)
@@ -423,73 +602,376 @@ private:
 
   /// Dispatch a validated trajectory to hw_adapter via DispatchTrajectory action.
   /// This is the V4-compliant execution path. motion_core never talks to FJT directly.
-  bool dispatch_to_hw_adapter(
+  StageResult dispatch_to_hw_adapter(
     const trajectory_msgs::msg::JointTrajectory & trajectory,
-    std::string & reason,
-    std::string & execution_note)
+    const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
+    const std::uint64_t sequence)
   {
-    reason.clear();
-    execution_note.clear();
+    constexpr auto kPollPeriod = std::chrono::milliseconds(50);
+    StageResult result;
 
     if (!dispatch_client_)
     {
-      reason = "DispatchTrajectory client not initialized";
-      return false;
+      result.reason = "DispatchTrajectory client not initialized";
+      return result;
     }
 
     if (!dispatch_client_->wait_for_action_server(std::chrono::seconds(5)))
     {
-      reason = "DispatchTrajectory action server unavailable at " + dispatch_action_name_;
-      return false;
+      result.reason = "DispatchTrajectory action server unavailable at " + dispatch_action_name_;
+      return result;
+    }
+
+    const std::string pre_dispatch_interrupt =
+      interrupt_reason(goal_handle, sequence, "dispatch_setup");
+    if (!pre_dispatch_interrupt.empty())
+    {
+      result.status = StageStatus::kCanceled;
+      result.reason = pre_dispatch_interrupt;
+      return result;
     }
 
     DispatchTrajectory::Goal goal;
     goal.trajectory = trajectory;
     goal.timeout_sec = dispatch_timeout_sec_;
 
+    RCLCPP_INFO(
+      get_logger(),
+      "execute_motion goal_seq=%lu dispatch_start target=%s points=%zu timeout=%.2fs",
+      static_cast<unsigned long>(sequence),
+      dispatch_action_name_.c_str(),
+      trajectory.points.size(),
+      dispatch_timeout_sec_);
+
     auto send_goal_future = dispatch_client_->async_send_goal(goal);
-    if (send_goal_future.wait_for(std::chrono::seconds(5)) != std::future_status::ready)
+    const auto send_goal_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (send_goal_future.wait_for(kPollPeriod) != std::future_status::ready)
     {
-      reason = "timed out sending trajectory to " + dispatch_action_name_;
-      return false;
+      const std::string interrupt =
+        interrupt_reason(goal_handle, sequence, "dispatch_goal_send");
+      if (!interrupt.empty())
+      {
+        result.status = StageStatus::kCanceled;
+        result.reason = interrupt;
+        return result;
+      }
+
+      if (std::chrono::steady_clock::now() >= send_goal_deadline)
+      {
+        result.reason = "timed out sending trajectory to " + dispatch_action_name_;
+        return result;
+      }
     }
 
-    auto goal_handle = send_goal_future.get();
-    if (!goal_handle)
+    auto dispatch_goal_handle = send_goal_future.get();
+    if (!dispatch_goal_handle)
     {
-      reason = "hw_adapter rejected trajectory dispatch goal";
-      return false;
+      result.reason =
+        "hw_adapter rejected trajectory dispatch goal (dispatch already in progress or unavailable)";
+      return result;
     }
 
-    auto result_future = dispatch_client_->async_get_result(goal_handle);
-    const auto result_timeout =
-      std::chrono::duration<double>(std::max(dispatch_timeout_sec_, 10.0));
-    if (result_future.wait_for(result_timeout) != std::future_status::ready)
+    execution_orchestrator_.update_phase(
+      sequence,
+      ExecutionPhase::kExecuting,
+      "dispatch accepted by hw_adapter");
+
+    auto result_future = dispatch_client_->async_get_result(dispatch_goal_handle);
+    const auto result_deadline = std::chrono::steady_clock::now() +
+      std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(std::max(dispatch_timeout_sec_, 10.0)));
+    while (result_future.wait_for(kPollPeriod) != std::future_status::ready)
     {
-      dispatch_client_->async_cancel_goal(goal_handle);
-      reason = "timed out waiting for dispatch result from " + dispatch_action_name_;
-      return false;
+      const std::string interrupt =
+        interrupt_reason(goal_handle, sequence, "dispatch_wait");
+      if (!interrupt.empty())
+      {
+        dispatch_client_->async_cancel_goal(dispatch_goal_handle);
+        result.status = StageStatus::kCanceled;
+        result.reason = interrupt;
+        return result;
+      }
+
+      if (std::chrono::steady_clock::now() >= result_deadline)
+      {
+        dispatch_client_->async_cancel_goal(dispatch_goal_handle);
+        result.reason = "timed out waiting for dispatch result from " + dispatch_action_name_;
+        return result;
+      }
     }
 
     const auto wrapped_result = result_future.get();
     if (!wrapped_result.result)
     {
-      reason = "hw_adapter returned no dispatch result";
-      return false;
+      result.reason = "hw_adapter returned no dispatch result";
+      return result;
     }
 
     if (!wrapped_result.result->success)
     {
-      reason = wrapped_result.result->message.empty() ?
+      result.reason = wrapped_result.result->message.empty() ?
         "hw_adapter execution failed" : wrapped_result.result->message;
-      return false;
+      const std::string interrupt =
+        interrupt_reason(goal_handle, sequence, "dispatch_result");
+      if (!interrupt.empty())
+      {
+        result.status = StageStatus::kCanceled;
+        result.reason = interrupt + " (" + result.reason + ")";
+      }
+      return result;
     }
 
     std::ostringstream note;
     note << "dispatched_via=" << dispatch_action_name_
          << ", hw_execution_time=" << wrapped_result.result->execution_time_sec << "s";
-    execution_note = note.str();
+    result.status = StageStatus::kSuccess;
+    result.note = note.str();
+    RCLCPP_INFO(
+      get_logger(),
+      "execute_motion goal_seq=%lu dispatch_end target=%s success=true detail=%s",
+      static_cast<unsigned long>(sequence),
+      dispatch_action_name_.c_str(),
+      result.note.c_str());
+    return result;
+  }
+
+  bool split_trajectory_for_dispatch(
+    const trajectory_msgs::msg::JointTrajectory & input_trajectory,
+    const std::size_t max_points_per_segment,
+    std::vector<trajectory_msgs::msg::JointTrajectory> & output_segments,
+    std::string & reason) const
+  {
+    reason.clear();
+    output_segments.clear();
+
+    if (input_trajectory.points.empty())
+    {
+      reason = "cannot split an empty trajectory";
+      return false;
+    }
+
+    if (max_points_per_segment < 2U)
+    {
+      reason = "split policy requires max_points_per_segment >= 2";
+      return false;
+    }
+
+    if (input_trajectory.points.size() <= max_points_per_segment)
+    {
+      output_segments.push_back(input_trajectory);
+      return true;
+    }
+
+    const std::size_t point_count = input_trajectory.points.size();
+    std::size_t start_index = 0U;
+
+    while (start_index < point_count)
+    {
+      const std::size_t end_index =
+        std::min(start_index + max_points_per_segment - 1U, point_count - 1U);
+
+      trajectory_msgs::msg::JointTrajectory segment;
+      segment.header = input_trajectory.header;
+      segment.joint_names = input_trajectory.joint_names;
+      segment.points.reserve((end_index - start_index) + 1U);
+      for (std::size_t point_index = start_index; point_index <= end_index; ++point_index)
+      {
+        segment.points.push_back(input_trajectory.points[point_index]);
+      }
+
+      if (segment.points.size() < 2U)
+      {
+        reason = "split policy produced a segment with fewer than 2 points";
+        return false;
+      }
+
+      const rclcpp::Duration segment_start_time(segment.points.front().time_from_start);
+      for (auto & point : segment.points)
+      {
+        const rclcpp::Duration point_time(point.time_from_start);
+        if (point_time < segment_start_time)
+        {
+          reason = "split policy produced non-monotonic segment timestamps";
+          return false;
+        }
+        point.time_from_start = point_time - segment_start_time;
+      }
+
+      output_segments.push_back(std::move(segment));
+
+      if (end_index >= point_count - 1U)
+      {
+        break;
+      }
+
+      // Segment boundary overlap keeps endpoint continuity while respecting
+      // "split and dispatch sequentially" with a full stop between segments.
+      start_index = end_index;
+    }
+
     return true;
+  }
+
+  StageResult apply_budget_quality_and_dispatch(
+    trajectory_msgs::msg::JointTrajectory trajectory,
+    const std::string & primitive,
+    const double cartesian_fraction,
+    const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
+    const std::uint64_t sequence,
+    std::size_t & reported_point_count,
+    std::size_t & reported_segment_count)
+  {
+    StageResult result;
+    std::ostringstream note_stream;
+    const std::size_t original_point_count = trajectory.points.size();
+    reported_point_count = original_point_count;
+    reported_segment_count = 0U;
+
+    std::vector<trajectory_msgs::msg::JointTrajectory> segments;
+
+    if (original_point_count > kTrajectorySafeBudgetPoints)
+    {
+      if (is_geometry_sensitive_primitive(primitive))
+      {
+        std::string split_reason;
+        if (!split_trajectory_for_dispatch(
+              trajectory,
+              kTrajectorySafeBudgetPoints,
+              segments,
+              split_reason))
+        {
+          result.reason = "split-and-dispatch mitigation failed: " + split_reason;
+          return result;
+        }
+
+        RCLCPP_WARN(
+          get_logger(),
+          "goal_seq=%lu primitive=%s trajectory points=%zu exceed safe budget=%zu; "
+          "using split-and-dispatch mitigation (segments=%zu, full-stop between segments).",
+          static_cast<unsigned long>(sequence),
+          primitive.c_str(),
+          original_point_count,
+          kTrajectorySafeBudgetPoints,
+          segments.size());
+
+        note_stream << "budget_mitigation=split_sequential"
+                    << ", original_points=" << original_point_count
+                    << ", safe_budget=" << kTrajectorySafeBudgetPoints
+                    << ", segments=" << segments.size();
+      }
+      else
+      {
+        std::string downsample_reason;
+        if (!trajectory_post_processor_.downsample_to_max_points(
+              trajectory,
+              kTrajectorySafeBudgetPoints,
+              downsample_reason))
+        {
+          result.reason = "downsample mitigation failed: " + downsample_reason;
+          return result;
+        }
+
+        RCLCPP_WARN(
+          get_logger(),
+          "goal_seq=%lu primitive=%s trajectory points=%zu exceed safe budget=%zu; "
+          "using downsample mitigation (mitigated_points=%zu).",
+          static_cast<unsigned long>(sequence),
+          primitive.c_str(),
+          original_point_count,
+          kTrajectorySafeBudgetPoints,
+          trajectory.points.size());
+
+        segments.push_back(trajectory);
+        reported_point_count = trajectory.points.size();
+        note_stream << "budget_mitigation=downsample"
+                    << ", original_points=" << original_point_count
+                    << ", mitigated_points=" << trajectory.points.size()
+                    << ", safe_budget=" << kTrajectorySafeBudgetPoints;
+      }
+    }
+    else
+    {
+      segments.push_back(trajectory);
+      note_stream << "budget_mitigation=none"
+                  << ", points=" << original_point_count;
+    }
+
+    reported_segment_count = segments.size();
+
+    for (std::size_t index = 0; index < segments.size(); ++index)
+    {
+      const double fraction_for_segment =
+        (index == 0U) ? cartesian_fraction : QualityGate::kFractionNotApplicable;
+      std::string quality_reason;
+      if (!quality_gate_.validate_plan(segments[index], fraction_for_segment, quality_reason))
+      {
+        std::ostringstream quality_stream;
+        quality_stream << "quality gate failed for dispatch segment " << (index + 1U)
+                       << "/" << segments.size() << ": " << quality_reason;
+        result.reason = quality_stream.str();
+        return result;
+      }
+    }
+
+    execution_orchestrator_.update_phase(
+      sequence,
+      ExecutionPhase::kDispatchWait,
+      "trajectory dispatch requested");
+
+    for (std::size_t index = 0; index < segments.size(); ++index)
+    {
+      const std::string pre_dispatch_interrupt =
+        interrupt_reason(
+        goal_handle,
+        sequence,
+        "pre_dispatch_segment_" + std::to_string(index + 1U));
+      if (!pre_dispatch_interrupt.empty())
+      {
+        result.status = StageStatus::kCanceled;
+        result.reason = pre_dispatch_interrupt;
+        return result;
+      }
+
+      std::ostringstream dispatch_detail;
+      dispatch_detail << "dispatching segment " << (index + 1U) << "/" << segments.size();
+      execution_orchestrator_.update_phase(
+        sequence,
+        ExecutionPhase::kDispatchWait,
+        dispatch_detail.str());
+
+      const double progress = std::min(
+        0.75 + (0.18 * static_cast<double>(index + 1U) / static_cast<double>(segments.size())),
+        0.94);
+      publish_feedback(goal_handle, progress, "trajectory_dispatch_requested");
+
+      const auto dispatch_result = dispatch_to_hw_adapter(segments[index], goal_handle, sequence);
+      if (dispatch_result.status == StageStatus::kCanceled)
+      {
+        result.status = StageStatus::kCanceled;
+        std::ostringstream canceled_stream;
+        canceled_stream << "dispatch segment " << (index + 1U) << "/" << segments.size()
+                        << " canceled: " << dispatch_result.reason;
+        result.reason = canceled_stream.str();
+        return result;
+      }
+      if (dispatch_result.status != StageStatus::kSuccess)
+      {
+        std::ostringstream failure_stream;
+        failure_stream << "dispatch segment " << (index + 1U) << "/" << segments.size()
+                       << " failed: " << dispatch_result.reason;
+        result.reason = failure_stream.str();
+        return result;
+      }
+
+      if (!dispatch_result.note.empty())
+      {
+        note_stream << ", segment_" << (index + 1U) << "_detail={" << dispatch_result.note << "}";
+      }
+    }
+
+    result.status = StageStatus::kSuccess;
+    result.note = note_stream.str();
+    return result;
   }
 
   void publish_feedback(
@@ -513,6 +995,88 @@ private:
     result->message = message;
     set_result_timing(started_at, *result);
     goal_handle->abort(result);
+  }
+
+  void cancel_with_message(
+    const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
+    const std::chrono::steady_clock::time_point & started_at,
+    const std::string & message) const
+  {
+    auto result = std::make_shared<ExecuteMotion::Result>();
+    result->success = false;
+    result->message = message;
+    set_result_timing(started_at, *result);
+    goal_handle->canceled(result);
+  }
+
+  StageResult plan_with_interruption(
+    moveit::planning_interface::MoveGroupInterface::Plan & plan,
+    const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
+    const std::uint64_t sequence,
+    const std::string & stage)
+  {
+    constexpr auto kPollPeriod = std::chrono::milliseconds(50);
+    StageResult result;
+    std::atomic<bool> planning_finished{false};
+    moveit::core::MoveItErrorCode plan_code = moveit::core::MoveItErrorCode::FAILURE;
+    std::exception_ptr planning_exception;
+
+    std::thread planning_thread([this, &plan, &plan_code, &planning_finished, &planning_exception]() {
+      try
+      {
+        plan_code = move_group_->plan(plan);
+      }
+      catch (...)
+      {
+        planning_exception = std::current_exception();
+      }
+      planning_finished.store(true);
+    });
+
+    std::string interrupted_reason;
+    while (!planning_finished.load())
+    {
+      interrupted_reason = interrupt_reason(goal_handle, sequence, stage);
+      if (!interrupted_reason.empty())
+      {
+        move_group_->stop();
+      }
+      std::this_thread::sleep_for(kPollPeriod);
+    }
+
+    if (planning_thread.joinable())
+    {
+      planning_thread.join();
+    }
+
+    if (planning_exception)
+    {
+      try
+      {
+        std::rethrow_exception(planning_exception);
+      }
+      catch (const std::exception & ex)
+      {
+        result.reason = std::string("planning threw exception: ") + ex.what();
+        return result;
+      }
+    }
+
+    if (!interrupted_reason.empty())
+    {
+      result.status = StageStatus::kCanceled;
+      result.reason = interrupted_reason;
+      return result;
+    }
+
+    if (plan_code != moveit::core::MoveItErrorCode::SUCCESS)
+    {
+      result.reason = "planning failed";
+      return result;
+    }
+
+    result.status = StageStatus::kSuccess;
+    return result;
   }
 
   rclcpp_action::GoalResponse handle_goal(
@@ -557,8 +1121,12 @@ private:
     return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
   }
 
-  rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandleExecuteMotion>)
+  rclcpp_action::CancelResponse handle_cancel(const std::shared_ptr<GoalHandleExecuteMotion> goal_handle)
   {
+    RCLCPP_WARN(
+      get_logger(),
+      "Cancel requested for execute_motion goal_id=%s",
+      goal_uuid_to_string(goal_handle->get_goal_id()).c_str());
     return rclcpp_action::CancelResponse::ACCEPT;
   }
 
@@ -571,6 +1139,14 @@ private:
   {
     const auto started_at = std::chrono::steady_clock::now();
     const auto goal = goal_handle->get_goal();
+    const std::string goal_id = goal_uuid_to_string(goal_handle->get_goal_id());
+    const std::string primitive = normalize_primitive(goal->primitive_type);
+
+    RCLCPP_INFO(
+      get_logger(),
+      "execute_motion goal_id=%s primitive=%s accepted",
+      goal_id.c_str(),
+      primitive.c_str());
 
     publish_feedback(goal_handle, 0.05, "goal_accepted");
 
@@ -585,7 +1161,6 @@ private:
       return;
     }
 
-    const std::string primitive = normalize_primitive(goal->primitive_type);
     if (!is_supported_primitive(primitive))
     {
       abort_with_message(
@@ -598,7 +1173,13 @@ private:
     // ── Step 3.3: STOP — top-priority, cancel everything immediately ──
     if (primitive == "STOP")
     {
-      RCLCPP_WARN(get_logger(), "STOP primitive received — halting motion.");
+      std::string stop_reason;
+      const bool had_active_goal = execution_orchestrator_.request_stop(stop_reason);
+      RCLCPP_WARN(
+        get_logger(),
+        "STOP primitive received for goal_id=%s — %s",
+        goal_id.c_str(),
+        had_active_goal ? stop_reason.c_str() : "no active execute_motion goal to stop");
       // Cancel any in-flight dispatch goals
       if (dispatch_client_)
       {
@@ -611,9 +1192,51 @@ private:
       }
       auto result = std::make_shared<ExecuteMotion::Result>();
       result->success = true;
-      result->message = "STOP: motion halted, dispatch goals cancelled";
+      result->message = had_active_goal ?
+        ("STOP: motion halt requested, dispatch cancel issued (" + stop_reason + ")") :
+        "STOP: no active execute_motion goal was running";
       set_result_timing(started_at, *result);
       goal_handle->succeed(result);
+      return;
+    }
+
+    const auto start_result = execution_orchestrator_.begin_goal(primitive);
+    if (!start_result.acquired)
+    {
+      const std::string reason = "orchestration reject: " + start_result.reason;
+      RCLCPP_WARN(
+        get_logger(),
+        "execute_motion goal_id=%s primitive=%s %s",
+        goal_id.c_str(),
+        primitive.c_str(),
+        reason.c_str());
+      abort_with_message(goal_handle, started_at, reason);
+      return;
+    }
+    const std::uint64_t goal_sequence = start_result.sequence;
+    execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kAccepted, "goal accepted");
+    struct FinishGuard
+    {
+      ExecutionOrchestrator & orchestrator;
+      std::uint64_t sequence;
+      ~FinishGuard()
+      {
+        orchestrator.finish_goal(sequence, "goal finished");
+      }
+    } finish_guard{execution_orchestrator_, goal_sequence};
+    (void)finish_guard;
+
+    RCLCPP_INFO(
+      get_logger(),
+      "execute_motion goal_seq=%lu goal_id=%s primitive=%s owner=motion_core_node",
+      static_cast<unsigned long>(goal_sequence),
+      goal_id.c_str(),
+      primitive.c_str());
+
+    const std::string initial_interrupt = interrupt_reason(goal_handle, goal_sequence, "goal_start");
+    if (!initial_interrupt.empty())
+    {
+      cancel_with_message(goal_handle, started_at, initial_interrupt);
       return;
     }
 
@@ -623,11 +1246,13 @@ private:
     // LLM gateway to acknowledge speed-related user intent without side effects.
     if (primitive == "SET_SPEED")
     {
+      execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kAccepted, "set_speed");
       const double requested_scale = goal->velocity_scale;
       auto result = std::make_shared<ExecuteMotion::Result>();
       result->success = true;
       std::ostringstream msg;
-      msg << "SET_SPEED acknowledged: velocity_scale=" << requested_scale
+      msg << "SET_SPEED acknowledged: goal_seq=" << goal_sequence
+          << ", velocity_scale=" << requested_scale
           << ". NOTE: this is stateless — subsequent motion commands must "
              "include their own velocity_scale field to take effect.";
       result->message = msg.str();
@@ -642,8 +1267,13 @@ private:
     // so blocking sleep is safe here.
     if (primitive == "WAIT")
     {
+      execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kAccepted, "wait");
       const double wait_sec = std::max(goal->wait_duration_sec, 0.0);
-      RCLCPP_INFO(get_logger(), "WAIT: pausing for %.3f seconds.", wait_sec);
+      RCLCPP_INFO(
+        get_logger(),
+        "WAIT goal_seq=%lu: pausing for %.3f seconds.",
+        static_cast<unsigned long>(goal_sequence),
+        wait_sec);
       publish_feedback(goal_handle, 0.1, "wait_started");
 
       const auto wait_start = std::chrono::steady_clock::now();
@@ -659,11 +1289,12 @@ private:
         }
         if (goal_handle->is_canceling())
         {
-          auto result = std::make_shared<ExecuteMotion::Result>();
-          result->success = false;
-          result->message = "WAIT: cancelled during wait";
-          set_result_timing(started_at, *result);
-          goal_handle->canceled(result);
+          cancel_with_message(goal_handle, started_at, "WAIT: cancelled during wait");
+          return;
+        }
+        if (execution_orchestrator_.stop_requested(goal_sequence))
+        {
+          cancel_with_message(goal_handle, started_at, "WAIT: STOP requested during wait");
           return;
         }
         const double progress = std::min(
@@ -684,7 +1315,11 @@ private:
     // ── Step 3.6: ALARM_RESET — delegate to hw_adapter via service ──
     if (primitive == "ALARM_RESET")
     {
-      RCLCPP_INFO(get_logger(), "ALARM_RESET: sending reset request to %s",
+      execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kAccepted, "alarm_reset");
+      RCLCPP_INFO(
+        get_logger(),
+        "ALARM_RESET goal_seq=%lu: sending reset request to %s",
+        static_cast<unsigned long>(goal_sequence),
         alarm_reset_service_name_.c_str());
 
       if (!alarm_reset_client_->wait_for_service(std::chrono::seconds(5)))
@@ -726,8 +1361,14 @@ private:
     // ── Step 3.7: IO_SET — delegate to hw_adapter via service ──
     if (primitive == "IO_SET")
     {
-      RCLCPP_INFO(get_logger(), "IO_SET: address=%u, value=%d -> %s",
-        goal->io_address, goal->io_value, io_set_service_name_.c_str());
+      execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kAccepted, "io_set");
+      RCLCPP_INFO(
+        get_logger(),
+        "IO_SET goal_seq=%lu: address=%u, value=%d -> %s",
+        static_cast<unsigned long>(goal_sequence),
+        goal->io_address,
+        goal->io_value,
+        io_set_service_name_.c_str());
 
       if (!io_set_client_->wait_for_service(std::chrono::seconds(5)))
       {
@@ -771,6 +1412,7 @@ private:
     // When CIRC is implemented, add its planning logic here and update the whitelist.
 
     // ── Motion primitives below require MoveGroup ──
+    execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kPlanning, "ensure_move_group");
     std::string move_group_reason;
     if (!ensure_move_group(move_group_reason))
     {
@@ -778,10 +1420,25 @@ private:
       return;
     }
 
+    std::string scene_reason;
+    if (!ensure_scene_ready(scene_reason))
+    {
+      abort_with_message(goal_handle, started_at, scene_reason);
+      return;
+    }
+
     // Step 3.9: MOVE_JOINTS is a semantic alias for PTP (full joint-space target).
     // Use a local effective primitive string — no const_cast, no goal mutation.
     const std::string effective_primitive =
       (primitive == "MOVE_JOINTS") ? "PTP" : primitive;
+
+    const std::string planning_interrupt =
+      interrupt_reason(goal_handle, goal_sequence, "planning_setup");
+    if (!planning_interrupt.empty())
+    {
+      cancel_with_message(goal_handle, started_at, planning_interrupt);
+      return;
+    }
 
     const double velocity_scale =
       (goal->velocity_scale > 0.0) ? goal->velocity_scale : TrajectoryPostProcessor::kDefaultVelocityScaling;
@@ -796,38 +1453,54 @@ private:
       return;
     }
 
+    const auto * joint_model_group =
+      current_robot_state.getJointModelGroup(kPlanningGroup);
+    if (!joint_model_group)
+    {
+      abort_with_message(goal_handle, started_at,
+        "planning group '" + std::string(kPlanningGroup) + "' not found");
+      return;
+    }
+
+    std::vector<double> current_joint_positions;
+    current_robot_state.copyJointGroupPositions(joint_model_group, current_joint_positions);
+    const auto & active_joint_models = joint_model_group->getActiveJointModels();
+    const auto & active_joint_names = joint_model_group->getActiveJointModelNames();
+
     // ── Step 3.8: MOVE_JOINT — single-axis motion via PTP planning ──
     if (primitive == "MOVE_JOINT")
     {
       const int joint_idx = goal->joint_index;
       const double target_angle = goal->joint_angle;
 
-      // Read current joint state
-      const auto * joint_model_group =
-        current_robot_state.getJointModelGroup(kPlanningGroup);
-      if (!joint_model_group)
-      {
-        abort_with_message(goal_handle, started_at,
-          "MOVE_JOINT: planning group '" + std::string(kPlanningGroup) + "' not found");
-        return;
-      }
-
-      std::vector<double> joint_positions;
-      current_robot_state.copyJointGroupPositions(joint_model_group, joint_positions);
-
-      if (joint_idx < 0 || static_cast<std::size_t>(joint_idx) >= joint_positions.size())
+      if (joint_idx < 0 || static_cast<std::size_t>(joint_idx) >= current_joint_positions.size())
       {
         abort_with_message(goal_handle, started_at,
           "MOVE_JOINT: joint_index " + std::to_string(joint_idx) +
-          " out of range [0, " + std::to_string(joint_positions.size() - 1) + "]");
+          " out of range [0, " + std::to_string(current_joint_positions.size() - 1) + "]");
         return;
       }
 
-      joint_positions[static_cast<std::size_t>(joint_idx)] = target_angle;
+      std::vector<double> requested_joint_positions = current_joint_positions;
+      requested_joint_positions[static_cast<std::size_t>(joint_idx)] = target_angle;
+      const auto branch_result = choose_branch_preserved_joint_vector(
+        active_joint_models,
+        current_joint_positions,
+        requested_joint_positions);
+      if (!branch_result.success)
+      {
+        abort_with_message(goal_handle, started_at,
+          "MOVE_JOINT branch preservation failed: " + branch_result.reason);
+        return;
+      }
 
-      RCLCPP_INFO(get_logger(),
-        "MOVE_JOINT: joint[%d] -> %.4f rad (delegating to PTP planning)",
-        joint_idx, target_angle);
+      log_joint_branch_selection(
+        "MOVE_JOINT",
+        goal_sequence,
+        active_joint_names,
+        current_joint_positions,
+        requested_joint_positions,
+        branch_result);
 
       // Delegate to PTP joint-space planning below
       // Set joint target and fall through to PTP planning path
@@ -836,6 +1509,12 @@ private:
       const std::string ptp_planner = planner_router_.route_planner("PTP", false);
       const PlannerSelection ptp_selection = resolve_planner_selection(
         ptp_planner.empty() ? "PILZ_PTP" : ptp_planner);
+      RCLCPP_INFO(
+        get_logger(),
+        "MOVE_JOINT goal_seq=%lu planner_selected pipeline=%s planner=%s",
+        static_cast<unsigned long>(goal_sequence),
+        ptp_selection.pipeline_id.empty() ? "<default>" : ptp_selection.pipeline_id.c_str(),
+        ptp_selection.planner_id.c_str());
       if (!ptp_selection.pipeline_id.empty())
       {
         move_group_->setPlanningPipelineId(ptp_selection.pipeline_id);
@@ -846,7 +1525,7 @@ private:
       move_group_->setStartState(current_robot_state);
       move_group_->clearPoseTargets();
 
-      if (!move_group_->setJointValueTarget(joint_positions))
+      if (!move_group_->setJointValueTarget(branch_result.chosen_targets))
       {
         abort_with_message(goal_handle, started_at,
           "MOVE_JOINT: failed to set joint target for PTP planning");
@@ -854,11 +1533,20 @@ private:
       }
 
       moveit::planning_interface::MoveGroupInterface::Plan plan;
-      const auto plan_code = move_group_->plan(plan);
-      if (plan_code != moveit::core::MoveItErrorCode::SUCCESS)
+      const auto plan_result = plan_with_interruption(
+        plan,
+        goal_handle,
+        goal_sequence,
+        "MOVE_JOINT planning");
+      if (plan_result.status == StageStatus::kCanceled)
+      {
+        cancel_with_message(goal_handle, started_at, plan_result.reason);
+        return;
+      }
+      if (plan_result.status != StageStatus::kSuccess)
       {
         abort_with_message(goal_handle, started_at,
-          "MOVE_JOINT: PTP planning failed for joint[" +
+          "MOVE_JOINT: " + plan_result.reason + " for joint[" +
           std::to_string(joint_idx) + "] -> " + std::to_string(target_angle));
         return;
       }
@@ -877,55 +1565,67 @@ private:
       robot_trajectory::RobotTrajectory robot_traj(move_group_->getRobotModel(), kPlanningGroup);
       robot_traj.setRobotTrajectoryMsg(reference_state, plan.trajectory_);
 
-      const bool pilz_timing =
-        ptp_selection.pipeline_id == "pilz_industrial_motion_planner";
-      std::string post_reason;
-      if (robot_traj.getWayPointCount() >= 2U && !pilz_timing)
-      {
-        if (!trajectory_post_processor_.apply_totg(
-              robot_traj, velocity_scale, acceleration_scale, post_reason))
-        {
-          abort_with_message(goal_handle, started_at, "MOVE_JOINT TOTG failed: " + post_reason);
-          return;
-        }
-      }
-
+      std::string time_parameterization_note;
       std::string ruckig_reason;
-      if (!trajectory_post_processor_.apply_ruckig_smoothing(robot_traj, ruckig_reason))
+      const bool ruckig_ok =
+        trajectory_post_processor_.apply_ruckig_smoothing(robot_traj, ruckig_reason);
+      const bool ruckig_applied = ruckig_ok &&
+        ruckig_reason.find("unavailable") == std::string::npos &&
+        ruckig_reason.find("skipped") == std::string::npos;
+
+      if (ruckig_applied)
       {
-        abort_with_message(goal_handle, started_at,
-          "MOVE_JOINT Ruckig failed: " + ruckig_reason);
-        return;
+        time_parameterization_note = "time_parameterization=ruckig";
+      }
+      else
+      {
+        if (robot_traj.getWayPointCount() >= 2U)
+        {
+          std::string totg_reason;
+          if (!trajectory_post_processor_.apply_totg(
+                robot_traj, velocity_scale, acceleration_scale, totg_reason))
+          {
+            std::string failure_detail =
+              ruckig_reason.empty() ? "Ruckig unavailable" : ("Ruckig status: " + ruckig_reason);
+            abort_with_message(
+              goal_handle,
+              started_at,
+              "MOVE_JOINT time parameterization failed; " + failure_detail +
+              "; TOTG fallback failed: " + totg_reason);
+            return;
+          }
+          time_parameterization_note = "time_parameterization=totg_fallback";
+        }
+        else
+        {
+          time_parameterization_note = "time_parameterization=none_single_waypoint";
+        }
       }
 
       moveit_msgs::msg::RobotTrajectory postprocessed_msg;
       robot_traj.getRobotTrajectoryMsg(postprocessed_msg);
       trajectory_msgs::msg::JointTrajectory output_traj = postprocessed_msg.joint_trajectory;
 
-      if (!trajectory_post_processor_.downsample_to_max_points(
-            output_traj, kInternalMaxTrajectoryPoints, post_reason))
+      std::size_t dispatched_point_count = 0U;
+      std::size_t dispatched_segment_count = 0U;
+      const auto dispatch_result = apply_budget_quality_and_dispatch(
+        output_traj,
+        primitive,
+        QualityGate::kFractionNotApplicable,
+        goal_handle,
+        goal_sequence,
+        dispatched_point_count,
+        dispatched_segment_count);
+      if (dispatch_result.status == StageStatus::kCanceled)
       {
-        abort_with_message(goal_handle, started_at,
-          "MOVE_JOINT downsampling failed: " + post_reason);
+        cancel_with_message(goal_handle, started_at,
+          "MOVE_JOINT dispatch canceled: " + dispatch_result.reason);
         return;
       }
-
-      std::string quality_reason;
-      if (!quality_gate_.validate_plan(
-            output_traj, QualityGate::kFractionNotApplicable, quality_reason))
+      if (dispatch_result.status != StageStatus::kSuccess)
       {
         abort_with_message(goal_handle, started_at,
-          "MOVE_JOINT quality gate failed: " + quality_reason);
-        return;
-      }
-
-      publish_feedback(goal_handle, 0.75, "trajectory_dispatch_requested");
-
-      std::string exec_reason, exec_note;
-      if (!dispatch_to_hw_adapter(output_traj, exec_reason, exec_note))
-      {
-        abort_with_message(goal_handle, started_at,
-          "MOVE_JOINT dispatch failed: " + exec_reason);
+          "MOVE_JOINT dispatch failed: " + dispatch_result.reason);
         return;
       }
 
@@ -933,8 +1633,10 @@ private:
       result->success = true;
       std::ostringstream msg;
       msg << "MOVE_JOINT success: joint[" << joint_idx << "]="
-          << target_angle << " rad, points=" << output_traj.points.size();
-      if (!exec_note.empty()) { msg << ", " << exec_note; }
+          << target_angle << " rad, points=" << dispatched_point_count
+          << ", segments=" << dispatched_segment_count;
+      if (!time_parameterization_note.empty()) { msg << ", " << time_parameterization_note; }
+      if (!dispatch_result.note.empty()) { msg << ", " << dispatch_result.note; }
       result->message = msg.str();
       set_result_timing(started_at, *result);
       goal_handle->succeed(result);
@@ -956,6 +1658,13 @@ private:
     }
 
     const PlannerSelection planner_selection = resolve_planner_selection(planner_id);
+    RCLCPP_INFO(
+      get_logger(),
+      "execute_motion goal_seq=%lu planner_selected primitive=%s pipeline=%s planner=%s",
+      static_cast<unsigned long>(goal_sequence),
+      effective_primitive.c_str(),
+      planner_selection.pipeline_id.empty() ? "<default>" : planner_selection.pipeline_id.c_str(),
+      planner_selection.planner_id.c_str());
 
     move_group_->setPlanningTime(kPlanningTimeSec);
     if (!planner_selection.pipeline_id.empty())
@@ -968,6 +1677,7 @@ private:
     move_group_->setStartState(current_robot_state);
     move_group_->clearPoseTargets();
 
+    execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kPlanning, "planning_request_prepared");
     publish_feedback(goal_handle, 0.2, "planning_request_prepared");
 
     geometry_msgs::msg::Pose normalized_pose;
@@ -1088,12 +1798,26 @@ private:
 
       if (effective_primitive == "PTP")
       {
+        RCLCPP_INFO(
+          get_logger(),
+          "execute_motion goal_seq=%lu IK-derived PTP target current_seed=%s ik_solution=%s",
+          static_cast<unsigned long>(goal_sequence),
+          format_joint_vector(seed_state).c_str(),
+          format_joint_vector(ik_solution).c_str());
         if (!move_group_->setJointValueTarget(ik_solution))
         {
           abort_with_message(goal_handle, started_at, "failed to set IK-derived joint target for PTP");
           return;
         }
       }
+    }
+
+    const std::string before_plan_interrupt =
+      interrupt_reason(goal_handle, goal_sequence, "pre_plan");
+    if (!before_plan_interrupt.empty())
+    {
+      cancel_with_message(goal_handle, started_at, before_plan_interrupt);
+      return;
     }
 
     moveit_msgs::msg::RobotTrajectory planned_trajectory_msg;
@@ -1154,10 +1878,19 @@ private:
       }
 
       moveit::planning_interface::MoveGroupInterface::Plan plan;
-      const auto plan_code = move_group_->plan(plan);
-      if (plan_code != moveit::core::MoveItErrorCode::SUCCESS)
+      const auto plan_result = plan_with_interruption(
+        plan,
+        goal_handle,
+        goal_sequence,
+        "HOME planning");
+      if (plan_result.status == StageStatus::kCanceled)
       {
-        abort_with_message(goal_handle, started_at, "planning failed for HOME primitive");
+        cancel_with_message(goal_handle, started_at, plan_result.reason);
+        return;
+      }
+      if (plan_result.status != StageStatus::kSuccess)
+      {
+        abort_with_message(goal_handle, started_at, "planning failed for HOME primitive: " + plan_result.reason);
         return;
       }
 
@@ -1169,7 +1902,26 @@ private:
     {
       if (has_joint_target)
       {
-        if (!move_group_->setJointValueTarget(goal->joint_target))
+        const auto branch_result = choose_branch_preserved_joint_vector(
+          active_joint_models,
+          current_joint_positions,
+          goal->joint_target);
+        if (!branch_result.success)
+        {
+          abort_with_message(goal_handle, started_at,
+            "invalid branch-preserved joint_target for PTP goal: " + branch_result.reason);
+          return;
+        }
+
+        log_joint_branch_selection(
+          "PTP",
+          goal_sequence,
+          active_joint_names,
+          current_joint_positions,
+          goal->joint_target,
+          branch_result);
+
+        if (!move_group_->setJointValueTarget(branch_result.chosen_targets))
         {
           abort_with_message(goal_handle, started_at, "invalid joint_target for PTP goal");
           return;
@@ -1177,10 +1929,19 @@ private:
       }
 
       moveit::planning_interface::MoveGroupInterface::Plan plan;
-      const auto plan_code = move_group_->plan(plan);
-      if (plan_code != moveit::core::MoveItErrorCode::SUCCESS)
+      const auto plan_result = plan_with_interruption(
+        plan,
+        goal_handle,
+        goal_sequence,
+        "PTP planning");
+      if (plan_result.status == StageStatus::kCanceled)
       {
-        abort_with_message(goal_handle, started_at, "planning failed for PTP primitive");
+        cancel_with_message(goal_handle, started_at, plan_result.reason);
+        return;
+      }
+      if (plan_result.status != StageStatus::kSuccess)
+      {
+        abort_with_message(goal_handle, started_at, "planning failed for PTP primitive: " + plan_result.reason);
         return;
       }
 
@@ -1202,12 +1963,23 @@ private:
         move_group_->setPoseTarget(normalized_pose);
 
         moveit::planning_interface::MoveGroupInterface::Plan plan;
-        const auto plan_code = move_group_->plan(plan);
-        if (plan_code != moveit::core::MoveItErrorCode::SUCCESS)
+        const auto plan_result = plan_with_interruption(
+          plan,
+          goal_handle,
+          goal_sequence,
+          effective_primitive + " planning");
+        if (plan_result.status == StageStatus::kCanceled)
+        {
+          cancel_with_message(goal_handle, started_at, plan_result.reason);
+          return;
+        }
+        if (plan_result.status != StageStatus::kSuccess)
         {
           // Fallback to computeCartesianPath if Pilz LIN fails
           RCLCPP_WARN(get_logger(),
-            "Pilz LIN planning failed, attempting computeCartesianPath fallback.");
+            "Pilz LIN planning failed for goal_seq=%lu (%s), attempting computeCartesianPath fallback.",
+            static_cast<unsigned long>(goal_sequence),
+            plan_result.reason.c_str());
 
           std::vector<geometry_msgs::msg::Pose> waypoints;
           waypoints.push_back(normalized_pose);
@@ -1262,6 +2034,14 @@ private:
       return;
     }
 
+    const std::string post_plan_interrupt =
+      interrupt_reason(goal_handle, goal_sequence, "post_plan");
+    if (!post_plan_interrupt.empty())
+    {
+      cancel_with_message(goal_handle, started_at, post_plan_interrupt);
+      return;
+    }
+
     publish_feedback(goal_handle, 0.55, "post_processing");
 
     moveit::core::RobotState reference_state(move_group_->getRobotModel());
@@ -1281,68 +2061,68 @@ private:
     robot_trajectory::RobotTrajectory robot_trajectory(move_group_->getRobotModel(), kPlanningGroup);
     robot_trajectory.setRobotTrajectoryMsg(reference_state, planned_trajectory_msg);
 
-    // V4 G1: correct pipeline order —
-    //   geometry plan → dense validation → resample → timing → Ruckig → final validation
-    // If Pilz provided native timing (has_plan_start_state=true and Pilz planner),
-    // skip TOTG unless the trajectory was resampled.
-    const bool pilz_native_timing =
-      has_plan_start_state &&
-      planner_selection.pipeline_id == "pilz_industrial_motion_planner";
+    std::string time_parameterization_note;
+    std::string ruckig_reason;
+    const bool ruckig_ok =
+      trajectory_post_processor_.apply_ruckig_smoothing(robot_trajectory, ruckig_reason);
+    const bool ruckig_applied = ruckig_ok &&
+      ruckig_reason.find("unavailable") == std::string::npos &&
+      ruckig_reason.find("skipped") == std::string::npos;
 
-    std::string post_reason;
-    if (robot_trajectory.getWayPointCount() >= 2U && !pilz_native_timing)
+    if (ruckig_applied)
     {
-      if (!trajectory_post_processor_.apply_totg(robot_trajectory, velocity_scale, acceleration_scale, post_reason))
-      {
-        abort_with_message(goal_handle, started_at, "TOTG failed: " + post_reason);
-        return;
-      }
-    }
-    else if (pilz_native_timing)
-    {
-      post_reason = "TOTG skipped: Pilz native timing preserved";
+      time_parameterization_note = "time_parameterization=ruckig";
     }
     else
     {
-      post_reason = "TOTG skipped for single-waypoint trajectory";
+      if (robot_trajectory.getWayPointCount() >= 2U)
+      {
+        std::string totg_reason;
+        if (!trajectory_post_processor_.apply_totg(
+              robot_trajectory,
+              velocity_scale,
+              acceleration_scale,
+              totg_reason))
+        {
+          std::string failure_detail =
+            ruckig_reason.empty() ? "Ruckig unavailable" : ("Ruckig status: " + ruckig_reason);
+          abort_with_message(
+            goal_handle,
+            started_at,
+            "time parameterization failed; " + failure_detail +
+            "; TOTG fallback failed: " + totg_reason);
+          return;
+        }
+        time_parameterization_note = "time_parameterization=totg_fallback";
+      }
+      else
+      {
+        time_parameterization_note = "time_parameterization=none_single_waypoint";
+      }
     }
-
-    std::string ruckig_reason;
-    if (!trajectory_post_processor_.apply_ruckig_smoothing(
-          robot_trajectory, ruckig_reason)) {
-      abort_with_message(goal_handle, started_at,
-          "Ruckig smoothing failed: " + ruckig_reason);
-      return;
-    }
-    RCLCPP_INFO(get_logger(), "Ruckig: %s", ruckig_reason.c_str());
 
     moveit_msgs::msg::RobotTrajectory postprocessed_msg;
     robot_trajectory.getRobotTrajectoryMsg(postprocessed_msg);
     trajectory_msgs::msg::JointTrajectory output_traj = postprocessed_msg.joint_trajectory;
 
-    // V4 G2: Internal budget is 190 (not 200 MotoROS2 hard limit)
-    if (!trajectory_post_processor_.downsample_to_max_points(
-          output_traj, kInternalMaxTrajectoryPoints, post_reason))
+    std::size_t dispatched_point_count = 0U;
+    std::size_t dispatched_segment_count = 0U;
+    const auto dispatch_result = apply_budget_quality_and_dispatch(
+      output_traj,
+      effective_primitive,
+      cartesian_fraction,
+      goal_handle,
+      goal_sequence,
+      dispatched_point_count,
+      dispatched_segment_count);
+    if (dispatch_result.status == StageStatus::kCanceled)
     {
-      abort_with_message(goal_handle, started_at, "downsampling failed: " + post_reason);
+      cancel_with_message(goal_handle, started_at, "trajectory dispatch canceled: " + dispatch_result.reason);
       return;
     }
-
-    std::string quality_reason;
-    if (!quality_gate_.validate_plan(output_traj, cartesian_fraction, quality_reason))
+    if (dispatch_result.status != StageStatus::kSuccess)
     {
-      abort_with_message(goal_handle, started_at, "quality gate failed: " + quality_reason);
-      return;
-    }
-
-    publish_feedback(goal_handle, 0.75, "trajectory_dispatch_requested");
-
-    // V4 B1/A1: Dispatch validated trajectory to hw_adapter — NEVER execute directly.
-    std::string execution_reason;
-    std::string execution_note;
-    if (!dispatch_to_hw_adapter(output_traj, execution_reason, execution_note))
-    {
-      abort_with_message(goal_handle, started_at, "trajectory dispatch failed: " + execution_reason);
+      abort_with_message(goal_handle, started_at, "trajectory dispatch failed: " + dispatch_result.reason);
       return;
     }
 
@@ -1354,20 +2134,25 @@ private:
     std::ostringstream message;
     message << "execution success; primitive=" << primitive
             << ", planner_id=" << planner_selection.planner_id
-            << ", points=" << output_traj.points.size();
+            << ", points=" << dispatched_point_count
+            << ", segments=" << dispatched_segment_count;
 
     if (cartesian_fraction >= 0.0)
     {
       message << ", cartesian_fraction=" << cartesian_fraction;
     }
 
+    if (!time_parameterization_note.empty())
+    {
+      message << ", " << time_parameterization_note;
+    }
     if (!ruckig_reason.empty())
     {
       message << ", ruckig_status=" << ruckig_reason;
     }
-    if (!execution_note.empty())
+    if (!dispatch_result.note.empty())
     {
-      message << ", " << execution_note;
+      message << ", " << dispatch_result.note;
     }
 
     result->message = message.str();

@@ -101,7 +101,7 @@ You are interacting with real industrial hardware. By default, **Safety override
 
 - **OS:** Ubuntu 22.04 LTS
 - **ROS 2:** Humble Hawksbill (desktop install)
-- **Middleware:** `CycloneDDS` or `FastRTPS` (tuned for industrial networks)
+- **Middleware:** `FastRTPS` (tuned for industrial networks)
 - **Robot Controller:** YRC1000micro loaded with the latest MotoROS2 application file (`.out`).
 - **Dependencies:**
   - `moveit2`
@@ -194,8 +194,6 @@ The LLM logic requires proper authentication limits. Set your keys explicitly on
 | -------------------- | -------------------------------------------------------------- |
 | `GP4_LLM_API_KEY`    | Key needed to run the `llm_gateway` node backend connection.   |
 | `MOTO_MAX_VEL`       | (Optional) Global percentage cap. Defaults to 10% in `safety`. |
-
-> **Note:** Edit the `parameters.yaml` under `llm_gateway/config/` for model choices, token lengths, and temperature values.
 
 ---
 

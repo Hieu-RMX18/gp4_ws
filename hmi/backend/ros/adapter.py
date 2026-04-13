@@ -86,6 +86,7 @@ CONNECTION_FRESHNESS_SEC = {
     'robot_status': 3.0,
     'readiness': 3.0,
     'joint_states': 3.0,
+    'command_interface': 3.0,
     'llm': 30.0,
     'alerts': 5.0,
 }
@@ -144,6 +145,17 @@ class _TelemetryState:
     joint_received_at: datetime | None = None
     joint_source_topic: str | None = None
     joint_topic_received_at: dict[str, datetime] = field(default_factory=dict)
+    validate_command_ready_at: datetime | None = None
+    execute_motion_ready_at: datetime | None = None
+    validate_command_ready: bool = False
+    execute_motion_ready: bool = False
+    validate_command_detail: str = ''
+    execute_motion_detail: str = ''
+    command_interface_checked_at: datetime | None = None
+    command_interface_check_inflight: bool = False
+    command_interface_error: str | None = None
+    command_interface_thread: Thread | None = None
+    command_interface_lock: Lock = field(default_factory=Lock)
 
 
 KNOWN_WORKSPACE_ENDPOINTS = {
@@ -212,6 +224,7 @@ class WorkspaceRosAdapter:
         self._goal_handles: dict[str, Any] = {}
         self._goal_lock = Lock()
         self._stop_requested = False
+        self._command_interface_poll_period_sec = 0.5
 
     def start(self) -> None:
         if rclpy is None:
@@ -858,7 +871,7 @@ class WorkspaceRosAdapter:
             joint_fallback_topic if runtime_mode == RuntimeMode.SIM else self._preferred_joint_state_topic
         )
 
-        return [
+        statuses = [
             self._build_source_status(
                 snapshot=snapshot,
                 name='gateway_status',
@@ -943,6 +956,8 @@ class WorkspaceRosAdapter:
                 active=snapshot.joint_source_topic == joint_fallback_topic,
             ),
         ]
+        statuses.extend(self._command_interface_source_statuses(snapshot, runtime_mode))
+        return statuses
 
     def _create_subscriptions(self) -> None:
         assert self._node is not None
@@ -988,6 +1003,165 @@ class WorkspaceRosAdapter:
         assert self._context is not None
         while not self._stop_requested and self._context.ok():
             self._executor.spin_once(timeout_sec=0.2)
+            self._refresh_command_interface_state()
+
+    def _refresh_command_interface_state(self) -> None:
+        if self._node is None or self._validate_client is None or self._execute_client is None:
+            return
+
+        now = self._now()
+        with self._lock:
+            last_checked = self._state.command_interface_checked_at
+            if last_checked is not None and (
+                now - last_checked
+            ).total_seconds() < self._command_interface_poll_period_sec:
+                return
+            self._state.command_interface_checked_at = now
+
+        validate_ready = self._validate_client.service_is_ready()
+        execute_ready = self._execute_client.server_is_ready()
+
+        with self._lock:
+            self._state.validate_command_ready = validate_ready
+            self._state.execute_motion_ready = execute_ready
+            self._state.validate_command_detail = (
+                f"ready at {self._validate_command_service}" if validate_ready
+                else f"waiting for {self._validate_command_service}"
+            )
+            self._state.execute_motion_detail = (
+                f"ready at {self._execute_motion_action}" if execute_ready
+                else f"waiting for {self._execute_motion_action}"
+            )
+            if validate_ready:
+                self._state.validate_command_ready_at = now
+            if execute_ready:
+                self._state.execute_motion_ready_at = now
+            if validate_ready and execute_ready:
+                self._state.command_interface_error = None
+
+    def _command_interfaces_ready(self) -> bool:
+        with self._lock:
+            return self._state.validate_command_ready and self._state.execute_motion_ready
+
+    def _command_interface_block_reason(self) -> str | None:
+        with self._lock:
+            if self._state.command_interface_error:
+                return self._state.command_interface_error
+            missing: list[str] = []
+            if not self._state.validate_command_ready:
+                missing.append(self._state.validate_command_detail or self._validate_command_service)
+            if not self._state.execute_motion_ready:
+                missing.append(self._state.execute_motion_detail or self._execute_motion_action)
+        if not missing:
+            return None
+        return "command interfaces not ready: " + "; ".join(missing)
+
+    def _command_interface_source_statuses(
+        self,
+        snapshot: _TelemetryState,
+        runtime_mode: RuntimeMode,
+    ) -> list[TelemetrySourceSnapshot]:
+        active = runtime_mode == RuntimeMode.SIM
+        return [
+            self._build_source_status(
+                snapshot=snapshot,
+                name='validate_command_service',
+                label='ValidateCommand service',
+                topic=self._validate_command_service,
+                last_seen_at=snapshot.validate_command_ready_at,
+                freshness_sec=CONNECTION_FRESHNESS_SEC['command_interface'],
+                active=active,
+                detail=(
+                    snapshot.validate_command_detail
+                    if active
+                    else 'Read-only outside sim mode.'
+                ),
+            ),
+            self._build_source_status(
+                snapshot=snapshot,
+                name='execute_motion_action',
+                label='ExecuteMotion action',
+                topic=self._execute_motion_action,
+                last_seen_at=snapshot.execute_motion_ready_at,
+                freshness_sec=CONNECTION_FRESHNESS_SEC['command_interface'],
+                active=active,
+                detail=(
+                    snapshot.execute_motion_detail
+                    if active
+                    else 'Read-only outside sim mode.'
+                ),
+            ),
+        ]
+
+    def _command_interface_health(self, snapshot: _TelemetryState, runtime_mode: RuntimeMode) -> ConnectionHealth:
+        if snapshot.start_error:
+            return ConnectionHealth.DOWN
+        if runtime_mode != RuntimeMode.SIM:
+            return ConnectionHealth.HEALTHY
+        if snapshot.validate_command_ready and snapshot.execute_motion_ready:
+            return ConnectionHealth.HEALTHY
+        if snapshot.ros_started_at is not None:
+            return ConnectionHealth.DEGRADED
+        return ConnectionHealth.DOWN
+
+    def _command_interface_active(self, runtime_mode: RuntimeMode) -> bool:
+        return runtime_mode == RuntimeMode.SIM
+
+    def _command_interface_detail(self, snapshot: _TelemetryState, runtime_mode: RuntimeMode) -> str | None:
+        if runtime_mode != RuntimeMode.SIM:
+            return 'Command ingress stays read-only outside sim mode.'
+        parts: list[str] = []
+        if snapshot.validate_command_detail:
+            parts.append(snapshot.validate_command_detail)
+        if snapshot.execute_motion_detail:
+            parts.append(snapshot.execute_motion_detail)
+        return '; '.join(parts) if parts else None
+
+    def _copy_state_locked(self) -> _TelemetryState:
+        return _TelemetryState(
+            ros_started_at=self._state.ros_started_at,
+            start_error=self._state.start_error,
+            robot_status=_RobotStatusState(
+                received_at=self._state.robot_status.received_at,
+                mode=self._state.robot_status.mode,
+                e_stopped=self._state.robot_status.e_stopped,
+                drives_powered=self._state.robot_status.drives_powered,
+                motion_possible=self._state.robot_status.motion_possible,
+                in_motion=self._state.robot_status.in_motion,
+                in_error=self._state.robot_status.in_error,
+                error_codes=list(self._state.robot_status.error_codes),
+            ),
+            readiness=_ReadinessState(
+                received_at=self._state.readiness.received_at,
+                ready=self._state.readiness.ready,
+                status_message=self._state.readiness.status_message,
+            ),
+            supervisor_alert=_SupervisorAlertState(
+                received_at=self._state.supervisor_alert.received_at,
+                level=self._state.supervisor_alert.level,
+                message=self._state.supervisor_alert.message,
+                values=dict(self._state.supervisor_alert.values),
+            ),
+            llm=_LlmState(
+                gateway_status_at=self._state.llm.gateway_status_at,
+                gateway_status_text=self._state.llm.gateway_status_text,
+                debug_at=self._state.llm.debug_at,
+                command_at=self._state.llm.command_at,
+            ),
+            joint_positions_rad=dict(self._state.joint_positions_rad),
+            joint_received_at=self._state.joint_received_at,
+            joint_source_topic=self._state.joint_source_topic,
+            joint_topic_received_at=dict(self._state.joint_topic_received_at),
+            validate_command_ready_at=self._state.validate_command_ready_at,
+            execute_motion_ready_at=self._state.execute_motion_ready_at,
+            validate_command_ready=self._state.validate_command_ready,
+            execute_motion_ready=self._state.execute_motion_ready,
+            validate_command_detail=self._state.validate_command_detail,
+            execute_motion_detail=self._state.execute_motion_detail,
+            command_interface_checked_at=self._state.command_interface_checked_at,
+            command_interface_check_inflight=False,
+            command_interface_error=self._state.command_interface_error,
+        )
 
     def _on_gateway_status(self, msg: Any) -> None:
         with self._lock:
@@ -1234,6 +1408,15 @@ class WorkspaceRosAdapter:
             joint_received_at=self._state.joint_received_at,
             joint_source_topic=self._state.joint_source_topic,
             joint_topic_received_at=dict(self._state.joint_topic_received_at),
+            validate_command_ready_at=self._state.validate_command_ready_at,
+            execute_motion_ready_at=self._state.execute_motion_ready_at,
+            validate_command_ready=self._state.validate_command_ready,
+            execute_motion_ready=self._state.execute_motion_ready,
+            validate_command_detail=self._state.validate_command_detail,
+            execute_motion_detail=self._state.execute_motion_detail,
+            command_interface_checked_at=self._state.command_interface_checked_at,
+            command_interface_check_inflight=False,
+            command_interface_error=self._state.command_interface_error,
         )
 
     def _build_source_status(

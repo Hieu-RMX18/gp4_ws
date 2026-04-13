@@ -22,7 +22,7 @@ Visualization Manager:
       Planning Scene Topic: monitored_planning_scene
       Robot Description: robot_description
       Scene Geometry:
-        Scene Alpha: 1
+        Scene Alpha: 0.18
       Scene Robot:
         Robot Alpha: 0.5
       Value: true

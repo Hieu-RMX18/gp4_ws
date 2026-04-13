@@ -39,8 +39,8 @@ def test_normalizer_joint_target_deg_to_rad(normalizer):
 
 def test_normalizer_defaults(normalizer):
     normalized = normalizer.normalize({"primitive_type": "HOME"})
-    assert normalized["velocity_scale"] == 0.1
-    assert normalized["acceleration_scale"] == 0.1
+    assert normalized["velocity_scale"] == 0.06
+    assert normalized["acceleration_scale"] == 0.06
     assert normalized["planner_id"] == "PILZ_PTP"
     assert normalized["require_approval"] is True
 
@@ -102,6 +102,14 @@ def test_normalizer_move_joint_normalizes_types(normalizer):
     assert normalized["planner_id"] == "PILZ_PTP"
 
 
+def test_normalizer_move_joint_wraps_angle_to_pi(normalizer):
+    """MOVE_JOINT: normalize revolute angle into (-pi, pi]."""
+    normalized = normalizer.normalize(
+        {"primitive_type": "MOVE_JOINT", "joint_index": 5, "joint_angle": 450.0}
+    )
+    assert math.isclose(normalized["joint_angle"], math.pi / 2.0, rel_tol=1e-9)
+
+
 def test_normalizer_set_speed_bypasses_planner(normalizer):
     """SET_SPEED: velocity_scale provided by command, no planner default needed.
 
@@ -142,6 +150,21 @@ def test_normalizer_move_joints_planner_default(normalizer):
     assert math.isclose(normalized["joint_target"][1], math.pi / 2.0, rel_tol=1e-9)
 
 
+def test_normalizer_move_joints_wraps_angles_to_pi(normalizer):
+    normalized = normalizer.normalize(
+        {
+            "primitive_type": "MOVE_JOINTS",
+            "joint_target": [450.0, -450.0, 720.0, -720.0, 0.0, 810.0],
+        }
+    )
+    joints = normalized["joint_target"]
+    assert math.isclose(joints[0], math.pi / 2.0, rel_tol=1e-9)
+    assert math.isclose(joints[1], -math.pi / 2.0, rel_tol=1e-9)
+    assert math.isclose(joints[2], 0.0, abs_tol=1e-9)
+    assert math.isclose(joints[3], 0.0, abs_tol=1e-9)
+    assert math.isclose(joints[5], math.pi / 2.0, rel_tol=1e-9)
+
+
 def test_normalizer_cartesian_path_normalizes_waypoints(normalizer):
     normalized = normalizer.normalize(
         {
@@ -156,3 +179,19 @@ def test_normalizer_cartesian_path_normalizes_waypoints(normalizer):
 
     assert normalized["planner_id"] == "PILZ_LIN"
     assert len(normalized["waypoints_msg"]) == 2
+
+
+def test_normalizer_plan_only_forces_require_approval(normalizer):
+    normalized = normalizer.normalize(
+        {
+            "primitive_type": "LIN",
+            "target_pose": {
+                "position": {"x": 0.30, "y": 0.00, "z": 0.30},
+                "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
+            },
+            "plan_only": True,
+            "require_approval": False,
+        }
+    )
+    assert normalized["plan_only"] is True
+    assert normalized["require_approval"] is True

@@ -150,8 +150,8 @@ class LLMGatewayNode(Node):
         self.declare_parameter("schema_path", "")
         self.declare_parameter("llm_config_path", "")
         self.declare_parameter("runtime_mode", "")
-        self.declare_parameter("default_velocity_scale", 0.10)
-        self.declare_parameter("default_acceleration_scale", 0.10)
+        self.declare_parameter("default_velocity_scale", 0.06)
+        self.declare_parameter("default_acceleration_scale", 0.06)
         self.declare_parameter("safety_service_timeout_sec", 2.0)
         self.declare_parameter("status_heartbeat_period_sec", 5.0)
         self.declare_parameter("auto_clear_unimplemented_approval", False)
@@ -208,6 +208,17 @@ class LLMGatewayNode(Node):
             parsed_command = self._parser.parse(raw_payload)
         except Exception as exc:
             self._reject("llm_parse_failed", str(exc), intent_text=intent_text, raw_llm_output=raw_payload)
+            return
+
+        try:
+            parsed_command = self._hydrate_draw_workplane(parsed_command)
+        except Exception as exc:
+            self._reject(
+                "workplane_resolution_failed",
+                str(exc),
+                intent_text=intent_text,
+                parsed_command=parsed_command,
+            )
             return
 
         self.publish_status("parsed")
@@ -654,15 +665,18 @@ class LLMGatewayNode(Node):
                 )
             return
         if wrapped.result and wrapped.result.success:
+            result_message = wrapped.result.message or ""
             self.get_logger().info(
-                f"Execution succeeded: {wrapped.result.message}")
+                f"Execution succeeded: {result_message}")
             if sequence_state is None:
+                if "READY_FOR_CONFIRM" in result_message:
+                    self.publish_status("ready_for_confirm")
                 self.publish_status("succeeded")
                 self._publish_debug({
                     "status": "succeeded",
                     "stage": "execute_motion",
                     "intent": intent_text,
-                    "message": wrapped.result.message,
+                    "message": result_message,
                 })
                 return
 
@@ -684,6 +698,11 @@ class LLMGatewayNode(Node):
                 )
 
     def _prepare_execution_command(self, normalized_command: Dict[str, Any]) -> Dict[str, Any]:
+        if normalized_command.get("plan_only"):
+            execution_command = dict(normalized_command)
+            execution_command["require_approval"] = True
+            return execution_command
+
         auto_clear = (
             self.get_parameter("auto_clear_unimplemented_approval")
             .get_parameter_value()
@@ -695,9 +714,9 @@ class LLMGatewayNode(Node):
         execution_command = dict(normalized_command)
         if execution_command.get("require_approval"):
             # Fake/sim Phase 9 still uses ValidateCommand as the safety gate, but
-            # motion_core aborts goals with require_approval=true until that flow
-            # is implemented. Keep this override launch-controlled and disabled
-            # for future real-hardware phases unless the approval path is restored.
+            # simulation workflows often need immediate execution after validation.
+            # Keep this override launch-controlled so hardware remains conservative
+            # by default while fake/sim can run end-to-end.
             self.get_logger().info(
                 "Clearing require_approval for fake/sim compatibility after ValidateCommand approval."
             )
@@ -784,6 +803,70 @@ class LLMGatewayNode(Node):
         self._command_publisher.publish(
             String(data=json.dumps(command_payload, ensure_ascii=True, separators=(",", ":")))
         )
+
+    def _hydrate_draw_workplane(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return payload
+        intent = str(payload.get("intent", "")).strip().lower()
+        if intent not in {"draw_shape", "draw_text"}:
+            return payload
+
+        working_payload = dict(payload)
+        workplane = working_payload.get("workplane")
+        if workplane is None:
+            workplane = {"mode": "tool"}
+            working_payload["workplane"] = workplane
+        if not isinstance(workplane, dict):
+            return working_payload
+
+        mode = str(workplane.get("mode", "base")).strip().lower()
+        if mode != "tool":
+            return working_payload
+        if isinstance(workplane.get("origin"), dict):
+            return working_payload
+        if isinstance(working_payload.get("start_pose"), dict):
+            return working_payload
+
+        current_pose = self._request_current_pose_snapshot("base_link")
+        if current_pose is None:
+            raise ValueError(
+                "missing_workplane: tool mode requires current pose, but /get_current_pose is unavailable"
+            )
+
+        hydrated_workplane = dict(workplane)
+        hydrated_workplane["origin"] = current_pose
+        working_payload["workplane"] = hydrated_workplane
+        return working_payload
+
+    def _request_current_pose_snapshot(self, reference_frame: str) -> Dict[str, Any] | None:
+        if not self._get_pose_client.wait_for_service(timeout_sec=self._safety_service_timeout_sec):
+            return None
+
+        request = GetCurrentPose.Request()
+        request.reference_frame = reference_frame
+        future = self._get_pose_client.call_async(request)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=self._safety_service_timeout_sec)
+
+        if not future.done():
+            return None
+        response = future.result()
+        if response is None or not response.success:
+            return None
+
+        pose = response.current_pose
+        return {
+            "position": {
+                "x": float(pose.position.x),
+                "y": float(pose.position.y),
+                "z": float(pose.position.z),
+            },
+            "orientation": {
+                "x": float(pose.orientation.x),
+                "y": float(pose.orientation.y),
+                "z": float(pose.orientation.z),
+                "w": float(pose.orientation.w),
+            },
+        }
 
 
 def main(args: Any = None) -> None:

@@ -18,7 +18,7 @@ public:
   /// V4 D2: Get seed state using priority:
   /// 1. current joint state
   /// 2. last successful seed by primitive family
-  /// 3. named-target fallback (home, ready_down)
+  /// 3. commissioning named-target fallback (park_safe/ready-style seed)
   /// 4. refreshed current state (retry)
   bool get_seed_state(std::vector<double> & seed) const;
 

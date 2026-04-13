@@ -22,13 +22,41 @@
         <joint name="joint_5_b" value="-1.6017466450445892"/>
         <joint name="joint_6_t" value="0.05361262853660316"/>
     </group_state>
-    <group_state name="ready_down" group="gp4_arm">
-        <joint name="joint_1_s" value="0.2459"/>
-        <joint name="joint_2_l" value="-0.0222"/>
-        <joint name="joint_3_u" value="-0.189"/>
+    <!-- Conservative commissioning park pose for the constrained HIL workcell. -->
+    <group_state name="park_safe" group="gp4_arm">
+        <joint name="joint_1_s" value="0.0"/>
+        <joint name="joint_2_l" value="0.55"/>
+        <joint name="joint_3_u" value="-0.2"/>
         <joint name="joint_4_r" value="0"/>
-        <joint name="joint_5_b" value="-0.676"/>
+        <joint name="joint_5_b" value="-2.0"/>
         <joint name="joint_6_t" value="0"/>
+    </group_state>
+    <!-- READY stays below the crossbar lane and above the table keepout. -->
+    <group_state name="ready" group="gp4_arm">
+        <joint name="joint_1_s" value="0.1"/>
+        <joint name="joint_2_l" value="0.45"/>
+        <joint name="joint_3_u" value="-0.2"/>
+        <joint name="joint_4_r" value="0"/>
+        <joint name="joint_5_b" value="-1.7"/>
+        <joint name="joint_6_t" value="0"/>
+    </group_state>
+    <!-- poseA captured from teach pendant / joint_states on 2026-04-12. -->
+    <group_state name="poseA" group="gp4_arm">
+        <joint name="joint_1_s" value="2.0722946733043814"/>
+        <joint name="joint_2_l" value="0.3711097224618151"/>
+        <joint name="joint_3_u" value="-0.17708712495576953"/>
+        <joint name="joint_4_r" value="2.0678662581791734e-05"/>
+        <joint name="joint_5_b" value="-1.2834456315583187"/>
+        <joint name="joint_6_t" value="0.05357427901690602"/>
+    </group_state>
+    <!-- poseB captured from teach pendant / joint_states on 2026-04-12. -->
+    <group_state name="poseB" group="gp4_arm">
+        <joint name="joint_1_s" value="1.1122617820609437"/>
+        <joint name="joint_2_l" value="0.3984751821963182"/>
+        <joint name="joint_3_u" value="-0.2633406732574536"/>
+        <joint name="joint_4_r" value="-0.1233275436378059"/>
+        <joint name="joint_5_b" value="-1.0694327531072734"/>
+        <joint name="joint_6_t" value="-0.1383267175475877"/>
     </group_state>
     <!--VIRTUAL JOINT: Purpose: this element defines a virtual joint between a robot link and an external frame of reference (considered fixed with respect to the robot)-->
     <virtual_joint name="world_joint" type="fixed" parent_frame="world" child_link="base_link"/>

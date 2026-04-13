@@ -1,10 +1,13 @@
 cartesian_limits:
-  max_trans_vel: 0.5          # m/s
-  max_trans_acc: 1.0          # m/s²
-  max_trans_dec: -2.0         # m/s²
-  max_rot_vel: 0.8            # rad/s
-  max_rot_acc: 1.2
-  max_rot_dec: -2.0
+  # Conservative first-pass real-hardware tuning. Keep LIN explicitly opt-in
+  # and avoid pendant-surprising cartesian speeds while branch-preservation and
+  # orchestration fixes settle.
+  max_trans_vel: 0.2          # m/s
+  max_trans_acc: 0.4          # m/s²
+  max_trans_dec: -0.4         # m/s²
+  max_rot_vel: 0.4            # rad/s
+  max_rot_acc: 0.6
+  max_rot_dec: -0.6
  
 #  # Limits for the Pilz planner(gp8)
 # cartesian_limits:

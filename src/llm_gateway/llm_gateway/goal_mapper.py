@@ -50,6 +50,12 @@ class GoalMapper:
             payload["planner_id"] = str(command["planner_id"])
         if "require_approval" in command:
             payload["require_approval"] = bool(command["require_approval"])
+        if "plan_only" in command:
+            payload["plan_only"] = bool(command["plan_only"])
+        if "chunk_index" in command:
+            payload["chunk_index"] = int(command["chunk_index"])
+        if "stroke_index" in command:
+            payload["stroke_index"] = int(command["stroke_index"])
         if "reference_frame" in command:
             payload["reference_frame"] = str(command["reference_frame"])
         if command.get("joint_target"):

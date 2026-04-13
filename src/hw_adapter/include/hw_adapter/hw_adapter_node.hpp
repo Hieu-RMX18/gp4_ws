@@ -3,6 +3,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -85,9 +86,14 @@ private:
   void execute_dispatch(
     const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
   void publish_sim_readiness();
+  HwAdapterExecutionReport execute_trajectory_internal(
+    const trajectory_msgs::msg::JointTrajectory & trajectory,
+    std::chrono::milliseconds timeout,
+    bool dispatch_reservation_expected);
 
   HwAdapterOrchestrationSnapshot build_snapshot_locked() const;
   bool should_stop_motion_on_failure(const TrajectoryExecutionResult & result) const;
+  static std::string goal_uuid_to_string(const rclcpp_action::GoalUUID & goal_id);
 
   // Step 4.1: AlarmReset service handler
   void handle_alarm_reset(
@@ -116,9 +122,12 @@ private:
 
   mutable std::mutex orchestration_mutex_;
   bool sim_mode_ = false;
+  bool dispatch_goal_reserved_ = false;
   bool execution_in_progress_ = false;
   bool last_execution_success_ = false;
   bool last_error_was_fatal_ = false;
+  std::size_t trajectory_safe_budget_points_ = 180U;
+  std::size_t trajectory_hard_limit_points_ = 200U;
   std::string last_status_message_ = "hw_adapter orchestrator initialized";
 };
 }  // namespace hw_adapter

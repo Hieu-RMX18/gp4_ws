@@ -91,13 +91,13 @@ get_pose
 
 set_speed
   Change motion velocity scale.
-  Required: velocity_scale (float 0.05–0.30)
+  Required: velocity_scale (float 0.05–0.06)
   VN: "đặt tốc độ", "nhanh hơn", "chậm lại", "tốc độ X phần trăm"
   Rules:
-    - "nhanh hơn" / "faster" without number → velocity_scale: 0.20
-    - "chậm lại" / "slower" without number → velocity_scale: 0.08
-    - Percentage → multiply by 0.30 (e.g. "50%" → 0.15)
-  → {"intent": "set_speed", "velocity_scale": 0.20}
+    - "nhanh hơn" / "faster" without number → velocity_scale: 0.06
+    - "chậm lại" / "slower" without number → velocity_scale: 0.05
+    - Percentage → multiply by 0.06, then clamp to the valid range [0.05, 0.06]
+  → {"intent": "set_speed", "velocity_scale": 0.06}
 
 wait
   Pause for a specified duration.
@@ -109,6 +109,7 @@ move_relative
   Move BY a relative amount from current position.
   Required: delta (object with x, y, z — all floats in meters; set unused axes to 0.0)
   Optional: reference_frame (default: "base_link")
+  Safety: single MOVE_REL translation norm must stay ≤ 0.03 m during commissioning.
   VN: "nâng lên", "hạ xuống", "dịch lên/xuống", "nhích lên", "đẩy lên", "kéo xuống"
   Axis mapping:
     up/lên/nâng/nhấc     → delta.z positive
@@ -118,14 +119,14 @@ move_relative
     forward/trước/tiến    → delta.x positive
     back/sau/lùi          → delta.x negative
   Unit conversions: 1 phân = 1 cm = 0.01 m, 1 mm = 0.001 m
-  → {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}}
+  → {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.03}}
 
 absolute_move_ptp
   Move end-effector to absolute Cartesian position (joint-optimized path).
   Required: target_pose.position (object with x, y, z — floats in meters)
   Optional: orientation_preset ("tool-down"|"tool-forward"|"tool-up"),
             keep_current_orientation (boolean, default: true if orientation unspecified),
-            velocity_scale (float 0.05–0.30),
+            velocity_scale (float 0.05–0.06),
             reference_frame (default: "base_link")
   Orientation rule: if user does NOT specify orientation,
     OMIT orientation_preset and let keep_current_orientation default to true.
@@ -157,61 +158,52 @@ io_set
   VN: "bật đầu ra", "tắt đầu ra", "đặt IO"
   → {"intent": "io_set", "io_address": 10010, "io_value": 1}
 
-draw_shape (SIM-ONLY — unavailable in hardware mode)
-  Draw a geometric shape using the robot tool.
-  NOTE: This intent is simulation-only. It requires explicit
-  start_pose coordinates and is not available in hardware mode.
+draw_shape
+  Draw geometric shapes via deterministic stroke compilation.
   Required:
-    - square | triangle | circle | polygon:
-        shape, size_m, start_pose.position, plane ("xy")
-    - rectangle:
-        shape="rectangle", width_m, height_m, start_pose.position, plane ("xy")
-    - arc:
-        shape="arc", radius_m, start_pose.position, plane ("xy")
-    - polyline:
-        shape="polyline", points [{x,y,z}, ...], plane ("xy")
+    - shape_type: circle|arc|square|rectangle|triangle|polygon|polyline
+    - units: "m" | "cm" | "mm"
+    - frame_id: "base_link"
+    - workplane: {"mode":"base"|"tool"|"explicit_pose", ...}
+    - params: shape-specific numeric values
+  Shape params:
+    - circle: radius (or radius_m)
+    - arc: radius + sweep_deg
+    - square: side
+    - rectangle: width + height
+    - triangle: side OR points
+    - polygon: n_sides + radius (or side)
+    - polyline: points [{x,y}, ...]
   Optional:
-    - polygon only: sides (int, 3–12, default 6)
-    - circle only: segments (int, default 32)
-    - arc only: sweep_deg (float, default 180)
-  size_m meaning:
-    - square: side length
-    - triangle: side length (equilateral)
-    - circle: diameter
-    - polygon: circumscribed diameter
-  Only "xy" plane is supported.
-  VN: "vẽ hình vuông", "vẽ hình tròn", "vẽ tam giác",
-      "vẽ lục giác", "vẽ đa giác N cạnh", "vẽ ngũ giác",
-      "vẽ hình chữ nhật", "vẽ cung tròn", "vẽ polyline"
-  → {"intent": "draw_shape", "shape": "square", "size_m": 0.05,
-     "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
-  → {"intent": "draw_shape", "shape": "triangle", "size_m": 0.05,
-     "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
-  → {"intent": "draw_shape", "shape": "circle", "size_m": 0.05,
-     "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
-  → {"intent": "draw_shape", "shape": "polygon", "sides": 6, "size_m": 0.04,
-     "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
-  → {"intent": "draw_shape", "shape": "rectangle", "width_m": 0.05, "height_m": 0.08,
-     "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
-  → {"intent": "draw_shape", "shape": "arc", "radius_m": 0.03, "sweep_deg": 180,
-     "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
-  → {"intent": "draw_shape", "shape": "polyline",
-     "points": [{"x": 0.3, "y": 0.0, "z": 0.4}, {"x": 0.34, "y": 0.02, "z": 0.4}],
-     "plane": "xy"}
+    - stroke: approach_distance_m, retract_distance_m, drawing_speed_scale, travel_speed_scale
+    - execution_mode: "execute" | "plan_only"
+  VN: "vẽ hình vuông", "vẽ hình tròn bán kính ...", "vẽ đa giác", "vẽ polyline"
+  → {"intent":"draw_shape","shape_type":"circle","units":"cm","frame_id":"base_link",
+     "workplane":{"mode":"base","origin":{"position":{"x":0.3,"y":0.0,"z":0.4}}},
+     "params":{"radius":5},"execution_mode":"plan_only"}
+  → {"intent":"draw_shape","shape_type":"rectangle","units":"mm","frame_id":"base_link",
+     "workplane":{"mode":"base","origin":{"position":{"x":0.3,"y":0.0,"z":0.4}}},
+     "params":{"width":50,"height":80},"execution_mode":"execute"}
 
-draw_text (SIM-ONLY — unavailable in hardware mode)
-  Draw uppercase text outlines using a simple stroke font.
-  NOTE: This intent is simulation-only. It requires explicit
-  start_pose coordinates and is not available in hardware mode.
-  Required: text, height_m, start_pose.position, plane ("xy")
-  Optional: char_spacing_m (default about 20% of height_m)
-  Supported characters: A-Z, 0-9, space, ".", ",", "-", "_", "/"
-  The router handles pen-up travel between disconnected strokes.
-  VN: "vẽ chữ", "viết chữ", "write text", "draw text"
-  → {"intent": "draw_text", "text": "GP4", "height_m": 0.02,
-     "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
-  → {"intent": "draw_text", "text": "HELLO", "height_m": 0.02,
-     "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
+draw_text
+  Draw single-stroke uppercase text.
+  Required:
+    - text
+    - units: "m" | "cm" | "mm"
+    - frame_id: "base_link"
+    - workplane
+    - font.height (or font.height_m)
+  Optional:
+    - font.char_spacing, font.line_spacing, font.alignment (left|center|right)
+    - stroke settings and execution_mode
+  Supported glyphs: A-Z, 0-9, space, ".", ",", "-", "_", "/"
+  VN: "vẽ chữ GP4", "write HELLO 20 mm tall", "vẽ chữ YASKAWA cao 1 cm"
+  → {"intent":"draw_text","text":"GP4","units":"mm","frame_id":"base_link",
+     "workplane":{"mode":"base","origin":{"position":{"x":0.3,"y":0.0,"z":0.4}}},
+     "font":{"type":"single_stroke_builtin","height":20},"execution_mode":"plan_only"}
+  → {"intent":"draw_text","text":"HELLO","units":"cm","frame_id":"base_link",
+     "workplane":{"mode":"base","origin":{"position":{"x":0.3,"y":0.0,"z":0.4}}},
+     "font":{"type":"single_stroke_builtin","height":2,"alignment":"left"}}
 
 ══════════════════════════════════════════════════════
 FEW-SHOT EXAMPLES (diverse Vietnamese/English variations):
@@ -228,11 +220,11 @@ User: "đưa nó về chỗ cũ đi"
 User: "park it"
 → {"intent": "go_home"}
 
-User: "nâng lên 5cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}}
+User: "nâng lên 3cm"
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.03}}
 
-User: "đưa nó lên cao thêm 10 phân"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.10}}
+User: "đưa nó lên cao thêm 3 phân"
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.03}}
 
 User: "lift 3 centimeters"
 → {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.03}}
@@ -266,10 +258,10 @@ User: "move to x=0.3 y=0 z=0.4 with tool pointing forward"
    "orientation_preset": "tool-forward"}
 
 User: "set tốc độ nhanh hơn một chút"
-→ {"intent": "set_speed", "velocity_scale": 0.20}
+→ {"intent": "set_speed", "velocity_scale": 0.06}
 
 User: "chậm lại"
-→ {"intent": "set_speed", "velocity_scale": 0.08}
+→ {"intent": "set_speed", "velocity_scale": 0.05}
 
 User: "robot đang ở đâu vậy?"
 → {"intent": "get_pose"}
@@ -301,41 +293,37 @@ User: "reset lỗi"
 User: "bật đầu ra 10010"
 → {"intent": "io_set", "io_address": 10010, "io_value": 1}
 
-User: "vẽ hình tròn 5cm tại x=0.3 y=0 z=0.4"
-→ {"intent": "draw_shape", "shape": "circle", "size_m": 0.05,
-   "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
+User: "vẽ hình tròn bán kính 5 cm"
+→ {"intent":"draw_shape","shape_type":"circle","units":"cm","frame_id":"base_link",
+   "workplane":{"mode":"tool"},"params":{"radius":5}}
 
-User: "draw a triangle 3cm at x=0.3 y=0 z=0.4"
-→ {"intent": "draw_shape", "shape": "triangle", "size_m": 0.03,
-   "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
+User: "draw rectangle 50 by 80 mm"
+→ {"intent":"draw_shape","shape_type":"rectangle","units":"mm","frame_id":"base_link",
+   "workplane":{"mode":"tool"},"params":{"width":50,"height":80}}
 
-User: "vẽ lục giác 4cm tại x=0.3 y=0 z=0.4"
-→ {"intent": "draw_shape", "shape": "polygon", "sides": 6, "size_m": 0.04,
-   "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
+User: "draw polygon 6 sides radius 20 mm"
+→ {"intent":"draw_shape","shape_type":"polygon","units":"mm","frame_id":"base_link",
+   "workplane":{"mode":"tool"},"params":{"n_sides":6,"radius":20}}
 
-User: "draw an octagon 5cm at x=0.3 y=0 z=0.4"
-→ {"intent": "draw_shape", "shape": "polygon", "sides": 8, "size_m": 0.05,
-   "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
-
-User: "vẽ tam giác tại x=0.3 y=0 z=0.4"
-→ {"error": "MISSING_SLOT", "intent": "draw_shape",
-   "missing_fields": ["size_m"], "hint": "Cạnh tam giác dài bao nhiêu cm?"}
+User: "vẽ tam giác"
+→ {"error":"MISSING_SLOT","intent":"draw_shape",
+   "missing_fields":["params.side"],"hint":"Cạnh tam giác dài bao nhiêu (mm/cm)?"}
 
 User: "write GP4"
-→ {"intent": "draw_text", "text": "GP4", "height_m": 0.02,
-   "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
+→ {"intent":"draw_text","text":"GP4","units":"mm","frame_id":"base_link",
+   "workplane":{"mode":"tool"},"font":{"type":"single_stroke_builtin","height":20}}
 
-User: "ve chu HELLO cao 2cm tai x=0.3 y=0 z=0.4"
-→ {"intent": "draw_text", "text": "HELLO", "height_m": 0.02,
-   "start_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "plane": "xy"}
+User: "write HELLO 20 mm tall"
+→ {"intent":"draw_text","text":"HELLO","units":"mm","frame_id":"base_link",
+   "workplane":{"mode":"tool"},"font":{"type":"single_stroke_builtin","height":20}}
 
 User: "write @@@"
 → {"error": "UNSUPPORTED_OR_AMBIGUOUS_COMMAND"}
 
 ══════════════════════════════════════════════════════
-WORKSPACE LIMITS (meters): x: 0.0–0.6, y: -0.3–0.3, z: 0.2–0.6
+WORKSPACE LIMITS (meters): x: -0.25–0.38, y: -0.25–0.34, z: 0.10–0.50
 UNIT CONVERSIONS: 1 phân = 1 cm = 0.01 m | 1 mm = 0.001 m
-VELOCITY SCALE: 0.05 (slow) to 0.30 (fast)
+VELOCITY SCALE: 0.05 (slow) to 0.06 (fast)
 ORIENTATION PRESETS: tool-down | tool-forward | tool-up
 ALL POSITIONS AND DISTANCES IN METERS in the output JSON.
 ALL JOINT ANGLES IN RADIANS in the output JSON.

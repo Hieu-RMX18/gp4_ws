@@ -8,7 +8,7 @@ Validates:
   5. Prompt includes all three output format options (A, B, C)
   6. Prompt includes workspace, unit, and velocity constraints
   7. FROZEN_SEMANTIC_INTENTS set matches IntentRouter coverage
-  8. draw_shape is marked sim-only in the prompt
+  8. draw intents mention execution_mode/workplane contract
   9. Absolute motion does not default to tool-down
   10. Frozen intent list is exactly correct
 """
@@ -118,12 +118,12 @@ def test_prompt_includes_unsupported_error_format(prompt: str):
 # ── 6. Prompt includes workspace and velocity constraints ─────────────────────
 
 def test_prompt_includes_workspace_limits(prompt: str):
-    assert "0.0" in prompt and "0.6" in prompt, "Workspace x-limits missing"
-    assert "-0.3" in prompt and "0.3" in prompt, "Workspace y-limits missing"
-    assert "0.2" in prompt, "Workspace z-min missing"
+    assert "-0.25" in prompt and "0.38" in prompt, "Workspace x-limits missing"
+    assert "-0.25" in prompt and "0.34" in prompt, "Workspace y-limits missing"
+    assert "0.10" in prompt and "0.50" in prompt, "Workspace z-limits missing"
 
 def test_prompt_includes_velocity_scale_range(prompt: str):
-    assert "0.05" in prompt and "0.30" in prompt, "Velocity scale range missing"
+    assert "0.05" in prompt and "0.06" in prompt, "Velocity scale range missing"
 
 def test_prompt_includes_unit_conversions(prompt: str):
     assert "0.01" in prompt or "cm" in prompt, "Unit conversion rules missing"
@@ -159,30 +159,22 @@ def test_prompt_move_joints_uses_joint_target(prompt: str):
     )
 
 
-# ── 8. draw_shape is sim-only ─────────────────────────────────────────────────
+# ── 8. Draw intent contract sections ──────────────────────────────────────────
 
-def test_prompt_draw_shape_marked_sim_only(prompt: str):
-    """draw_shape description must contain sim-only marker per v2.1 policy."""
-    # Find the draw_shape section
-    draw_section_match = re.search(
-        r"draw_shape.*?═{10,}", prompt, re.DOTALL
-    )
+def test_prompt_draw_shape_mentions_workplane_and_execution_mode(prompt: str):
+    draw_section_match = re.search(r"draw_shape.*?draw_text", prompt, re.DOTALL)
     assert draw_section_match is not None, "Could not find draw_shape section"
     draw_section = draw_section_match.group(0)
-    assert "sim" in draw_section.lower() or "SIM" in draw_section, (
-        "draw_shape section must mention sim-only status"
-    )
+    assert "workplane" in draw_section
+    assert "execution_mode" in draw_section
 
 
-def test_prompt_draw_text_marked_sim_only(prompt: str):
-    draw_text_section_match = re.search(
-        r"draw_text.*?═{10,}", prompt, re.DOTALL
-    )
+def test_prompt_draw_text_mentions_single_stroke_font_contract(prompt: str):
+    draw_text_section_match = re.search(r"draw_text.*?═{10,}", prompt, re.DOTALL)
     assert draw_text_section_match is not None, "Could not find draw_text section"
     draw_text_section = draw_text_section_match.group(0)
-    assert "sim" in draw_text_section.lower() or "SIM" in draw_text_section, (
-        "draw_text section must mention sim-only status"
-    )
+    assert "single_stroke_builtin" in draw_text_section
+    assert "A-Z" in draw_text_section
 
 
 # ── 9. Absolute motion does not default to tool-down ──────────────────────────

@@ -1,24 +1,62 @@
+# HIL commissioning limits for the asymmetric GP4 workcell.
+# Conservative assumptions from workstation images:
+# - stay below the overhead crossbar by keeping z_max well under its underside
+# - keep TCP above low fixtures / parts on the table by enforcing a table-wide
+#   clearance zone instead of relying on exact fixture pickup coordinates
+# Keep the existing workspace_bounds + center/size AABB schema because
+# workspace_guard.py and downstream tests consume this format today.
 workspace_bounds:
-  x_min: -0.8
-  x_max:  0.8
-  y_min: -0.8
-  y_max:  0.8
-  z_min:  0.02
-  z_max:  1.2
+  x_min: -0.25
+  x_max:  0.38
+  y_min: -0.25
+  y_max:  0.38
+  z_min:  0.20
+  z_max:  0.45
 
+# Backward-compatible keys still used by safety.command_validator.
 joint_limits_override:
-  max_velocity_scale: 0.3
-  max_acceleration_scale: 0.3
+  max_velocity_scale: 0.06
+  max_acceleration_scale: 0.06
+
+# Preferred commissioning motion policy for new consumers.
+motion_limits:
+  max_velocity_scale: 0.06
+  max_acceleration_scale: 0.06
+  max_move_rel_translation: 0.03
 
 forbidden_zones:
-  - name: table
-    x: 0.0
-    y: 0.0
-    z: 0.02
-    size_x: 1.6
-    size_y: 1.6
-    size_z: 0.1
+  - name: table_clearance_guard
+    x: 0.10
+    y: 0.05
+    z: 0.09
+    size_x: 1.10
+    size_y: 0.95
+    size_z: 0.18
+
+  - name: avoid_left_region
+    x: -0.22
+    y: 0.21
+    z: 0.35
+    size_x: 0.22
+    size_y: 0.24
+    size_z: 0.70
+
+  - name: wall_region
+    x: 0.34
+    y: 0.32
+    z: 0.35
+    size_x: 0.18
+    size_y: 0.32
+    size_z: 0.70
+
+  - name: corner_clearance_guard
+    x: 0.24
+    y: 0.24
+    z: 0.35
+    size_x: 0.22
+    size_y: 0.22
+    size_z: 0.70
 
 require_human_approval:
-  velocity_scale_threshold: 0.4
-  distance_from_home_threshold: 0.5
+  velocity_scale_threshold: 0.06
+  distance_from_home_threshold: 0.35

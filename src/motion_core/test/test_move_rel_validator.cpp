@@ -47,40 +47,40 @@ TEST(MoveRelValidatorTest, RejectsAllZeroDeltas)
 TEST(MoveRelValidatorTest, AcceptsSingleAxisDelta)
 {
   std::string reason;
-  EXPECT_TRUE(validate_move_rel_deltas(0.0, 0.0, 0.10, reason));
+  EXPECT_TRUE(validate_move_rel_deltas(0.0, 0.0, 0.03, reason));
 }
 
 TEST(MoveRelValidatorTest, AcceptsMultiAxisDelta)
 {
   std::string reason;
-  EXPECT_TRUE(validate_move_rel_deltas(0.05, 0.0, 0.02, reason));
+  EXPECT_TRUE(validate_move_rel_deltas(0.02, 0.0, 0.01, reason));
 }
 
 TEST(MoveRelValidatorTest, AcceptsNegativeDelta)
 {
   std::string reason;
-  EXPECT_TRUE(validate_move_rel_deltas(0.0, 0.0, -0.10, reason));
+  EXPECT_TRUE(validate_move_rel_deltas(0.0, 0.0, -0.02, reason));
 }
 
 TEST(MoveRelValidatorTest, AcceptsDeltaExactlyAtLimit)
 {
-  // norm = 0.20 exactly — should pass
+  // norm = 0.03 exactly — should pass
   std::string reason;
-  EXPECT_TRUE(validate_move_rel_deltas(0.20, 0.0, 0.0, reason));
+  EXPECT_TRUE(validate_move_rel_deltas(0.03, 0.0, 0.0, reason));
 }
 
 TEST(MoveRelValidatorTest, RejectsDeltaNormExceedsLimit)
 {
-  // norm = sqrt(0.15^2 + 0.15^2) ≈ 0.2121 > 0.20
+  // norm = sqrt(0.03^2 + 0.02^2) ≈ 0.0361 > 0.03
   std::string reason;
-  EXPECT_FALSE(validate_move_rel_deltas(0.15, 0.15, 0.0, reason));
+  EXPECT_FALSE(validate_move_rel_deltas(0.03, 0.02, 0.0, reason));
   EXPECT_NE(reason.find("exceeds safety limit"), std::string::npos);
 }
 
 TEST(MoveRelValidatorTest, RejectsLargeSingleAxisDelta)
 {
   std::string reason;
-  EXPECT_FALSE(validate_move_rel_deltas(0.0, 0.0, 0.25, reason));
+  EXPECT_FALSE(validate_move_rel_deltas(0.0, 0.0, 0.04, reason));
   EXPECT_NE(reason.find("exceeds safety limit"), std::string::npos);
 }
 
@@ -144,9 +144,9 @@ TEST(MoveRelValidatorTest, ComputeTargetWithZeroDeltaEqualsCurrentPosition)
 TEST(MoveRelValidatorTest, AcceptsTargetInsideBounds)
 {
   geometry_msgs::msg::Pose target;
-  target.position.x = 0.3;
-  target.position.y = 0.1;
-  target.position.z = 0.4;
+  target.position.x = 0.15;
+  target.position.y = -0.10;
+  target.position.z = 0.22;
 
   std::string reason;
   EXPECT_TRUE(validate_move_rel_target_bounds(target, reason));
@@ -155,8 +155,8 @@ TEST(MoveRelValidatorTest, AcceptsTargetInsideBounds)
 TEST(MoveRelValidatorTest, AcceptsTargetAtBoundaryEdge)
 {
   geometry_msgs::msg::Pose target;
-  target.position.x = MoveRelLimits::kXMax;
-  target.position.y = MoveRelLimits::kYMax;
+  target.position.x = MoveRelLimits::kXMin;
+  target.position.y = MoveRelLimits::kYMin;
   target.position.z = MoveRelLimits::kZMax;
 
   std::string reason;
@@ -168,7 +168,7 @@ TEST(MoveRelValidatorTest, RejectsTargetBelowZMin)
   geometry_msgs::msg::Pose target;
   target.position.x = 0.0;
   target.position.y = 0.0;
-  target.position.z = 0.01;  // below kZMin = 0.02
+  target.position.z = 0.09;  // below kZMin = 0.10
 
   std::string reason;
   EXPECT_FALSE(validate_move_rel_target_bounds(target, reason));
@@ -178,7 +178,7 @@ TEST(MoveRelValidatorTest, RejectsTargetBelowZMin)
 TEST(MoveRelValidatorTest, RejectsTargetAboveXMax)
 {
   geometry_msgs::msg::Pose target;
-  target.position.x = 0.81;  // above kXMax = 0.8
+  target.position.x = 0.39;  // above kXMax = 0.38
   target.position.y = 0.0;
   target.position.z = 0.5;
 
@@ -191,22 +191,58 @@ TEST(MoveRelValidatorTest, RejectsTargetBelowYMin)
 {
   geometry_msgs::msg::Pose target;
   target.position.x = 0.0;
-  target.position.y = -0.81;  // below kYMin = -0.8
+  target.position.y = -0.26;  // below kYMin = -0.25
   target.position.z = 0.5;
 
   std::string reason;
   EXPECT_FALSE(validate_move_rel_target_bounds(target, reason));
 }
 
+TEST(MoveRelValidatorTest, RejectsTargetInsideTableClearanceGuard)
+{
+  geometry_msgs::msg::Pose target;
+  target.position.x = 0.10;
+  target.position.y = 0.05;
+  target.position.z = 0.12;
+
+  std::string reason;
+  EXPECT_FALSE(validate_move_rel_target_bounds(target, reason));
+  EXPECT_NE(reason.find("table_clearance_guard"), std::string::npos);
+}
+
+TEST(MoveRelValidatorTest, RejectsTargetInsideAvoidLeftRegion)
+{
+  geometry_msgs::msg::Pose target;
+  target.position.x = -0.22;
+  target.position.y = 0.21;
+  target.position.z = 0.35;
+
+  std::string reason;
+  EXPECT_FALSE(validate_move_rel_target_bounds(target, reason));
+  EXPECT_NE(reason.find("avoid_left_region"), std::string::npos);
+}
+
+TEST(MoveRelValidatorTest, RejectsTargetInsideWallRegion)
+{
+  geometry_msgs::msg::Pose target;
+  target.position.x = 0.34;
+  target.position.y = 0.32;
+  target.position.z = 0.35;
+
+  std::string reason;
+  EXPECT_FALSE(validate_move_rel_target_bounds(target, reason));
+  EXPECT_NE(reason.find("wall_region"), std::string::npos);
+}
+
 // ── Integration: full resolve-then-validate flow ──
 
 TEST(MoveRelValidatorTest, FullFlowValidDeltaInsideBounds)
 {
-  // Simulate: current at center, move up 10cm → stays in bounds
+  // Simulate: current in free space, move up 3cm -> stays in bounds
   geometry_msgs::msg::Pose current;
-  current.position.x = 0.3;
-  current.position.y = 0.0;
-  current.position.z = 0.4;
+  current.position.x = 0.10;
+  current.position.y = -0.10;
+  current.position.z = 0.22;
   current.orientation.x = 0.0;
   current.orientation.y = 1.0;
   current.orientation.z = 0.0;
@@ -214,11 +250,11 @@ TEST(MoveRelValidatorTest, FullFlowValidDeltaInsideBounds)
 
   std::string reason;
   ASSERT_TRUE(validate_move_rel_frame("base_link", reason));
-  ASSERT_TRUE(validate_move_rel_deltas(0.0, 0.0, 0.10, reason));
+  ASSERT_TRUE(validate_move_rel_deltas(0.0, 0.0, 0.03, reason));
 
-  auto target = compute_move_rel_target(current, 0.0, 0.0, 0.10);
+  auto target = compute_move_rel_target(current, 0.0, 0.0, 0.03);
 
-  EXPECT_DOUBLE_EQ(target.position.z, 0.5);
+  EXPECT_DOUBLE_EQ(target.position.z, 0.25);
   EXPECT_TRUE(validate_move_rel_target_bounds(target, reason));
   // Orientation preserved
   EXPECT_DOUBLE_EQ(target.orientation.y, 1.0);
@@ -227,17 +263,17 @@ TEST(MoveRelValidatorTest, FullFlowValidDeltaInsideBounds)
 
 TEST(MoveRelValidatorTest, FullFlowDeltaPushesTargetOutOfBounds)
 {
-  // Simulate: current near ceiling, move up 10cm → exceeds z_max
+  // Simulate: current near ceiling, move up 3cm -> exceeds z_max
   geometry_msgs::msg::Pose current;
   current.position.x = 0.0;
   current.position.y = 0.0;
-  current.position.z = 1.15;  // near kZMax = 1.2
+  current.position.z = 0.49;  // near kZMax = 0.50
   current.orientation.w = 1.0;
 
   std::string reason;
-  ASSERT_TRUE(validate_move_rel_deltas(0.0, 0.0, 0.10, reason));
+  ASSERT_TRUE(validate_move_rel_deltas(0.0, 0.0, 0.03, reason));
 
-  auto target = compute_move_rel_target(current, 0.0, 0.0, 0.10);
+  auto target = compute_move_rel_target(current, 0.0, 0.0, 0.03);
 
   EXPECT_GT(target.position.z, MoveRelLimits::kZMax);
   EXPECT_FALSE(validate_move_rel_target_bounds(target, reason));

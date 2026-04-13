@@ -1,29 +1,87 @@
-# PLACEHOLDER — đo thực tế rồi thay số
-# Frame: base_link của GP4
-# Khi chưa đo được: set dimensions lớn hơn thực tế 10-15% → planner conservative, an toàn hơn
+# HIL commissioning scene for the asymmetric GP4 cell.
+# Updated from operator RViz markup on 2026-04-12:
+# - extend and slim the left obstacle marked "1"
+# - widen the front wall keepout by roughly 15 cm
+# - add a diagonal bar above and offset from the robot
+# - add low ledges / table-edge rails at about 28 cm forward and on +X
+# Keep all geometry slightly conservative until tape-measure values are refined.
 
 collision_objects:
-
   table_surface:
     type: box
-    dimensions: [1.2, 0.8, 0.05]   # x, y, z [m] — ĐO LẠI
+    dimensions: [1.10, 0.95, 0.15]
     pose:
-      position: [0.5, 0.0, -0.03]  # tâm mặt bàn — ĐO LẠI
-      orientation: [0, 0, 0, 1]    # [x, y, z, w]
+      # Conservative assumption: tabletop reaches base_link height.
+      position: [0.10, 0.05, -0.075]
+      orientation: [0.0, 0.0, 0.0, 1.0]
     frame_id: base_link
 
-  robot_mount:
-    type: cylinder
-    dimensions: [0.15, 0.12]       # radius, height — ĐO LẠI
-    pose:
-      position: [0.0, 0.0, -0.07]
-      orientation: [0, 0, 0, 1]
-    frame_id: base_link
-
-  safety_fence_front:
+  left_keepout_panel:
     type: box
-    dimensions: [0.01, 1.5, 1.2]   # mặt phẳng cấm phía trước
+    dimensions: [0.04, 0.62, 0.70]
     pose:
-      position: [0.85, 0.0, 0.6]   # ĐO LẠI
-      orientation: [0, 0, 0, 1]
+      # Operator-marked obstacle "1": make it slimmer and stretch it along the
+      # full restricted lane on the robot's left side.
+      # Latest correction: keep the original span, but shift the whole block
+      # 12 cm farther from the robot along -X.
+      position: [-0.39, 0.11, 0.35]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    frame_id: base_link
+
+  right_wall_panel:
+    type: box
+    dimensions: [0.02, 0.46, 0.80]
+    pose:
+      # Thin wall proxy on the +x side near the (+x, +y) corner.
+      position: [0.43, 0.22, 0.40]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    frame_id: base_link
+
+  rear_wall_panel:
+    type: box
+    dimensions: [0.86, 0.02, 0.80]
+    pose:
+      # Keep the wall shifted 18 cm farther from the robot along +Y, and
+      # extend it leftward to close the visible top-side gap in the scene.
+      position: [0.06, 0.54, 0.40]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    frame_id: base_link
+
+  diagonal_upper_bar:
+    type: box
+    dimensions: [0.03, 0.78, 0.04]
+    pose:
+      # Upper rail "1": move it another 2 cm closer to the robot while
+      # keeping the same height and long-axis direction.
+      position: [0.13, 0.165, 0.685]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    frame_id: base_link
+
+  upper_robot_cross_bar:
+    type: box
+    dimensions: [0.62, 0.02, 0.02]
+    pose:
+      # Long upper bar "4": keep it at the same height as upper bar "1", but
+      # center it above joint_3, orient it perpendicular to bar "1", and move
+      # it 2 cm toward the robot rear (-Y).
+      position: [-0.001, -0.081, 0.685]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    frame_id: base_link
+
+  front_table_rail:
+    type: box
+    dimensions: [0.60, 0.03, 0.04]
+    pose:
+      # Low rail roughly 28 cm in front of the base, around 18 cm high.
+      position: [0.10, 0.31, 0.18]
+      orientation: [0.0, 0.0, 0.0, 1.0]
+    frame_id: base_link
+
+  right_table_rail:
+    type: box
+    dimensions: [0.03, 0.60, 0.04]
+    pose:
+      # Lower rail "3" stays in place but is raised 5 cm above rail "1".
+      position: [0.28, 0.10, 0.23]
+      orientation: [0.0, 0.0, 0.0, 1.0]
     frame_id: base_link

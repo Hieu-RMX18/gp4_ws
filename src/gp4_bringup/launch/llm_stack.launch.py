@@ -63,6 +63,9 @@ def generate_launch_description():
         additional_env={
             'LLM_PROVIDER': llm_provider,
         },
+        parameters=[{
+            'auto_clear_unimplemented_approval': True,
+        }],
     )
 
     diagnostic_aggregator = Node(

@@ -205,6 +205,7 @@ if(BUILD_TESTING)
         rclcpp_action
         control_msgs
         industrial_msgs
+        interfaces
         motoros2_interfaces
         trajectory_msgs
       )

@@ -1,12 +1,14 @@
 version: "2.3"
 macros:
   draw_shape:
-    availability: sim_only
+    availability: all
     requires_current_pose: false
     supported_frames:
       - base_link
-    supported_planes:
-      - xy
+    supported_workplane_modes:
+      - base
+      - tool
+      - explicit_pose
     supported_shapes:
       - square
       - triangle
@@ -15,29 +17,46 @@ macros:
       - rectangle
       - arc
       - polyline
+    default_units: m
+    default_workplane_mode: base
+    default_execution_mode: execute
     default_orientation_preset: tool-down
-    circle_segments: 32
+    max_chord_error_m: 0.0005
+    max_segment_angle_deg: 10.0
+    max_waypoints_per_chunk: 80
+    approach_distance_m: 0.01
+    retract_distance_m: 0.01
+    drawing_speed_scale: 0.06
+    travel_speed_scale: 0.06
     polygon_default_sides: 6
     polygon_min_sides: 3
     polygon_max_sides: 12
     notes:
-      - "SIM-ONLY in v2.3."
-      - "All shapes expand to PTP + CARTESIAN_PATH for smooth continuous motion."
-      - "size_m means side length for square/triangle, diameter for circle/polygon."
-      - "rectangle uses width_m + height_m."
-      - "arc uses radius_m + sweep_deg."
-      - "polyline uses explicit XYZ points."
+      - "Deterministic geometry is compiled in llm_gateway (no LLM waypoint streaming)."
+      - "All shapes expand to PTP/LIN/CARTESIAN_PATH segments with approach/retract."
+      - "Circle/arc are approximated with bounded chord error and segment-angle limits."
+      - "workplane.mode supports base/tool/explicit_pose."
 
   draw_text:
-    availability: sim_only
+    availability: all
     requires_current_pose: false
     supported_frames:
       - base_link
-    supported_planes:
-      - xy
+    supported_workplane_modes:
+      - base
+      - tool
+      - explicit_pose
+    default_units: m
+    default_workplane_mode: base
+    default_execution_mode: execute
     default_orientation_preset: tool-down
+    max_waypoints_per_chunk: 80
     approach_distance_m: 0.01
+    retract_distance_m: 0.01
+    drawing_speed_scale: 0.06
+    travel_speed_scale: 0.06
     default_char_spacing_ratio: 0.20
+    default_line_spacing_ratio: 0.50
     supported_characters:
       - A
       - B
@@ -82,6 +101,6 @@ macros:
       - /
       - " "
     notes:
-      - "SIM-ONLY in v2.3."
-      - "Each disconnected stroke expands to PTP approach + CARTESIAN_PATH draw."
-      - "Travel between strokes is handled by pen-up PTP moves to the next approach point."
+      - "Single-stroke builtin font only (A-Z, 0-9, .,,-,_ ,/ and space)."
+      - "Each disconnected stroke gets approach/draw/retract with pen-up travel."
+      - "Text rendering is deterministic in local 2D before workplane lifting."

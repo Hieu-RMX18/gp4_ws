@@ -200,6 +200,7 @@ TrajectoryExecutionResult TrajectoryExecutor::execute_blocking(
       return result;
 
     case rclcpp_action::ResultCode::CANCELED:
+      result.canceled = true;
       result.message = "FollowJointTrajectory goal canceled";
       if (!wrapped_result.result->error_string.empty())
       {

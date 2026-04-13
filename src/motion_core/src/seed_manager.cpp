@@ -40,7 +40,7 @@ bool SeedManager::get_seed_state(const std::string & primitive_family, std::vect
     return true;
   }
 
-  // V4 D2 Priority 3: named-target fallback (home, ready_down)
+  // V4 D2 Priority 3: commissioning named-target fallback (park_safe, ready)
   if (fallback_named_target_seed(seed))
   {
     RCLCPP_WARN(
@@ -149,16 +149,17 @@ bool SeedManager::fallback_named_target_seed(std::vector<double> & seed) const
 {
   seed.clear();
 
-  // V4 D2 Priority 3: Named-target fallback using known SRDF group states.
-  // 'home' target from the real GP4 robot (SRDF group_state "home").
-  // These values must match the SRDF exactly.
+  // V4 D2 Priority 3: deterministic commissioning seed used when no current
+  // joint state or cached seed is available. Keep this aligned with SRDF
+  // group_state "park_safe" so IK fallback starts from the same conservative
+  // parked posture used in simulation bringup.
   static const std::vector<double> kHomeSeed = {
-    1.5477395698141883,   // joint_1_s
-    -0.15883329466662804, // joint_2_l
-    -0.15854787143360877, // joint_3_u
+    0.0,                  // joint_1_s
+    0.55,                 // joint_2_l
+    -0.2,                 // joint_3_u
     0.0,                  // joint_4_r
-    -1.6017466450445892,  // joint_5_b
-    0.05361262853660316   // joint_6_t
+    -2.0,                 // joint_5_b
+    0.0                   // joint_6_t
   };
 
   if (kHomeSeed.size() == ordered_joint_names_.size())

@@ -11,10 +11,10 @@ namespace motion_core
 class TrajectoryPostProcessor
 {
 public:
-  // V4 G2: Internal point budget is 190 (MotoROS2 hard limit is 200)
-  static constexpr std::size_t kMaxTrajectoryPoints = 190;
-  static constexpr double kDefaultVelocityScaling = 0.3;
-  static constexpr double kDefaultAccelerationScaling = 0.2;
+  // MotoROS2 hard safety ceiling.
+  static constexpr std::size_t kMaxTrajectoryPoints = 200;
+  static constexpr double kDefaultVelocityScaling = 0.06;
+  static constexpr double kDefaultAccelerationScaling = 0.06;
 
   bool apply_totg(
     robot_trajectory::RobotTrajectory & traj,

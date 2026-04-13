@@ -135,11 +135,11 @@ properties:
   velocity_scale:
     type: number
     minimum: 0.05
-    maximum: 0.30
+    maximum: 0.06
   acceleration_scale:
     type: number
     minimum: 0.05
-    maximum: 0.30
+    maximum: 0.06
   planner_id:
     type: string
     enum:
@@ -148,6 +148,14 @@ properties:
       - OMPL_RRTConnect
   require_approval:
     type: boolean
+  plan_only:
+    type: boolean
+  chunk_index:
+    type: integer
+    minimum: 1
+  stroke_index:
+    type: integer
+    minimum: 1
   delta_x:
     type: number
   delta_y:

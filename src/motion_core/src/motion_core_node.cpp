@@ -163,7 +163,10 @@ private:
   static constexpr double kMaxVelocityScale = 0.06;
   static constexpr double kMaxAccelerationScale = 0.06;
   static constexpr double kPlanningTimeSec = 5.0;
+  // Standard Cartesian eef_step — tighter fidelity for CARTESIAN_PATH.
   static constexpr double kCartesianEefStep = 0.005;
+  // Relaxed eef_step for LIN/CIRC fallback paths to reduce point density.
+  static constexpr double kCartesianEefStepRelaxed = 0.010;
   // V4 G0: jump_threshold must be >= 1.5 in Cartesian planning config.
   static constexpr double kCartesianJumpThreshold = 1.5;
   static constexpr const char * kPlanningGroup = "gp4_arm";
@@ -220,6 +223,7 @@ private:
     // Step 3.1: New primitives added for this sprint.
     // CARTESIAN_PATH: multi-waypoint smooth path for draw_shape macros.
     return primitive == "HOME" || primitive == "PTP" || primitive == "LIN" ||
+           primitive == "CIRC" ||
            primitive == "MOVE_REL" || primitive == "CARTESIAN_PATH" ||
            primitive == "SET_SPEED" || primitive == "WAIT" || primitive == "STOP" ||
            primitive == "MOVE_JOINT" || primitive == "MOVE_JOINTS" ||
@@ -330,7 +334,8 @@ private:
 
   static bool is_geometry_sensitive_primitive(const std::string & primitive)
   {
-    return primitive == "LIN" || primitive == "MOVE_REL" || primitive == "CARTESIAN_PATH";
+    return primitive == "LIN" || primitive == "CIRC" ||
+           primitive == "MOVE_REL" || primitive == "CARTESIAN_PATH";
   }
 
   void log_joint_branch_selection(
@@ -903,7 +908,7 @@ private:
       const double fraction_for_segment =
         (index == 0U) ? cartesian_fraction : QualityGate::kFractionNotApplicable;
       std::string quality_reason;
-      if (!quality_gate_.validate_plan(segments[index], fraction_for_segment, quality_reason))
+      if (!quality_gate_.validate_plan(segments[index], fraction_for_segment, primitive, quality_reason))
       {
         std::ostringstream quality_stream;
         quality_stream << "quality gate failed for dispatch segment " << (index + 1U)
@@ -1568,7 +1573,7 @@ private:
       std::string time_parameterization_note;
       std::string ruckig_reason;
       const bool ruckig_ok =
-        trajectory_post_processor_.apply_ruckig_smoothing(robot_traj, ruckig_reason);
+        trajectory_post_processor_.apply_ruckig_smoothing(robot_traj, velocity_scale, acceleration_scale, ruckig_reason);
       const bool ruckig_applied = ruckig_ok &&
         ruckig_reason.find("unavailable") == std::string::npos &&
         ruckig_reason.find("skipped") == std::string::npos;
@@ -1648,7 +1653,8 @@ private:
     {
       planner_id = planner_router_.route_planner(
         (effective_primitive == "HOME") ? "PTP" :
-        (effective_primitive == "MOVE_REL") ? "LIN" : effective_primitive, false);
+        (effective_primitive == "MOVE_REL") ? "LIN" :
+        (effective_primitive == "CIRC") ? "CIRC" : effective_primitive, false);
     }
 
     if (planner_id.empty())
@@ -1825,8 +1831,126 @@ private:
     bool has_plan_start_state = false;
     double cartesian_fraction = QualityGate::kFractionNotApplicable;
 
-    // ── CARTESIAN_PATH: smooth multi-waypoint trajectory for draw_shape ──
-    if (effective_primitive == "CARTESIAN_PATH")
+    // ── CIRC: circular arc via Pilz — waypoints[0]=auxiliary, target_pose=final ──
+    if (effective_primitive == "CIRC")
+    {
+      if (goal->waypoints.empty())
+      {
+        abort_with_message(goal_handle, started_at,
+          "CIRC requires at least 1 auxiliary waypoint");
+        return;
+      }
+
+      // Pilz CIRC requires exactly 2 pose targets: [auxiliary_pose, target_pose]
+      geometry_msgs::msg::Pose aux_pose = goal->waypoints[0];
+      geometry_msgs::msg::Pose final_pose = goal->target_pose;
+
+      if (quaternion_norm_sq(final_pose.orientation) <= 1e-12)
+      {
+        // Reuse current orientation if final pose has no orientation
+        geometry_msgs::msg::PoseStamped current_stamped;
+        std::string current_reason;
+        if (!read_current_tcp_pose(current_stamped, current_reason, 5.0))
+        {
+          abort_with_message(goal_handle, started_at,
+            "CIRC: cannot resolve orientation for final pose: " + current_reason);
+          return;
+        }
+        final_pose.orientation = current_stamped.pose.orientation;
+      }
+
+      if (quaternion_norm_sq(aux_pose.orientation) <= 1e-12)
+      {
+        aux_pose.orientation = final_pose.orientation;
+      }
+
+      // Validate both orientations are (approximately) unit quaternions and
+      // renormalize within a 1% slack. A non-unit quaternion here indicates
+      // either a serialization bug upstream or a malformed pose — MoveIt/Pilz
+      // would silently misinterpret the rotation, so fail closed.
+      auto ensure_unit_quaternion =
+        [&](geometry_msgs::msg::Pose & pose, const char * which) -> bool
+        {
+          const double n2 = quaternion_norm_sq(pose.orientation);
+          if (n2 < 0.98 || n2 > 1.02)
+          {
+            abort_with_message(
+              goal_handle,
+              started_at,
+              std::string("CIRC: ") + which +
+                " orientation is not a unit quaternion (norm^2=" +
+                std::to_string(n2) + ")");
+            return false;
+          }
+          const double n = std::sqrt(n2);
+          pose.orientation.x /= n;
+          pose.orientation.y /= n;
+          pose.orientation.z /= n;
+          pose.orientation.w /= n;
+          return true;
+        };
+      if (!ensure_unit_quaternion(final_pose, "target_pose"))
+      {
+        return;
+      }
+      if (!ensure_unit_quaternion(aux_pose, "auxiliary waypoint"))
+      {
+        return;
+      }
+
+      // Fail-closed planner routing: CIRC must be planned by Pilz CIRC.
+      // A computeCartesianPath fallback here would produce a line, not an
+      // arc — silently wrong. Abort instead if Pilz CIRC was not selected
+      // (e.g. plugin load failure, config drift).
+      if (planner_selection.pipeline_id != "pilz_industrial_motion_planner" ||
+          planner_selection.planner_id != "CIRC")
+      {
+        abort_with_message(
+          goal_handle,
+          started_at,
+          std::string("CIRC: planner routing failed, expected pilz CIRC got pipeline='") +
+            planner_selection.pipeline_id + "' planner='" +
+            planner_selection.planner_id + "'");
+        return;
+      }
+
+      RCLCPP_INFO(get_logger(),
+        "CIRC: planning arc via Pilz CIRC planner");
+
+      std::vector<geometry_msgs::msg::Pose> circ_poses;
+      circ_poses.push_back(aux_pose);
+      circ_poses.push_back(final_pose);
+      move_group_->setPoseTargets(circ_poses);
+
+      moveit::planning_interface::MoveGroupInterface::Plan plan;
+      const auto plan_result = plan_with_interruption(
+        plan,
+        goal_handle,
+        goal_sequence,
+        "CIRC planning");
+      if (plan_result.status == StageStatus::kCanceled)
+      {
+        cancel_with_message(goal_handle, started_at, plan_result.reason);
+        return;
+      }
+      if (plan_result.status != StageStatus::kSuccess)
+      {
+        abort_with_message(goal_handle, started_at,
+          "CIRC: Pilz CIRC planning failed: " + plan_result.reason);
+        return;
+      }
+
+      planned_trajectory_msg = plan.trajectory_;
+      plan_start_state_msg = plan.start_state_;
+      has_plan_start_state = true;
+      cartesian_fraction = 1.0;  // Pilz CIRC is exact; fraction implicit 1.0
+
+      RCLCPP_INFO(get_logger(),
+        "CIRC: planned fraction=%.3f, points=%zu",
+        cartesian_fraction,
+        planned_trajectory_msg.joint_trajectory.points.size());
+    }
+    else if (effective_primitive == "CARTESIAN_PATH")
     {
       if (goal->waypoints.empty())
       {
@@ -1986,7 +2110,7 @@ private:
 
           cartesian_fraction = move_group_->computeCartesianPath(
             waypoints,
-            kCartesianEefStep,
+            kCartesianEefStepRelaxed,
             kCartesianJumpThreshold,
             planned_trajectory_msg,
             true);
@@ -2015,7 +2139,7 @@ private:
 
         cartesian_fraction = move_group_->computeCartesianPath(
           waypoints,
-          kCartesianEefStep,
+          kCartesianEefStepRelaxed,
           kCartesianJumpThreshold,
           planned_trajectory_msg,
           true);
@@ -2063,8 +2187,8 @@ private:
 
     std::string time_parameterization_note;
     std::string ruckig_reason;
-    const bool ruckig_ok =
-      trajectory_post_processor_.apply_ruckig_smoothing(robot_trajectory, ruckig_reason);
+      const bool ruckig_ok =
+      trajectory_post_processor_.apply_ruckig_smoothing(robot_trajectory, velocity_scale, acceleration_scale, ruckig_reason);
     const bool ruckig_applied = ruckig_ok &&
       ruckig_reason.find("unavailable") == std::string::npos &&
       ruckig_reason.find("skipped") == std::string::npos;

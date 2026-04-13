@@ -29,6 +29,8 @@ public:
 
   bool apply_ruckig_smoothing(
     robot_trajectory::RobotTrajectory & traj,
+    double vel_scale,
+    double acc_scale,
     std::string & reason) const;
 };
 }  // namespace motion_core

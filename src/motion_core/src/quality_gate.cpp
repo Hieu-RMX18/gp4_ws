@@ -1,9 +1,28 @@
 #include "motion_core/quality_gate.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <string>
+
+#include <trajectory_msgs/msg/joint_trajectory.hpp>
 
 namespace motion_core
 {
+
+double QualityGate::minimum_cartesian_fraction_for_primitive(const std::string & primitive)
+{
+  if (primitive == "CARTESIAN_PATH") {
+    return kMinimumFractionCartesianPath;
+  }
+  if (primitive == "LIN") {
+    return kMinimumFractionLin;
+  }
+  if (primitive == "CIRC") {
+    return kMinimumFractionCIRC;
+  }
+  return kMinimumCartesianFraction;
+}
+
 QualityGate::QualityGate(std::size_t max_trajectory_points, double minimum_cartesian_fraction)
 : max_trajectory_points_(max_trajectory_points),
   minimum_cartesian_fraction_(minimum_cartesian_fraction)
@@ -13,6 +32,7 @@ QualityGate::QualityGate(std::size_t max_trajectory_points, double minimum_carte
 bool QualityGate::validate_plan(
   const trajectory_msgs::msg::JointTrajectory & traj,
   double fraction,
+  const std::string & primitive,
   std::string & reason) const
 {
   reason.clear();
@@ -49,9 +69,10 @@ bool QualityGate::validate_plan(
       return false;
     }
 
-    if (fraction < minimum_cartesian_fraction_)
+    const double min_fraction = minimum_cartesian_fraction_for_primitive(primitive);
+    if (fraction < min_fraction)
     {
-      reason = "cartesian fraction below minimum threshold";
+      reason = "cartesian fraction below minimum threshold for primitive";
       return false;
     }
   }

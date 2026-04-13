@@ -27,6 +27,7 @@ FROZEN_SEMANTIC_INTENTS = frozenset({
     "move_relative",
     "absolute_move_ptp",
     "absolute_move_lin",
+    "circular_move",
     "move_joint",
     "move_joints",
     "io_set",
@@ -109,7 +110,7 @@ move_relative
   Move BY a relative amount from current position.
   Required: delta (object with x, y, z — all floats in meters; set unused axes to 0.0)
   Optional: reference_frame (default: "base_link")
-  Safety: single MOVE_REL translation norm must stay ≤ 0.03 m during commissioning.
+  Safety: single MOVE_REL translation norm must stay ≤ 0.08 m during commissioning.
   VN: "nâng lên", "hạ xuống", "dịch lên/xuống", "nhích lên", "đẩy lên", "kéo xuống"
   Axis mapping:
     up/lên/nâng/nhấc     → delta.z positive
@@ -119,7 +120,7 @@ move_relative
     forward/trước/tiến    → delta.x positive
     back/sau/lùi          → delta.x negative
   Unit conversions: 1 phân = 1 cm = 0.01 m, 1 mm = 0.001 m
-  → {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.03}}
+  → {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}}
 
 absolute_move_ptp
   Move end-effector to absolute Cartesian position (joint-optimized path).
@@ -139,6 +140,13 @@ absolute_move_lin
   Same slots as absolute_move_ptp. Trigger when user explicitly wants straight path.
   VN: "đi thẳng tới", "đường thẳng đến", "kéo thẳng", "theo đường thẳng"
   → {"intent": "absolute_move_lin", "target_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.5}}}
+
+circular_move
+  Circular arc motion through an auxiliary waypoint to a target position.
+  Required: target_pose.position (final position), auxiliary_pose.position (arc via-point)
+  Optional: orientation_preset, keep_current_orientation, velocity_scale, reference_frame
+  VN:"đi vòng", "vẽ cung", "đi theo cung tròn", "di chuyển theo cung", "arc đến"
+  → {"intent": "circular_move", "target_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "auxiliary_pose": {"position": {"x": 0.32, "y": 0.05, "z": 0.42}}}
 
 move_joint
   Move a single joint to a specific angle.
@@ -220,14 +228,14 @@ User: "đưa nó về chỗ cũ đi"
 User: "park it"
 → {"intent": "go_home"}
 
-User: "nâng lên 3cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.03}}
+User: "nâng lên 5cm"
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}}
 
-User: "đưa nó lên cao thêm 3 phân"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.03}}
+User: "đưa nó lên cao thêm 5 phân"
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}}
 
-User: "lift 3 centimeters"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.03}}
+User: "lift 5 centimeters"
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}}
 
 User: "go up a bit"
 → {"error": "MISSING_SLOT", "intent": "move_relative",
@@ -237,11 +245,11 @@ User: "hạ xuống một chút"
 → {"error": "MISSING_SLOT", "intent": "move_relative",
    "missing_fields": ["delta"], "hint": "Hạ xuống bao nhiêu cm?"}
 
-User: "lower the arm 3cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": -0.03}}
+User: "lower the arm 5cm"
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": -0.05}}
 
-User: "dịch sang trái 2cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": -0.02, "z": 0.0}}
+User: "dịch sang trái 4cm"
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": -0.04, "z": 0.0}}
 
 User: "dịch sang trái"
 → {"error": "MISSING_SLOT", "intent": "move_relative",
@@ -321,7 +329,7 @@ User: "write @@@"
 → {"error": "UNSUPPORTED_OR_AMBIGUOUS_COMMAND"}
 
 ══════════════════════════════════════════════════════
-WORKSPACE LIMITS (meters): x: -0.25–0.38, y: -0.25–0.34, z: 0.10–0.50
+WORKSPACE LIMITS (meters): x: -0.25–0.38, y: -0.25–0.38, z: 0.20–0.56
 UNIT CONVERSIONS: 1 phân = 1 cm = 0.01 m | 1 mm = 0.001 m
 VELOCITY SCALE: 0.05 (slow) to 0.06 (fast)
 ORIENTATION PRESETS: tool-down | tool-forward | tool-up

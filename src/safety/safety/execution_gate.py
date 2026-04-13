@@ -8,7 +8,8 @@ from .workspace_guard import WorkspaceGuard
 
 # MOVE_REL delta safety limits — must match motion_core/move_rel_validator.hpp.
 # Defense-in-depth: gate rejects bad deltas before they reach motion_core.
-_MOVE_REL_MAX_DELTA_NORM = 0.03
+# This pass raises from 0.03 to 0.08 to enable practical short task nudges.
+_MOVE_REL_MAX_DELTA_NORM = 0.08
 _MOVE_REL_ALLOWED_FRAMES = {"", "base_link"}
 
 
@@ -24,7 +25,7 @@ class ExecutionGate:
     computed from (current_pose + delta) inside motion_core at planning
     time.  Fail-closed is maintained by three layers of defense:
 
-      1. This gate validates delta magnitude (≤ 0.03 m) and reference
+      1. This gate validates delta magnitude (≤ 0.08 m) and reference
          frame (base_link only) right here — catching bad commands before
          they reach motion_core.
       2. motion_core validates the resolved target against the same
@@ -40,12 +41,19 @@ class ExecutionGate:
         self.node = node
         self.validator = validator
         self.guard = guard
+        motion_limits = self.validator.safety_rules.get("motion_limits", {})
+        using_fallback_move_rel_limit = "max_move_rel_translation" not in motion_limits
         self._max_move_rel_delta_norm = float(
-            self.validator.safety_rules.get("motion_limits", {}).get(
+            motion_limits.get(
                 "max_move_rel_translation",
                 _MOVE_REL_MAX_DELTA_NORM,
             )
         )
+        if using_fallback_move_rel_limit:
+            self.node.get_logger().warn(
+                "motion_limits.max_move_rel_translation missing; "
+                f"using fallback {_MOVE_REL_MAX_DELTA_NORM:.2f} m"
+            )
         # Reference to SafetyManager for readiness checks
         self._safety_manager = safety_manager
 
@@ -137,6 +145,40 @@ class ExecutionGate:
                 response.reason = reason_pose
                 response.sanitized_json = ""
                 return response
+
+        # 3c. CIRC: validate auxiliary waypoint[0] workspace bounds (fail-closed)
+        if prim_type == "CIRC":
+            waypoints = cmd_data.get("waypoints", [])
+            if waypoints and len(waypoints) >= 1:
+                aux_wp = waypoints[0]
+                if isinstance(aux_wp, dict) and "position" in aux_wp:
+                    try:
+                        ax = float(aux_wp["position"].get("x", 0.0))
+                        ay = float(aux_wp["position"].get("y", 0.0))
+                        az = float(aux_wp["position"].get("z", 0.0))
+                        # Build a temporary pose for WorkspaceGuard
+                        aux_pose = request.target_pose.__class__()
+                        aux_pose.position.x = ax
+                        aux_pose.position.y = ay
+                        aux_pose.position.z = az
+                        aux_pose.orientation.x = 0.0
+                        aux_pose.orientation.y = 0.0
+                        aux_pose.orientation.z = 0.0
+                        aux_pose.orientation.w = 1.0
+                        aux_is_valid, aux_reason = self.guard.check_pose(aux_pose)
+                        if not aux_is_valid:
+                            self.node.get_logger().warn(
+                                f"CIRC auxiliary waypoint validation failed: {aux_reason}")
+                            response.valid = False
+                            response.reason = f"CIRC auxiliary pose: {aux_reason}"
+                            response.sanitized_json = ""
+                            return response
+                    except (TypeError, ValueError) as e:
+                        self.node.get_logger().warn(f"CIRC auxiliary waypoint parse error: {e}")
+                        response.valid = False
+                        response.reason = f"CIRC auxiliary waypoint: parse error"
+                        response.sanitized_json = ""
+                        return response
 
         # 4. Valid command
         response.valid = True

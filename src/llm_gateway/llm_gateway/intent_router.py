@@ -183,6 +183,8 @@ class IntentRouter:
             self._validate_reference_frame(reference_frame)
             command["reference_frame"] = reference_frame
             return command
+        if intent == "circular_move":
+            return self._route_circular_move(payload)
 
         raise ValueError(f"unsupported semantic intent '{intent}'")
 
@@ -201,6 +203,41 @@ class IntentRouter:
             orientation_preset=payload.get("orientation_preset"),
             keep_current_orientation=payload.get("keep_current_orientation"),
         )
+        return command
+
+    def _route_circular_move(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert circular_move semantic intent to CIRC primitive.
+
+        CIRC requires:
+          - target_pose: final arc endpoint
+          - waypoints: [auxiliary_pose] — the arc via-point
+        """
+        target_pose = payload.get("target_pose")
+        if not isinstance(target_pose, dict):
+            raise ValueError("circular_move requires target_pose.")
+
+        auxiliary_pose = payload.get("auxiliary_pose")
+        if not isinstance(auxiliary_pose, dict):
+            raise ValueError("circular_move requires auxiliary_pose (arc via-point).")
+
+        reference_frame = payload.get("reference_frame", _FRAME_BASE_LINK)
+        self._validate_reference_frame(reference_frame)
+
+        resolved_target = self._resolve_target_pose(
+            target_pose=target_pose,
+            orientation_preset=payload.get("orientation_preset"),
+            keep_current_orientation=payload.get("keep_current_orientation"),
+        )
+        resolved_auxiliary = self._resolve_target_pose(
+            target_pose=auxiliary_pose,
+            orientation_preset=payload.get("orientation_preset"),
+            keep_current_orientation=payload.get("keep_current_orientation"),
+        )
+
+        command = self._base_command("CIRC", payload)
+        command["reference_frame"] = reference_frame
+        command["target_pose"] = resolved_target
+        command["waypoints"] = [resolved_auxiliary]
         return command
 
     def _route_move_relative(self, payload: Dict[str, Any]) -> Dict[str, Any]:

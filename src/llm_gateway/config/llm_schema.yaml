@@ -11,6 +11,7 @@ properties:
       - HOME
       - PTP
       - LIN
+      - CIRC
       - CARTESIAN_PATH
       - MOVE_REL
       - GET_POSE
@@ -145,6 +146,7 @@ properties:
     enum:
       - PILZ_LIN
       - PILZ_PTP
+      - PILZ_CIRC
       - OMPL_RRTConnect
   require_approval:
     type: boolean
@@ -192,6 +194,18 @@ allOf:
     then:
       required:
         - target_pose
+  - if:
+      properties:
+        primitive_type:
+          const: CIRC
+    then:
+      required:
+        - target_pose
+        - waypoints
+      properties:
+        waypoints:
+          minItems: 1
+          maxItems: 1
   - if:
       properties:
         primitive_type:

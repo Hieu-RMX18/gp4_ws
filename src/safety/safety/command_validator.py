@@ -40,21 +40,28 @@ class CommandValidator:
         if primitive_type in _VELOCITY_BYPASS_PRIMITIVES:
             return True, ""
 
-        velocity_scale = cmd.get("velocity_scale", 1.0)
-        try:
-            velocity_scale = float(velocity_scale)
-        except (ValueError, TypeError):
-            return False, "Invalid velocity_scale format"
-
-        if velocity_scale > self.max_velocity:
-            return False, f"velocity_scale {velocity_scale} exceeds max allowed {self.max_velocity}"
-            
-        if velocity_scale <= 0.0:
-            return False, "velocity_scale must be positive"
-
-        if "acceleration_scale" in cmd:
+        # Policy-aware defaulting: absent scale → use the safety policy ceiling.
+        # This prevents a missing field from being silently treated as 100% speed.
+        velocity_scale = cmd.get("velocity_scale")
+        if velocity_scale is not None:
             try:
-                acceleration_scale = float(cmd["acceleration_scale"])
+                velocity_scale = float(velocity_scale)
+            except (ValueError, TypeError):
+                return False, "Invalid velocity_scale format"
+
+            if velocity_scale > self.max_velocity:
+                return False, f"velocity_scale {velocity_scale} exceeds max allowed {self.max_velocity}"
+
+            if velocity_scale <= 0.0:
+                return False, "velocity_scale must be positive"
+        # else: absent field is acceptable here; motion_core resolves the actual
+        # default at execution time via TrajectoryPostProcessor::kDefaultVelocityScaling.
+        # This validator only checks for out-of-bounds or invalid values.
+
+        acceleration_scale = cmd.get("acceleration_scale")
+        if acceleration_scale is not None:
+            try:
+                acceleration_scale = float(acceleration_scale)
             except (ValueError, TypeError):
                 return False, "Invalid acceleration_scale format"
 
@@ -66,5 +73,6 @@ class CommandValidator:
 
             if acceleration_scale <= 0.0:
                 return False, "acceleration_scale must be positive"
+        # else: absent field is acceptable; motion_core resolves default at execution time.
 
         return True, ""

@@ -143,6 +143,7 @@ class Normalizer:
     _PLANNER_DEFAULTS = {
         "LIN": "PILZ_LIN",
         "PTP": "PILZ_PTP",
+        "CIRC": "PILZ_CIRC",
         "CARTESIAN_PATH": "PILZ_LIN",
         "HOME": "PILZ_PTP",
         "MOVE_REL": "PILZ_LIN",
@@ -204,6 +205,20 @@ class Normalizer:
             waypoints_msg = []
             for wp in normalized["waypoints"]:
                 waypoints_msg.append(normalize_pose(wp))
+            normalized["waypoints_msg"] = waypoints_msg
+
+        # CIRC: normalize target_pose and auxiliary waypoint (exactly 1 required)
+        if primitive_type == "CIRC":
+            if "target_pose" not in normalized:
+                raise ValueError("CIRC requires target_pose.")
+            normalized["target_pose_msg"] = normalize_pose(normalized["target_pose"])
+            if "waypoints" not in normalized:
+                raise ValueError("CIRC requires waypoints.")
+            if not isinstance(normalized["waypoints"], list):
+                raise ValueError("CIRC waypoints must be a list.")
+            if len(normalized["waypoints"]) != 1:
+                raise ValueError("CIRC requires exactly 1 auxiliary waypoint.")
+            waypoints_msg = [normalize_pose(normalized["waypoints"][0])]
             normalized["waypoints_msg"] = waypoints_msg
 
         # MOVE_REL: passthrough delta fields as-is (meters, no unit detection)

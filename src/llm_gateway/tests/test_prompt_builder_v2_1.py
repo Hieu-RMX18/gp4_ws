@@ -39,6 +39,7 @@ _EXPECTED_INTENTS = frozenset({
     "move_relative",
     "absolute_move_ptp",
     "absolute_move_lin",
+    "circular_move",
     "move_joint",
     "move_joints",
     "io_set",
@@ -119,8 +120,8 @@ def test_prompt_includes_unsupported_error_format(prompt: str):
 
 def test_prompt_includes_workspace_limits(prompt: str):
     assert "-0.25" in prompt and "0.38" in prompt, "Workspace x-limits missing"
-    assert "-0.25" in prompt and "0.34" in prompt, "Workspace y-limits missing"
-    assert "0.10" in prompt and "0.50" in prompt, "Workspace z-limits missing"
+    assert "-0.25" in prompt and "0.38" in prompt, "Workspace y-limits missing"
+    assert "0.20" in prompt and "0.56" in prompt, "Workspace z-limits missing"
 
 def test_prompt_includes_velocity_scale_range(prompt: str):
     assert "0.05" in prompt and "0.06" in prompt, "Velocity scale range missing"

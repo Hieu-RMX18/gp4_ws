@@ -85,8 +85,8 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
                 "position": {"x": 0.35, "y": 0.1, "z": 0.2},
                 "orientation": {"x": 0.0, "y": 0.707, "z": 0.0, "w": 0.707},
             },
-            "velocity_scale": 0.15,
-            "acceleration_scale": 0.1,
+            "velocity_scale": 0.06,
+            "acceleration_scale": 0.06,
             "planner_id": "PILZ_LIN",
             "require_approval": True,
         }
@@ -111,15 +111,15 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
     node.process_intent("di chuyển thẳng tới x 0.35 y 0.1 z 0.2")
 
     goal = node._execute_client.send_goal_async.call_args.args[0]
-    assert goal.velocity_scale == 0.15
+    assert goal.velocity_scale == 0.06
     assert goal.require_approval is False
     # Full flow now completes: debug_messages has both 'validated' and 'succeeded'
     validated_msg = next(m for m in debug_messages if m["status"] == "validated")
-    assert validated_msg["validated_command"]["velocity_scale"] == 0.15
+    assert validated_msg["validated_command"]["velocity_scale"] == 0.06
     assert validated_msg["validated_command"]["require_approval"] is False
     assert "dispatched" in statuses
     assert command_messages[0]["primitive_type"] == "LIN"
-    assert command_messages[0]["velocity_scale"] == 0.15
+    assert command_messages[0]["velocity_scale"] == 0.06
 
     node.destroy_node()
 
@@ -135,8 +135,8 @@ def test_gateway_preserves_require_approval_when_auto_clear_disabled(openai_payl
     sanitized_json = json.dumps(
         {
             "primitive_type": "HOME",
-            "velocity_scale": 0.10,
-            "acceleration_scale": 0.10,
+            "velocity_scale": 0.06,
+            "acceleration_scale": 0.06,
             "planner_id": "PILZ_PTP",
             "require_approval": True,
         }
@@ -270,7 +270,7 @@ def test_gateway_routes_semantic_ir_single_command():
                                     "position": {"x": 0.35, "y": 0.10, "z": 0.25}
                                 },
                                 "reference_frame": "base_link",
-                                "velocity_scale": 0.15,
+                                "velocity_scale": 0.06,
                             }
                         ),
                     }

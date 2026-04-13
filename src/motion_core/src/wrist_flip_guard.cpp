@@ -1,6 +1,7 @@
 #include "motion_core/wrist_flip_guard.hpp"
 
 #include <cmath>
+#include <iomanip>
 #include <sstream>
 
 namespace motion_core {
@@ -92,9 +93,15 @@ bool WristFlipGuard::check_trajectory(
 
       if (delta > threshold) {
         std::ostringstream stream;
-        stream << "wrist flip guard reject at segment " << (i - 1) << "->" << i
-               << ", joint '" << traj.joint_names[joint_idx]
-               << "': delta=" << delta << " rad > " << threshold << " rad";
+        stream << "wrist_flip_guard reject: "
+               << "joint_idx=" << joint_idx
+               << " joint='" << traj.joint_names[joint_idx] << "'"
+               << " point=" << (i - 1) << "->" << i
+               << " delta=" << std::fixed << std::setprecision(6) << delta << " rad"
+               << " threshold=" << std::fixed << std::setprecision(6) << threshold << " rad"
+               << " (limit_type="
+               << (joint_idx < 3 ? "J123" : (joint_idx < 5 ? "J45" : "J6"))
+               << ")";
         reason = stream.str();
         return false;
       }
@@ -158,12 +165,12 @@ bool WristFlipGuard::check_wrist_sign_flips(
           ++consecutive_flips;
           if (consecutive_flips > kMaxConsecutiveSignFlips) {
             std::ostringstream stream;
-            stream << "wrist sign-flip reject: joint '"
-                   << traj.joint_names[joint_idx] << "' has "
-                   << consecutive_flips
-                   << " consecutive sign reversals (threshold="
-                   << kMaxConsecutiveSignFlips
-                   << ") — indicates unstable wrist branch";
+            stream << "wrist_sign_flip reject: "
+                   << "joint_idx=" << joint_idx
+                   << " joint='" << traj.joint_names[joint_idx] << "'"
+                   << " consecutive_flips=" << consecutive_flips
+                   << " threshold=" << kMaxConsecutiveSignFlips
+                   << " — indicates unstable wrist branch selection";
             reason = stream.str();
             return false;
           }

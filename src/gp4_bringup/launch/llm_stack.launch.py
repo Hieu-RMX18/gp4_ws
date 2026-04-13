@@ -4,7 +4,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler, SetEnvironmentVariable
 from launch.event_handlers import OnProcessStart
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
@@ -20,9 +20,19 @@ def generate_launch_description():
         default_value='/tmp/gp4_audit',
         description='Directory used by supervisor audit_logger for rosbag2 and JSONL output.',
     )
+    # SAFETY: approval auto-clear is ONLY enabled for sim/fake-hardware.
+    # Real hardware MUST require explicit approval. This argument is forwarded
+    # from system.launch.py so that the auto_clear parameter tracks
+    # the hardware mode consistently.
+    use_fake_hardware_arg = DeclareLaunchArgument(
+        'use_fake_hardware',
+        default_value='false',
+        description='When true, enables auto_clear_unimplemented_approval for sim compatibility.',
+    )
 
     llm_provider = LaunchConfiguration('llm_provider')
     audit_log_path = LaunchConfiguration('audit_log_path')
+    use_fake_hardware = LaunchConfiguration('use_fake_hardware')
     supervisor_share = get_package_share_directory('supervisor')
     analyzers_config = os.path.join(
         supervisor_share,
@@ -55,6 +65,12 @@ def generate_launch_description():
         ],
     )
 
+    # SAFETY: auto_clear_unimplemented_approval is gated by use_fake_hardware.
+    # When use_fake_hardware is false (real hardware), approval is NEVER auto-cleared.
+    auto_clear_value = PythonExpression(
+        ["'", use_fake_hardware, "'.lower() == 'true'"]
+    )
+
     llm_gateway_node = Node(
         package='llm_gateway',
         executable='llm_gateway_node',
@@ -64,7 +80,7 @@ def generate_launch_description():
             'LLM_PROVIDER': llm_provider,
         },
         parameters=[{
-            'auto_clear_unimplemented_approval': True,
+            'auto_clear_unimplemented_approval': auto_clear_value,
         }],
     )
 
@@ -77,9 +93,9 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'),
         llm_provider_arg,
         audit_log_path_arg,
+        use_fake_hardware_arg,
         safety_node,
         RegisterEventHandler(
             OnProcessStart(

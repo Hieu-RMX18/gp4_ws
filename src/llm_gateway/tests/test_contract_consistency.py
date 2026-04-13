@@ -27,6 +27,7 @@ _FROZEN_PUBLIC_PRIMITIVES = {
     "HOME",
     "PTP",
     "LIN",
+    "CIRC",
     "CARTESIAN_PATH",
     "MOVE_REL",
     "GET_POSE",
@@ -60,6 +61,7 @@ _INTENT_TO_PRIMITIVES = {
     "move_relative": {"MOVE_REL"},
     "absolute_move_ptp": {"PTP"},
     "absolute_move_lin": {"LIN"},
+    "circular_move": {"CIRC"},
     "move_joint": {"MOVE_JOINT"},
     "move_joints": {"MOVE_JOINTS"},
     "io_set": {"IO_SET"},
@@ -117,13 +119,21 @@ def test_prompt_builder_mentions_all_semantic_intents():
 
 
 def test_intent_to_primitive_mapping_covers_all_primitives():
-    """Every frozen public primitive must be producible by at least one intent."""
+    """Every frozen public primitive must be producible by at least one intent.
+
+    Primitives in _DIRECT_ONLY_PRIMITIVES are valid public primitives but only
+    reachable via the raw command path (/llm_raw_command), not through a
+    semantic intent.  They are excluded from intent-coverage checks.
+    """
+    # All public primitives are now reachable via a semantic intent.
+    _DIRECT_ONLY_PRIMITIVES: set = set()
     producible = set()
     for primitive_set in _INTENT_TO_PRIMITIVES.values():
         producible |= primitive_set
-    assert producible >= _FROZEN_PUBLIC_PRIMITIVES, (
+    intent_required = _FROZEN_PUBLIC_PRIMITIVES - _DIRECT_ONLY_PRIMITIVES
+    assert producible >= intent_required, (
         f"Intent-to-primitive mapping does not cover all primitives.\n"
-        f"  Uncovered: {_FROZEN_PUBLIC_PRIMITIVES - producible}"
+        f"  Uncovered: {intent_required - producible}"
     )
 
 

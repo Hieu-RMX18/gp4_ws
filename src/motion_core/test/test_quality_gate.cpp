@@ -34,7 +34,8 @@ TEST(QualityGateTest, RejectsPlanWithMoreThanTwoHundredPoints)
   const auto traj = make_valid_trajectory(201);
 
   std::string reason;
-  EXPECT_FALSE(gate.validate_plan(traj, QualityGate::kFractionNotApplicable, reason));
+  // Point limit check happens before fraction check; primitive can be any.
+  EXPECT_FALSE(gate.validate_plan(traj, QualityGate::kFractionNotApplicable, "LIN", reason));
   EXPECT_EQ(reason, "trajectory exceeds point limit");
 }
 
@@ -44,8 +45,47 @@ TEST(QualityGateTest, RejectsCartesianPlanWhenFractionTooLow)
   const auto traj = make_valid_trajectory(2);
 
   std::string reason;
-  EXPECT_FALSE(gate.validate_plan(traj, 0.80, reason));
-  EXPECT_EQ(reason, "cartesian fraction below minimum threshold");
+  // LIN fraction threshold is 0.90; 0.80 should be rejected.
+  EXPECT_FALSE(gate.validate_plan(traj, 0.80, "LIN", reason));
+  EXPECT_EQ(reason, "cartesian fraction below minimum threshold for primitive");
+}
+
+TEST(QualityGateTest, AcceptsCircWhenFractionAboveCircThreshold)
+{
+  const QualityGate gate;
+  const auto traj = make_valid_trajectory(2);
+
+  std::string reason;
+  // CIRC primitive-specific threshold is kMinimumFractionCIRC.
+  // A fraction equal to 1.0 must pass regardless of the LIN threshold.
+  EXPECT_TRUE(gate.validate_plan(traj, 1.0, "CIRC", reason));
+  EXPECT_TRUE(reason.empty());
+}
+
+TEST(QualityGateTest, RejectsCircWhenFractionBelowCircThreshold)
+{
+  const QualityGate gate;
+  const auto traj = make_valid_trajectory(2);
+
+  std::string reason;
+  // 0.5 is below any sensible CIRC acceptance threshold.
+  EXPECT_FALSE(gate.validate_plan(traj, 0.5, "CIRC", reason));
+  EXPECT_EQ(reason, "cartesian fraction below minimum threshold for primitive");
+}
+
+TEST(QualityGateTest, PrimitiveDispatchRoutesDifferentThresholds)
+{
+  // Same fraction, different primitive: ensures per-primitive lookup is wired.
+  const double lin_min = QualityGate::minimum_cartesian_fraction_for_primitive("LIN");
+  const double circ_min = QualityGate::minimum_cartesian_fraction_for_primitive("CIRC");
+  const double cart_min =
+    QualityGate::minimum_cartesian_fraction_for_primitive("CARTESIAN_PATH");
+  const double fallback = QualityGate::minimum_cartesian_fraction_for_primitive("UNKNOWN");
+
+  EXPECT_GT(lin_min, 0.0);
+  EXPECT_GT(circ_min, 0.0);
+  EXPECT_GT(cart_min, 0.0);
+  EXPECT_GT(fallback, 0.0);
 }
 }  // namespace
 }  // namespace motion_core

@@ -11,7 +11,7 @@ workspace_bounds:
   y_min: -0.25
   y_max:  0.38
   z_min:  0.20
-  z_max:  0.45
+  z_max:  0.56
 
 # Backward-compatible keys still used by safety.command_validator.
 joint_limits_override:
@@ -22,7 +22,7 @@ joint_limits_override:
 motion_limits:
   max_velocity_scale: 0.06
   max_acceleration_scale: 0.06
-  max_move_rel_translation: 0.03
+  max_move_rel_translation: 0.08
 
 forbidden_zones:
   - name: table_clearance_guard

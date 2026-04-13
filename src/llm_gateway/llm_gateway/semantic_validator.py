@@ -13,15 +13,17 @@ class SemanticValidator:
     """Enforce phase-specific primitive, workspace, and scaling constraints."""
 
     _ALLOWED_PRIMITIVES = {
-        "HOME", "PTP", "LIN", "MOVE_REL", "GET_POSE", "CARTESIAN_PATH",
+        "HOME", "PTP", "LIN", "CIRC", "MOVE_REL", "GET_POSE", "CARTESIAN_PATH",
         "SET_SPEED", "WAIT", "STOP", "MOVE_JOINT", "MOVE_JOINTS",
         "IO_SET", "ALARM_RESET",
     }
     _MIN_VELOCITY_SCALE = 0.05
     _MAX_VELOCITY_SCALE = 0.06
 
-    # MOVE_REL: max single-command translation norm (meters)
-    _MAX_MOVE_REL_DELTA = 0.03
+    # MOVE_REL: max single-command translation norm (meters).
+    # Fallback; runtime loads from safety_rules.yaml motion_limits.max_move_rel_translation.
+    # This pass raises fallback from 0.03 to 0.08.
+    _MAX_MOVE_REL_DELTA = 0.08
 
     # GP4 has 6 joints (0..5)
     _NUM_JOINTS = 6
@@ -29,8 +31,8 @@ class SemanticValidator:
     # Fallback bounds — overridden by safety_rules.yaml at construction
     _DEFAULT_BOUNDS = {
         "x": (-0.25, 0.38),
-        "y": (-0.25, 0.34),
-        "z": (0.10, 0.50),
+        "y": (-0.25, 0.38),
+        "z": (0.20, 0.56),
     }
 
     def __init__(self, safety_rules: dict | None = None):
@@ -130,6 +132,22 @@ class SemanticValidator:
                 raise ValueError(
                     f"IO_SET: io_value must be 0 or 1, got {io_val}."
                 )
+            return True
+
+        # ── CIRC: circular motion via Pilz — target_pose + 1 auxiliary waypoint ──
+        if primitive_type == "CIRC":
+            waypoints = command.get("waypoints_msg")
+            if not waypoints:
+                raise ValueError("CIRC requires non-empty waypoints (exactly 1 auxiliary pose).")
+            if len(waypoints) != 1:
+                raise ValueError(f"CIRC requires exactly 1 auxiliary waypoint, got {len(waypoints)}.")
+            if "target_pose_msg" not in command:
+                raise ValueError("CIRC requires target_pose_msg (final pose).")
+            self._validate_pose(command["target_pose_msg"])
+            try:
+                self._validate_pose(waypoints[0])
+            except ValueError as e:
+                raise ValueError(f"CIRC auxiliary waypoint[0]: {e}") from e
             return True
 
         # ── MOVE_JOINT: validate joint_index and joint_angle ──

@@ -26,7 +26,7 @@ optional, internal-only, or deferred in the GP4 thesis/demo system.
 | 10 | `MOVE_JOINTS`          | **PUBLIC**        | ❌¹  | ❌¹  | ❌¹        | ✅     | ✅          | ✅     | ✅          | ✅   |
 | 11 | `IO_SET`               | **PUBLIC**        | ❌¹  | ❌¹  | ❌¹        | ✅     | ✅          | ✅     | ✅          | ✅   |
 | 12 | `ALARM_RESET`          | **PUBLIC**        | ❌¹  | ❌¹  | ❌¹        | ✅     | ✅          | ✅     | ✅          | ✅   |
-| 13 | `CIRC`                 | **INTERNAL**      | ✅   | ✅   | ✅         | ❌     | ❌          | ❌     | ❌          | ✅   |
+| 13 | `CIRC`                 | **PUBLIC**        | ✅   | ✅   | ✅         | ✅     | ✅          | ✅     | ✅          | ✅   |
 | 14 | `approach`             | **INTERNAL**      | ✅   | ✅   | ✅         | ✅²    | ❌          | ❌     | ❌          | ✅   |
 | 15 | `retract`              | **INTERNAL**      | ✅   | ✅   | ✅         | ✅²    | ❌          | ❌     | ❌          | ✅   |
 | 16 | `blended_sequence`     | **INTERNAL**      | ✅   | ✅   | ✅         | ❌     | ❌          | ❌     | ❌          | ✅   |

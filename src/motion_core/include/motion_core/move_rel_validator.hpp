@@ -16,7 +16,10 @@ namespace motion_core
 struct MoveRelLimits
 {
   // Max single-command translation norm (meters).
-  static constexpr double kMaxDeltaNorm = 0.03;
+  // MUST match safety_rules.yaml motion_limits.max_move_rel_translation.
+  // Update both locations together. This pass raises from 0.03 to 0.08
+  // to enable practical short task nudges while preserving hardware safety.
+  static constexpr double kMaxDeltaNorm = 0.08;
 
   // Workspace bounds for the computed absolute target.
   // These MUST match safety_rules.yaml; if safety_rules.yaml changes,
@@ -26,9 +29,9 @@ struct MoveRelLimits
   static constexpr double kXMin = -0.25;
   static constexpr double kXMax =  0.38;
   static constexpr double kYMin = -0.25;
-  static constexpr double kYMax =  0.34;
-  static constexpr double kZMin =  0.10;
-  static constexpr double kZMax =  0.50;
+  static constexpr double kYMax =  0.38;
+  static constexpr double kZMin =  0.20;
+  static constexpr double kZMax =  0.56;
 
   // Commissioning keepout zones — center/size AABB form to mirror safety_rules.yaml.
   static constexpr double kTableClearanceX = 0.10;

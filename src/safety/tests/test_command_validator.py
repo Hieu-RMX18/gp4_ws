@@ -75,14 +75,15 @@ def test_io_set_bypasses_velocity_check(safety_rules):
 
 # ── Motion primitives require valid velocity_scale ──
 
-def test_move_joint_requires_velocity(safety_rules):
-    """MOVE_JOINT is a motion command — velocity_scale defaults to 1.0 and exceeds max."""
+def test_move_joint_accepts_missing_velocity_scale(safety_rules):
+    """MOVE_JOINT is a motion command — absent velocity_scale is now acceptable.
+    motion_core resolves the default at execution time; CommandValidator only checks
+    out-of-bounds or invalid values."""
     validator = CommandValidator(safety_rules)
     cmd = json.dumps({"primitive_type": "MOVE_JOINT", "joint_index": 2, "joint_angle": 0.5})
     valid, reason = validator.validate(cmd)
-    # velocity_scale defaults to 1.0 (>0.06), so rejected
-    assert valid is False
-    assert "exceeds max allowed" in reason
+    assert valid is True
+    assert reason == ""
 
 def test_move_joint_valid_with_velocity(safety_rules):
     """MOVE_JOINT passes with valid velocity_scale."""
@@ -118,14 +119,36 @@ def test_move_joint_accepts_valid_acceleration_scale(safety_rules):
     valid, reason = validator.validate(cmd)
     assert valid is True
 
-def test_move_joints_requires_velocity(safety_rules):
-    """MOVE_JOINTS is a motion command — velocity_scale defaults to 1.0 and exceeds max."""
+def test_circ_valid_payload_passes_command_validator(safety_rules):
+    """CIRC with target_pose + 1 waypoint + velocity_scale passes schema + scale checks."""
+    validator = CommandValidator(safety_rules)
+    cmd = json.dumps({
+        "primitive_type": "CIRC",
+        "target_pose": {
+            "position": {"x": 0.30, "y": 0.00, "z": 0.40},
+            "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
+        },
+        "waypoints": [
+            {
+                "position": {"x": 0.32, "y": 0.05, "z": 0.42},
+                "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
+            }
+        ],
+        "velocity_scale": 0.06,
+    })
+    valid, reason = validator.validate(cmd)
+    assert valid is True, f"CIRC payload rejected: {reason}"
+
+
+def test_move_joints_accepts_missing_velocity_scale(safety_rules):
+    """MOVE_JOINTS is a motion command — absent velocity_scale is now acceptable.
+    motion_core resolves the default at execution time; CommandValidator only checks
+    out-of-bounds or invalid values."""
     validator = CommandValidator(safety_rules)
     cmd = json.dumps({
         "primitive_type": "MOVE_JOINTS",
         "joint_target": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     })
     valid, reason = validator.validate(cmd)
-    # velocity_scale defaults to 1.0 (>0.06), so rejected
-    assert valid is False
-    assert "exceeds max allowed" in reason
+    assert valid is True
+    assert reason == ""

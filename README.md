@@ -154,35 +154,59 @@ ros2 launch gp4_bringup system.launch.py robot_ip:=192.168.1.33
 
 ## 📝 Example Commands
 
-While an LLM naturally infers these via CLI strings, you can forcefully inject JSON structures for testing.
+For hardware test work, prefer the helper CLI over shell-escaped JSON. It prints
+the exact payload before publishing and validates it against the installed
+schema first.
 
-**1. Linear Move (LIN)**
-
-```bash
-ros2 topic pub --once /llm_raw_command std_msgs/msg/String \
-  "data: '{\"primitive_type\": \"LIN\", \"target_pose\": {\"x\": 0.3, \"y\": 0.0, \"z\": 0.2, \"roll\": 3.14, \"pitch\": 0.0, \"yaw\": 0.0}, \"velocity_scale\": 0.1}'"
-```
-
-**2. Relative Base Link Offsets (MOVE_REL)**
+**1. Move all six joints**
 
 ```bash
-ros2 topic pub --once /llm_raw_command std_msgs/msg/String \
-  "data: '{\"primitive_type\": \"MOVE_REL\", \"delta_z\": -0.05}'"
+ros2 run llm_gateway gp4_cmd move-joints 0 0 0 0 0 0 --speed 0.05
 ```
 
-**3. Tool/Controller I/O Trigger (IO_SET)**
+**2. Relative move in base frame**
 
 ```bash
-ros2 topic pub --once /llm_raw_command std_msgs/msg/String \
-  "data: '{\"primitive_type\": \"IO_SET\", \"io_address\": 10010, \"io_value\": 1}'"
+ros2 run llm_gateway gp4_cmd move-rel --z -0.03 --speed 0.05
 ```
 
-**4. Emergency Stop Routine (STOP)**
+**3. Linear move to a pose**
 
 ```bash
-ros2 topic pub --once /llm_raw_command std_msgs/msg/String \
-  "data: '{\"primitive_type\": \"STOP\"}'"
+ros2 run llm_gateway gp4_cmd lin --xyz 0.30 0.10 0.42 --rpy 180 0 0 --speed 0.05
 ```
+
+**4. HOME / STOP / WAIT**
+
+```bash
+ros2 run llm_gateway gp4_cmd home --speed 0.05
+ros2 run llm_gateway gp4_cmd stop
+ros2 run llm_gateway gp4_cmd wait 3
+```
+
+**5. Send direct ExecuteMotion action instead of raw topic**
+
+```bash
+ros2 run llm_gateway gp4_cmd --transport action home --speed 0.05
+ros2 run llm_gateway gp4_cmd --transport action move-joints 0 0 0 0 0 0 --speed 0.05
+```
+
+**6. Load from YAML instead of typing JSON**
+
+```bash
+cat <<'YAML' > /tmp/gp4_move_rel.yaml
+primitive_type: MOVE_REL
+delta_x: 0.0
+delta_y: 0.0
+delta_z: -0.03
+velocity_scale: 0.05
+YAML
+
+ros2 run llm_gateway gp4_cmd from-file /tmp/gp4_move_rel.yaml
+```
+
+Low-level raw topic publishing still exists for debugging, but the helper CLI is
+much easier to read and less error-prone.
 
 ---
 

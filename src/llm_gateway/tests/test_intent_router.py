@@ -534,3 +534,44 @@ def _minimal_payload_for(intent_name: str) -> dict:
     }
     base.update(extras.get(intent_name, {}))
     return base
+
+
+# ── circular_move intent (CIRC) ─────────────────────────────────────────────
+
+
+def test_circular_move_routes_to_circ():
+    router = _router()
+
+    result = router.route({
+        "intent": "circular_move",
+        "target_pose": {"position": {"x": 0.30, "y": 0.00, "z": 0.40}},
+        "auxiliary_pose": {"position": {"x": 0.32, "y": 0.05, "z": 0.42}},
+    })
+
+    assert result.route_type == "primitive"
+    assert len(result.commands) == 1
+    cmd = result.commands[0]
+    assert cmd["primitive_type"] == "CIRC"
+    assert cmd["reference_frame"] == "base_link"
+    assert "target_pose" in cmd
+    assert isinstance(cmd["waypoints"], list) and len(cmd["waypoints"]) == 1
+
+
+def test_circular_move_missing_auxiliary_pose_rejects():
+    router = _router()
+
+    with pytest.raises(ValueError, match="auxiliary_pose"):
+        router.route({
+            "intent": "circular_move",
+            "target_pose": {"position": {"x": 0.30, "y": 0.00, "z": 0.40}},
+        })
+
+
+def test_circular_move_missing_target_pose_rejects():
+    router = _router()
+
+    with pytest.raises(ValueError, match="target_pose"):
+        router.route({
+            "intent": "circular_move",
+            "auxiliary_pose": {"position": {"x": 0.32, "y": 0.05, "z": 0.42}},
+        })

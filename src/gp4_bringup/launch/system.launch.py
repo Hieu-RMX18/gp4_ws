@@ -53,6 +53,10 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             os.path.join(gp4_bringup_share, 'launch', 'llm_stack.launch.py')
         ),
+        condition=UnlessCondition(use_fake_hardware),
+        launch_arguments={
+            'use_fake_hardware': use_fake_hardware,
+        }.items(),
     )
 
     return LaunchDescription([

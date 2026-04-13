@@ -148,6 +148,8 @@ bool TrajectoryPostProcessor::downsample_to_max_points(
 
 bool TrajectoryPostProcessor::apply_ruckig_smoothing(
   robot_trajectory::RobotTrajectory & traj,
+  double vel_scale,
+  double acc_scale,
   std::string & reason) const
 {
   reason.clear();
@@ -155,9 +157,26 @@ bool TrajectoryPostProcessor::apply_ruckig_smoothing(
     reason = "trajectory has no waypoints";
     return false;
   }
+
+  const double resolved_vel = resolve_scale(vel_scale, kDefaultVelocityScaling);
+  const double resolved_acc = resolve_scale(acc_scale, kDefaultAccelerationScaling);
+
+  if (!is_valid_scale(resolved_vel)) {
+    std::ostringstream stream;
+    stream << "invalid velocity scaling for Ruckig: " << resolved_vel;
+    reason = stream.str();
+    return false;
+  }
+  if (!is_valid_scale(resolved_acc)) {
+    std::ostringstream stream;
+    stream << "invalid acceleration scaling for Ruckig: " << resolved_acc;
+    reason = stream.str();
+    return false;
+  }
+
 #if MOTION_CORE_HAS_RUCKIG
   trajectory_processing::RuckigSmoothing smoother;
-  if (!smoother.applySmoothing(traj, 1.0, 1.0)) {
+  if (!smoother.applySmoothing(traj, resolved_vel, resolved_acc)) {
     reason = "RuckigSmoothing::applySmoothing failed";
     return false;
   }

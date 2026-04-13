@@ -289,8 +289,8 @@ def test_gateway_get_pose_does_not_affect_motion_path():
     node._validate_client.wait_for_service = MagicMock(return_value=True)
     sanitized_json = json.dumps({
         "primitive_type": "HOME",
-        "velocity_scale": 0.10,
-        "acceleration_scale": 0.10,
+        "velocity_scale": 0.06,
+        "acceleration_scale": 0.06,
         "planner_id": "PILZ_PTP",
         "require_approval": False,
     })

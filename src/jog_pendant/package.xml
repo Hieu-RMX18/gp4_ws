@@ -1,0 +1,46 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>jog_pendant</name>
+  <version>0.1.0</version>
+  <description>
+    Experimental joint jog pendant: MoveIt Servo + MotoROS2 point-queue bridge.
+
+    This package provides:
+    - jog_input_node (Python): translates HMI web commands to MoveIt Servo JointJog
+    - servo_bridge_node (C++): bridges Servo output to MotoROS2 queue_traj_point
+
+    EXPERIMENTAL ONLY. Must not be used in production without hardware verification.
+  </description>
+  <maintainer email="hieu2@example.com">hieu2</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- C++ dependencies -->
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>trajectory_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>control_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>rclcpp_components</depend>
+
+  <!-- Local dependencies -->
+  <depend>interfaces</depend>
+  <depend>motoros2_interfaces</depend>
+
+  <!-- Industrial msgs (from workspace) -->
+  <depend>industrial_msgs</depend>
+
+  <!-- Python dependencies -->
+  <exec_depend>python3-rclpy</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

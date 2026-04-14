@@ -349,6 +349,7 @@ public:
     if (!quality_gate_.validate_plan(
           output_traj,
           motion_core::QualityGate::kFractionNotApplicable,
+          "CIRC",
           quality_reason))
     {
       return make_result_failure(

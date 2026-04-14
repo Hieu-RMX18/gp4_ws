@@ -1076,7 +1076,12 @@ private:
 
     if (plan_code != moveit::core::MoveItErrorCode::SUCCESS)
     {
-      result.reason = "planning failed";
+      std::ostringstream oss;
+      oss << "planning failed (MoveIt error code: " << plan_code.val
+          << ", planner: " << move_group_->getPlannerId()
+          << ", group: " << move_group_->getName() << ")";
+      result.reason = oss.str();
+      RCLCPP_ERROR(get_logger(), "plan() failed: %s", result.reason.c_str());
       return result;
     }
 
@@ -1997,9 +2002,21 @@ private:
         abort_with_message(
           goal_handle,
           started_at,
-          "HOME target not available in current SRDF; HOME is not yet fully implemented in Phase 4");
+          "HOME: named target 'home' unavailable in SRDF");
         return;
       }
+
+      move_group_->setPlanningTime(kPlanningTimeSec);
+      const std::string home_planner = planner_router_.route_planner("PTP", false);
+      const PlannerSelection home_selection = resolve_planner_selection(
+        home_planner.empty() ? "PILZ_PTP" : home_planner);
+      if (!home_selection.pipeline_id.empty())
+      {
+        move_group_->setPlanningPipelineId(home_selection.pipeline_id);
+      }
+      move_group_->setPlannerId(home_selection.planner_id);
+      move_group_->setMaxVelocityScalingFactor(velocity_scale);
+      move_group_->setMaxAccelerationScalingFactor(acceleration_scale);
 
       moveit::planning_interface::MoveGroupInterface::Plan plan;
       const auto plan_result = plan_with_interruption(
@@ -2051,6 +2068,24 @@ private:
           return;
         }
       }
+      else
+      {
+        // pose target path: IK solution was already set via setJointValueTarget
+        // in the shared IK path above (line 1813). Still need to set start state.
+        move_group_->setStartState(current_robot_state);
+        move_group_->clearPoseTargets();
+      }
+
+      // Log full planning context before calling plan()
+      RCLCPP_INFO(get_logger(),
+        "execute_motion goal_seq=%lu PTP planning context: "
+        "planner_id=%s pipeline=%s "
+        "start_state=[%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
+        static_cast<unsigned long>(goal_sequence),
+        move_group_->getPlannerId().c_str(),
+        move_group_->getPlanningPipelineId().c_str(),
+        current_joint_positions[0], current_joint_positions[1], current_joint_positions[2],
+        current_joint_positions[3], current_joint_positions[4], current_joint_positions[5]);
 
       moveit::planning_interface::MoveGroupInterface::Plan plan;
       const auto plan_result = plan_with_interruption(
@@ -2058,6 +2093,11 @@ private:
         goal_handle,
         goal_sequence,
         "PTP planning");
+      RCLCPP_INFO(get_logger(),
+        "execute_motion goal_seq=%lu PTP plan() returned status=%d reason='%s'",
+        static_cast<unsigned long>(goal_sequence),
+        static_cast<int>(plan_result.status),
+        plan_result.reason.c_str());
       if (plan_result.status == StageStatus::kCanceled)
       {
         cancel_with_message(goal_handle, started_at, plan_result.reason);

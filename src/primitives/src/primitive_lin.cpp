@@ -249,7 +249,11 @@ public:
     }
 
     std::string quality_reason;
-    if (!quality_gate_.validate_plan(output_traj, cartesian_fraction, quality_reason))
+    if (!quality_gate_.validate_plan(
+          output_traj,
+          cartesian_fraction,
+          "LIN",
+          quality_reason))
     {
       return make_result_failure(
         map_quality_failure(quality_reason),

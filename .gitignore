@@ -31,6 +31,8 @@ log/
 .vscode/
 .venv/
 __pycache__/
+hmi/backend/install/
+hmi/backend/.venv/
 *.pyc
 
 # Secrets — never commit API keys or credentials

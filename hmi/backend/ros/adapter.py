@@ -7,13 +7,13 @@ import json
 import logging
 from math import degrees
 from pathlib import Path
-import re
 import sys
 from threading import Lock, Thread
 import time
 from typing import Any
 
 from ..domain.constants import GP4_JOINT_NAMES as DEFAULT_JOINT_NAMES
+from ..domain.joint_utils import read_joint_position_deg, resolve_joint_target
 from ..domain.models import (
     BridgeConnection,
     ConnectionHealth,
@@ -90,7 +90,6 @@ DEFAULT_MOTION_ACCELERATION_SCALE = 0.06
 DEFAULT_VALIDATE_TIMEOUT_SEC = 5.0
 DEFAULT_ACTION_WAIT_TIMEOUT_SEC = 5.0
 DEFAULT_EXECUTION_TIMEOUT_SEC = 120.0
-_JOINT_NAME_TO_INDEX = {name: index for index, name in enumerate(DEFAULT_JOINT_NAMES)}
 LOGGER = logging.getLogger("uvicorn.error")
 
 
@@ -714,44 +713,7 @@ class WorkspaceRosAdapter:
         self,
         parameters: dict[str, Any],
     ) -> tuple[int | None, str | None]:
-        raw_index = parameters.get("jointIndexZeroBased")
-        if raw_index is not None:
-            try:
-                candidate = int(raw_index)
-            except (TypeError, ValueError):
-                candidate = None
-            if candidate is not None and 0 <= candidate < len(DEFAULT_JOINT_NAMES):
-                return candidate, DEFAULT_JOINT_NAMES[candidate]
-
-        raw_name = str(
-            parameters.get("jointNameResolved")
-            or parameters.get("joint")
-            or parameters.get("jointName")
-            or ""
-        ).strip().lower()
-        if raw_name:
-            canonical_index = _JOINT_NAME_TO_INDEX.get(raw_name)
-            if canonical_index is not None:
-                return canonical_index, DEFAULT_JOINT_NAMES[canonical_index]
-            match = re.fullmatch(r"joint[_\s-]*([1-6])(?:[_\s-].+)?", raw_name)
-            if match:
-                zero_based = int(match.group(1)) - 1
-                return zero_based, DEFAULT_JOINT_NAMES[zero_based]
-
-        raw_index = parameters.get("jointIndex")
-        if raw_index is not None:
-            try:
-                candidate = int(raw_index)
-            except (TypeError, ValueError):
-                candidate = None
-            if candidate is not None:
-                if 0 <= candidate < len(DEFAULT_JOINT_NAMES):
-                    return candidate, DEFAULT_JOINT_NAMES[candidate]
-                if 1 <= candidate <= len(DEFAULT_JOINT_NAMES):
-                    zero_based = candidate - 1
-                    return zero_based, DEFAULT_JOINT_NAMES[zero_based]
-
-        return None, None
+        return resolve_joint_target(parameters, DEFAULT_JOINT_NAMES)
 
     def _resolve_joint_target_deg(self, joint_index: int, parameters: dict[str, Any]) -> float:
         current_position_deg = parameters.get("currentPositionDeg")
@@ -766,10 +728,7 @@ class WorkspaceRosAdapter:
         return float(current_position_deg) + delta_deg
 
     def _read_joint_position_deg(self, joint_name: str) -> float | None:
-        for joint in self.read_joint_positions():
-            if joint.name == joint_name:
-                return joint.position_deg
-        return None
+        return read_joint_position_deg(joint_name, self.read_joint_positions())
 
     def _validate_motion_request(
         self,

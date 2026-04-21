@@ -7,6 +7,7 @@
 #include <future>
 #include <iomanip>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -14,6 +15,7 @@
 
 #include <Eigen/Geometry>
 
+#include <builtin_interfaces/msg/time.hpp>
 #include <geometry_msgs/msg/pose.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/robot_state/conversions.h>
@@ -35,6 +37,7 @@
 #include "motion_core/orientation_filter.hpp"
 #include "motion_core/planner_router.hpp"
 #include "motion_core/planning_scene_manager.hpp"
+#include "motion_core/query_handler.hpp"
 #include "motion_core/quality_gate.hpp"
 #include "motion_core/seed_manager.hpp"
 #include "motion_core/trajectory_post_processor.hpp"
@@ -68,11 +71,20 @@ public:
       this,
       dispatch_action_name_);
 
+    query_handler_ = std::make_unique<QueryHandler>(
+      get_logger(),
+      [this](std::string & reason) { return ensure_move_group(reason); },
+      [this](geometry_msgs::msg::PoseStamped & current_stamped, std::string & reason, double timeout_sec) {
+        return read_current_tcp_pose(current_stamped, reason, timeout_sec);
+      });
     // GET_POSE: dedicated query service — no motion, no planning, no execution.
     get_pose_service_ = create_service<GetCurrentPose>(
       "/get_current_pose",
-      std::bind(&MotionCoreNode::handle_get_current_pose, this,
-        std::placeholders::_1, std::placeholders::_2));
+      std::bind(
+        &QueryHandler::handle_get_current_pose,
+        query_handler_.get(),
+        std::placeholders::_1,
+        std::placeholders::_2));
 
     // Step 3.6: ALARM_RESET service client to hw_adapter
     // VERIFY_FROM_WORKSPACE before deployment: actual hw_adapter alarm service name
@@ -92,6 +104,12 @@ public:
       get_logger(),
       "motion_core_node started (plan-only mode, execution via %s, query via /get_current_pose)",
       dispatch_action_name_.c_str());
+  }
+
+  ~MotionCoreNode() override
+  {
+    shutdown_requested_.store(true);
+    wait_for_workers();
   }
 
   void initialize()
@@ -179,6 +197,7 @@ private:
   rclcpp_action::Client<DispatchTrajectory>::SharedPtr dispatch_client_;
   // GET_POSE: state query service — completely separate from motion path.
   rclcpp::Service<GetCurrentPose>::SharedPtr get_pose_service_;
+  std::unique_ptr<QueryHandler> query_handler_;
   // Step 3.6/3.7: service clients for ALARM_RESET and IO_SET (via hw_adapter)
   rclcpp::Client<AlarmReset>::SharedPtr alarm_reset_client_;
   rclcpp::Client<IoSet>::SharedPtr io_set_client_;
@@ -200,6 +219,64 @@ private:
   double dispatch_timeout_sec_{60.0};
   std::string alarm_reset_service_name_;
   std::string io_set_service_name_;
+  std::atomic<bool> shutdown_requested_{false};
+  std::mutex worker_mutex_;
+  std::vector<std::future<void>> worker_futures_;
+
+  void cleanup_finished_workers()
+  {
+    std::lock_guard<std::mutex> lock(worker_mutex_);
+    auto it = worker_futures_.begin();
+    while (it != worker_futures_.end())
+    {
+      if (it->valid() && it->wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+      {
+        try
+        {
+          it->get();
+        }
+        catch (const std::exception & ex)
+        {
+          RCLCPP_ERROR(get_logger(), "execute_motion worker ended with exception: %s", ex.what());
+        }
+        catch (...)
+        {
+          RCLCPP_ERROR(get_logger(), "execute_motion worker ended with unknown exception.");
+        }
+        it = worker_futures_.erase(it);
+        continue;
+      }
+      ++it;
+    }
+  }
+
+  void wait_for_workers()
+  {
+    std::vector<std::future<void>> workers;
+    {
+      std::lock_guard<std::mutex> lock(worker_mutex_);
+      workers.swap(worker_futures_);
+    }
+    for (auto & worker : workers)
+    {
+      if (!worker.valid())
+      {
+        continue;
+      }
+      try
+      {
+        worker.get();
+      }
+      catch (const std::exception & ex)
+      {
+        RCLCPP_ERROR(get_logger(), "execute_motion worker join failed: %s", ex.what());
+      }
+      catch (...)
+      {
+        RCLCPP_ERROR(get_logger(), "execute_motion worker join failed with unknown exception.");
+      }
+    }
+  }
 
   static std::string normalize_primitive(std::string primitive)
   {
@@ -218,10 +295,7 @@ private:
 
   static bool is_supported_primitive(const std::string & primitive)
   {
-    // B2: HOME/PTP/LIN/MOVE_REL are fully wired end-to-end.
-    // CIRC is deferred — see PRIMITIVE_SHORTLIST.md.
-    // Step 3.1: New primitives added for this sprint.
-    // CARTESIAN_PATH: multi-waypoint smooth path for draw_shape macros.
+    // Supported primitives wired through motion_core -> hw_adapter.
     return primitive == "HOME" || primitive == "PTP" || primitive == "LIN" ||
            primitive == "CIRC" ||
            primitive == "MOVE_REL" || primitive == "CARTESIAN_PATH" ||
@@ -257,6 +331,15 @@ private:
     StageStatus status = StageStatus::kFailure;
     std::string reason;
     std::string note;
+  };
+
+  struct DispatchMetadata
+  {
+    std::string command_id;
+    std::string primitive;
+    std::string planner_id;
+    builtin_interfaces::msg::Time source_joint_state_stamp;
+    bool enforce_start_state_match = true;
   };
 
   static PlannerSelection resolve_planner_selection(const std::string & planner_id)
@@ -338,6 +421,141 @@ private:
            primitive == "MOVE_REL" || primitive == "CARTESIAN_PATH";
   }
 
+  static bool is_finite_trajectory_vector(const std::vector<double> & values)
+  {
+    for (const double value : values)
+    {
+      if (!std::isfinite(value))
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool validate_dispatch_segment_contract(
+    const trajectory_msgs::msg::JointTrajectory & segment,
+    std::string & reason) const
+  {
+    reason.clear();
+
+    if (segment.points.empty())
+    {
+      reason = "segment trajectory has no points";
+      return false;
+    }
+    if (segment.joint_names.empty())
+    {
+      reason = "segment trajectory has no joint names";
+      return false;
+    }
+
+    const std::size_t dof = segment.joint_names.size();
+    int64_t previous_time_ns = -1;
+    for (std::size_t index = 0; index < segment.points.size(); ++index)
+    {
+      const auto & point = segment.points[index];
+      const std::string point_label = "segment point[" + std::to_string(index) + "]";
+      if (point.positions.size() != dof)
+      {
+        reason = point_label + " positions size does not match joint count";
+        return false;
+      }
+      if (!point.velocities.empty() && point.velocities.size() != dof)
+      {
+        reason = point_label + " velocities size does not match joint count";
+        return false;
+      }
+      if (!point.accelerations.empty() && point.accelerations.size() != dof)
+      {
+        reason = point_label + " accelerations size does not match joint count";
+        return false;
+      }
+      if (!point.effort.empty() && point.effort.size() != dof)
+      {
+        reason = point_label + " effort size does not match joint count";
+        return false;
+      }
+      if (!is_finite_trajectory_vector(point.positions) ||
+        (!point.velocities.empty() && !is_finite_trajectory_vector(point.velocities)) ||
+        (!point.accelerations.empty() && !is_finite_trajectory_vector(point.accelerations)) ||
+        (!point.effort.empty() && !is_finite_trajectory_vector(point.effort)))
+      {
+        reason = point_label + " contains NaN or Inf";
+        return false;
+      }
+
+      const int64_t current_time_ns = rclcpp::Duration(point.time_from_start).nanoseconds();
+      if (current_time_ns < 0)
+      {
+        reason = point_label + " has negative time_from_start";
+        return false;
+      }
+      if (previous_time_ns >= 0 && current_time_ns <= previous_time_ns)
+      {
+        reason = "segment time_from_start must be strictly monotonic";
+        return false;
+      }
+      previous_time_ns = current_time_ns;
+    }
+
+    if (previous_time_ns <= 0)
+    {
+      reason = "segment total duration must be greater than zero";
+      return false;
+    }
+
+    reason.clear();
+    return true;
+  }
+
+  bool validate_mitigated_segments_contract(
+    const trajectory_msgs::msg::JointTrajectory & original,
+    const std::vector<trajectory_msgs::msg::JointTrajectory> & segments,
+    std::string & reason) const
+  {
+    reason.clear();
+    if (original.points.empty() || segments.empty())
+    {
+      reason = "mitigation produced no dispatchable trajectory segment";
+      return false;
+    }
+
+    if (segments.front().points.front().positions != original.points.front().positions)
+    {
+      reason = "post-processing changed trajectory start point";
+      return false;
+    }
+    if (segments.back().points.back().positions != original.points.back().positions)
+    {
+      reason = "post-processing changed trajectory end point";
+      return false;
+    }
+
+    for (std::size_t index = 0; index < segments.size(); ++index)
+    {
+      std::string segment_reason;
+      if (!validate_dispatch_segment_contract(segments[index], segment_reason))
+      {
+        reason = "segment " + std::to_string(index + 1U) +
+          " violates dispatch contract: " + segment_reason;
+        return false;
+      }
+
+      if (index > 0U &&
+        segments[index].points.front().positions != segments[index - 1U].points.back().positions)
+      {
+        reason =
+          "segment boundary continuity mismatch between segment " + std::to_string(index) +
+          " and segment " + std::to_string(index + 1U);
+        return false;
+      }
+    }
+
+    reason.clear();
+    return true;
+  }
+
   void log_joint_branch_selection(
     const std::string & primitive,
     const std::uint64_t sequence,
@@ -379,6 +597,11 @@ private:
     const std::uint64_t sequence,
     const std::string & stage) const
   {
+    if (shutdown_requested_.load())
+    {
+      return "node shutdown requested during " + stage;
+    }
+
     if (goal_handle->is_canceling())
     {
       return "goal canceled during " + stage;
@@ -484,7 +707,8 @@ private:
 
   bool build_current_robot_state(
     moveit::core::RobotState & current_state,
-    std::string & reason) const
+    std::string & reason,
+    builtin_interfaces::msg::Time * source_joint_state_stamp = nullptr) const
   {
     reason.clear();
 
@@ -495,10 +719,15 @@ private:
     }
 
     std::vector<double> current_joint_positions;
-    if (!seed_manager_.get_current_joint_positions(current_joint_positions))
+    builtin_interfaces::msg::Time joint_state_stamp;
+    if (!seed_manager_.get_current_joint_positions(current_joint_positions, joint_state_stamp))
     {
       reason = "latest /yaskawa/joint_states unavailable";
       return false;
+    }
+    if (source_joint_state_stamp)
+    {
+      *source_joint_state_stamp = joint_state_stamp;
     }
 
     current_state = moveit::core::RobotState(move_group_->getRobotModel());
@@ -610,7 +839,8 @@ private:
   StageResult dispatch_to_hw_adapter(
     const trajectory_msgs::msg::JointTrajectory & trajectory,
     const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
-    const std::uint64_t sequence)
+    const std::uint64_t sequence,
+    const DispatchMetadata & metadata)
   {
     constexpr auto kPollPeriod = std::chrono::milliseconds(50);
     StageResult result;
@@ -639,6 +869,13 @@ private:
     DispatchTrajectory::Goal goal;
     goal.trajectory = trajectory;
     goal.timeout_sec = dispatch_timeout_sec_;
+    goal.command_id = metadata.command_id;
+    goal.primitive = metadata.primitive;
+    goal.planner_id = metadata.planner_id;
+    goal.source_joint_state_stamp = metadata.source_joint_state_stamp;
+    goal.expected_start_positions =
+      trajectory.points.empty() ? std::vector<double>{} : trajectory.points.front().positions;
+    goal.enforce_start_state_match = metadata.enforce_start_state_match;
 
     RCLCPP_INFO(
       get_logger(),
@@ -714,8 +951,26 @@ private:
 
     if (!wrapped_result.result->success)
     {
-      result.reason = wrapped_result.result->message.empty() ?
-        "hw_adapter execution failed" : wrapped_result.result->message;
+      std::ostringstream stream;
+      stream << (wrapped_result.result->message.empty() ?
+        "hw_adapter execution failed" : wrapped_result.result->message);
+      if (!wrapped_result.result->failure_stage.empty() &&
+        wrapped_result.result->failure_stage != "none")
+      {
+        stream << " [stage=" << wrapped_result.result->failure_stage << "]";
+      }
+      if (!wrapped_result.result->controller_error_name.empty() &&
+        wrapped_result.result->controller_error_name != "SUCCESSFUL")
+      {
+        stream << " [controller_error=" << wrapped_result.result->controller_error_name
+               << "(" << wrapped_result.result->controller_error_code << ")";
+        if (!wrapped_result.result->controller_error_string.empty())
+        {
+          stream << ": " << wrapped_result.result->controller_error_string;
+        }
+        stream << "]";
+      }
+      result.reason = stream.str();
       const std::string interrupt =
         interrupt_reason(goal_handle, sequence, "dispatch_result");
       if (!interrupt.empty())
@@ -728,7 +983,8 @@ private:
 
     std::ostringstream note;
     note << "dispatched_via=" << dispatch_action_name_
-         << ", hw_execution_time=" << wrapped_result.result->execution_time_sec << "s";
+         << ", hw_execution_time=" << wrapped_result.result->execution_time_sec << "s"
+         << ", failure_stage=" << wrapped_result.result->failure_stage;
     result.status = StageStatus::kSuccess;
     result.note = note.str();
     RCLCPP_INFO(
@@ -820,6 +1076,7 @@ private:
   StageResult apply_budget_quality_and_dispatch(
     trajectory_msgs::msg::JointTrajectory trajectory,
     const std::string & primitive,
+    const DispatchMetadata & dispatch_metadata,
     const double cartesian_fraction,
     const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
     const std::uint64_t sequence,
@@ -828,6 +1085,7 @@ private:
   {
     StageResult result;
     std::ostringstream note_stream;
+    const trajectory_msgs::msg::JointTrajectory original_trajectory = trajectory;
     const std::size_t original_point_count = trajectory.points.size();
     reported_point_count = original_point_count;
     reported_segment_count = 0U;
@@ -901,6 +1159,13 @@ private:
                   << ", points=" << original_point_count;
     }
 
+    std::string contract_reason;
+    if (!validate_mitigated_segments_contract(original_trajectory, segments, contract_reason))
+    {
+      result.reason = "post-processing dispatch contract validation failed: " + contract_reason;
+      return result;
+    }
+
     reported_segment_count = segments.size();
 
     for (std::size_t index = 0; index < segments.size(); ++index)
@@ -949,7 +1214,8 @@ private:
         0.94);
       publish_feedback(goal_handle, progress, "trajectory_dispatch_requested");
 
-      const auto dispatch_result = dispatch_to_hw_adapter(segments[index], goal_handle, sequence);
+      const auto dispatch_result = dispatch_to_hw_adapter(
+        segments[index], goal_handle, sequence, dispatch_metadata);
       if (dispatch_result.status == StageStatus::kCanceled)
       {
         result.status = StageStatus::kCanceled;
@@ -1142,7 +1408,19 @@ private:
 
   void handle_accepted(const std::shared_ptr<GoalHandleExecuteMotion> goal_handle)
   {
-    std::thread([this, goal_handle]() { execute(goal_handle); }).detach();
+    cleanup_finished_workers();
+    std::future<void> worker = std::async(
+      std::launch::async,
+      [this, goal_handle]()
+      {
+        if (shutdown_requested_.load())
+        {
+          return;
+        }
+        execute(goal_handle);
+      });
+    std::lock_guard<std::mutex> lock(worker_mutex_);
+    worker_futures_.emplace_back(std::move(worker));
   }
 
   void execute(const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle)
@@ -1273,8 +1551,8 @@ private:
     }
 
     // ── Step 3.5: WAIT — cancellation-aware timed pause ──
-    // execute() runs in a detached worker thread (confirmed in handle_accepted),
-    // so blocking sleep is safe here.
+    // execute() runs in an owned async worker launched by handle_accepted(),
+    // so blocking sleep is safe here and lifecycle remains bounded.
     if (primitive == "WAIT")
     {
       execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kAccepted, "wait");
@@ -1418,9 +1696,6 @@ private:
       return;
     }
 
-    // B2: CIRC is now rejected by is_supported_primitive() above.
-    // When CIRC is implemented, add its planning logic here and update the whitelist.
-
     // ── Motion primitives below require MoveGroup ──
     execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kPlanning, "ensure_move_group");
     std::string move_group_reason;
@@ -1455,8 +1730,12 @@ private:
     const double acceleration_scale =
       (goal->acceleration_scale > 0.0) ? goal->acceleration_scale : TrajectoryPostProcessor::kDefaultAccelerationScaling;
     moveit::core::RobotState current_robot_state(move_group_->getRobotModel());
+    builtin_interfaces::msg::Time source_joint_state_stamp;
     std::string current_state_reason;
-    if (!build_current_robot_state(current_robot_state, current_state_reason))
+    if (!build_current_robot_state(
+          current_robot_state,
+          current_state_reason,
+          &source_joint_state_stamp))
     {
       abort_with_message(goal_handle, started_at,
         "failed to read current joint state: " + current_state_reason);
@@ -1615,12 +1894,19 @@ private:
       moveit_msgs::msg::RobotTrajectory postprocessed_msg;
       robot_traj.getRobotTrajectoryMsg(postprocessed_msg);
       trajectory_msgs::msg::JointTrajectory output_traj = postprocessed_msg.joint_trajectory;
+      DispatchMetadata dispatch_metadata;
+      dispatch_metadata.command_id = goal_id;
+      dispatch_metadata.primitive = primitive;
+      dispatch_metadata.planner_id = goal->planner_id.empty() ? "PTP" : goal->planner_id;
+      dispatch_metadata.source_joint_state_stamp = source_joint_state_stamp;
+      dispatch_metadata.enforce_start_state_match = true;
 
       std::size_t dispatched_point_count = 0U;
       std::size_t dispatched_segment_count = 0U;
       const auto dispatch_result = apply_budget_quality_and_dispatch(
         output_traj,
         primitive,
+        dispatch_metadata,
         QualityGate::kFractionNotApplicable,
         goal_handle,
         goal_sequence,
@@ -1790,12 +2076,12 @@ private:
       }
 
       std::vector<double> seed_state;
-      if (!seed_manager_.get_seed_state(seed_state))
+      if (!seed_manager_.get_seed_state(effective_primitive, seed_state))
       {
         abort_with_message(
           goal_handle,
           started_at,
-          "IK seed unavailable: waiting /yaskawa/joint_states or named-target fallback hook not integrated");
+          "IK seed unavailable: /yaskawa/joint_states missing/stale and fallback seed is disabled or unavailable");
         return;
       }
 
@@ -1809,13 +2095,32 @@ private:
 
       if (effective_primitive == "PTP")
       {
+        const auto branch_result = choose_branch_preserved_joint_vector(
+          active_joint_models,
+          current_joint_positions,
+          ik_solution);
+        if (!branch_result.success)
+        {
+          abort_with_message(goal_handle, started_at,
+            "failed to branch-preserve IK-derived PTP target: " + branch_result.reason);
+          return;
+        }
+
+        log_joint_branch_selection(
+          "PTP",
+          goal_sequence,
+          active_joint_names,
+          current_joint_positions,
+          ik_solution,
+          branch_result);
+
         RCLCPP_INFO(
           get_logger(),
           "execute_motion goal_seq=%lu IK-derived PTP target current_seed=%s ik_solution=%s",
           static_cast<unsigned long>(goal_sequence),
           format_joint_vector(seed_state).c_str(),
           format_joint_vector(ik_solution).c_str());
-        if (!move_group_->setJointValueTarget(ik_solution))
+        if (!move_group_->setJointValueTarget(branch_result.chosen_targets))
         {
           abort_with_message(goal_handle, started_at, "failed to set IK-derived joint target for PTP");
           return;
@@ -2268,12 +2573,19 @@ private:
     moveit_msgs::msg::RobotTrajectory postprocessed_msg;
     robot_trajectory.getRobotTrajectoryMsg(postprocessed_msg);
     trajectory_msgs::msg::JointTrajectory output_traj = postprocessed_msg.joint_trajectory;
+    DispatchMetadata dispatch_metadata;
+    dispatch_metadata.command_id = goal_id;
+    dispatch_metadata.primitive = effective_primitive;
+    dispatch_metadata.planner_id = planner_selection.planner_id;
+    dispatch_metadata.source_joint_state_stamp = source_joint_state_stamp;
+    dispatch_metadata.enforce_start_state_match = true;
 
     std::size_t dispatched_point_count = 0U;
     std::size_t dispatched_segment_count = 0U;
     const auto dispatch_result = apply_budget_quality_and_dispatch(
       output_traj,
       effective_primitive,
+      dispatch_metadata,
       cartesian_fraction,
       goal_handle,
       goal_sequence,
@@ -2324,88 +2636,6 @@ private:
     goal_handle->succeed(result);
   }
 
-  /// GET_POSE service handler — query-only, no motion, no planning.
-  /// Returns current TCP pose from the current RobotState FK in base_link.
-  /// This callback MUST NOT trigger motion planning, execution, or state mutation.
-  void handle_get_current_pose(
-    const std::shared_ptr<GetCurrentPose::Request> request,
-    std::shared_ptr<GetCurrentPose::Response> response)
-  {
-    // Default empty/missing reference_frame to base_link
-    std::string frame = request->reference_frame;
-    if (frame.empty())
-    {
-      frame = "base_link";
-    }
-
-    // Fail-closed: only base_link is supported in v1
-    if (frame != "base_link")
-    {
-      response->success = false;
-      response->message =
-        "unsupported reference_frame '" + frame +
-        "'; only 'base_link' is supported";
-      RCLCPP_WARN(get_logger(), "GET_POSE rejected: %s", response->message.c_str());
-      return;
-    }
-
-    // Ensure MoveGroup is available (read-only operation)
-    std::string move_group_reason;
-    if (!ensure_move_group(move_group_reason))
-    {
-      response->success = false;
-      response->message =
-        "cannot read current pose: MoveGroup unavailable — " + move_group_reason;
-      RCLCPP_ERROR(get_logger(), "GET_POSE failed: %s", response->message.c_str());
-      return;
-    }
-
-    // Read current TCP pose — no planning, no execution, no side effects
-    geometry_msgs::msg::PoseStamped current_stamped;
-    std::string current_pose_reason;
-    if (!read_current_tcp_pose(current_stamped, current_pose_reason, 5.0))
-    {
-      response->success = false;
-      response->message = "failed to read current TCP pose: " + current_pose_reason;
-      RCLCPP_ERROR(get_logger(), "GET_POSE failed: %s", response->message.c_str());
-      return;
-    }
-
-    if (current_stamped.header.frame_id != frame)
-    {
-      response->success = false;
-      response->message =
-        "current TCP pose is available in frame '" + current_stamped.header.frame_id +
-        "'; expected '" + frame + "'";
-      RCLCPP_ERROR(get_logger(), "GET_POSE failed: %s", response->message.c_str());
-      return;
-    }
-
-    // Validate that the returned pose has a non-degenerate orientation
-    const auto & q = current_stamped.pose.orientation;
-    const double qnorm_sq = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
-    if (qnorm_sq <= 1e-12)
-    {
-      response->success = false;
-      response->message =
-        "current pose has invalid/zero orientation; robot state may be unavailable";
-      RCLCPP_ERROR(get_logger(), "GET_POSE failed: %s", response->message.c_str());
-      return;
-    }
-
-    response->success = true;
-    response->message = "current TCP pose in frame: " + frame;
-    response->current_pose = current_stamped.pose;
-
-    RCLCPP_INFO(get_logger(),
-      "GET_POSE success: position=(%.4f, %.4f, %.4f), "
-      "orientation=(%.4f, %.4f, %.4f, %.4f), frame=%s",
-      current_stamped.pose.position.x,
-      current_stamped.pose.position.y,
-      current_stamped.pose.position.z,
-      q.x, q.y, q.z, q.w,
-      frame.c_str());
-  }
 };
 }  // namespace motion_core
 

@@ -10,6 +10,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(control_msgs REQUIRED)
@@ -21,6 +22,7 @@ find_package(angles REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
 find_package(moveit_core REQUIRED)
 find_package(moveit_msgs REQUIRED)
+find_package(geometric_shapes REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 
@@ -35,6 +37,7 @@ add_library(${PROJECT_NAME}_components SHARED
   src/quality_gate.cpp
   src/orientation_filter.cpp
   src/planning_scene_manager.cpp
+  src/query_handler.cpp
 )
 
 target_include_directories(${PROJECT_NAME}_components PUBLIC
@@ -43,6 +46,7 @@ target_include_directories(${PROJECT_NAME}_components PUBLIC
 )
 
 ament_target_dependencies(${PROJECT_NAME}_components
+  builtin_interfaces
   rclcpp
   rclcpp_action
   control_msgs
@@ -54,6 +58,7 @@ ament_target_dependencies(${PROJECT_NAME}_components
   moveit_ros_planning_interface
   moveit_core
   moveit_msgs
+  geometric_shapes
   tf2_geometry_msgs
   pluginlib
 )
@@ -71,6 +76,7 @@ target_link_libraries(motion_core_node
 )
 
 ament_target_dependencies(motion_core_node
+  builtin_interfaces
   rclcpp
   rclcpp_action
   control_msgs
@@ -82,6 +88,7 @@ ament_target_dependencies(motion_core_node
   moveit_ros_planning_interface
   moveit_core
   moveit_msgs
+  geometric_shapes
   tf2_geometry_msgs
   pluginlib
 )
@@ -182,6 +189,35 @@ if(BUILD_TESTING)
       include
     )
   endif()
+
+  ament_add_gtest(test_seed_manager
+    test/test_seed_manager.cpp
+  )
+  if(TARGET test_seed_manager)
+    target_link_libraries(test_seed_manager
+      ${PROJECT_NAME}_components
+    )
+    target_include_directories(test_seed_manager PRIVATE
+      include
+    )
+    ament_target_dependencies(test_seed_manager
+      rclcpp
+      sensor_msgs
+      builtin_interfaces
+    )
+  endif()
+
+  ament_add_gtest(test_query_handler
+    test/test_query_handler.cpp
+  )
+  if(TARGET test_query_handler)
+    target_link_libraries(test_query_handler
+      ${PROJECT_NAME}_components
+    )
+    target_include_directories(test_query_handler PRIVATE
+      include
+    )
+  endif()
 endif()
 
 install(DIRECTORY include/
@@ -200,6 +236,7 @@ install(TARGETS
 
 ament_export_targets(${PROJECT_NAME}_targets HAS_LIBRARY_TARGET)
 ament_export_dependencies(
+  builtin_interfaces
   rclcpp
   rclcpp_action
   control_msgs
@@ -211,6 +248,7 @@ ament_export_dependencies(
   moveit_ros_planning_interface
   moveit_core
   moveit_msgs
+  geometric_shapes
   tf2_geometry_msgs
   pluginlib
 )

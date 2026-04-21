@@ -36,6 +36,52 @@ TEST(ExecutionOrchestratorTest, StopRequestTracksActiveGoalAndClearsOnFinish)
   EXPECT_FALSE(orchestrator.snapshot().active);
 }
 
+TEST(ExecutionOrchestratorTest, StopRequestDuringPlanningIncludesPlanningPhase)
+{
+  ExecutionOrchestrator orchestrator;
+
+  const auto started = orchestrator.begin_goal("LIN");
+  ASSERT_TRUE(started.acquired);
+  orchestrator.update_phase(started.sequence, ExecutionPhase::kPlanning, "planning in progress");
+
+  std::string reason;
+  EXPECT_TRUE(orchestrator.request_stop(reason));
+  EXPECT_TRUE(orchestrator.stop_requested(started.sequence));
+  EXPECT_NE(reason.find("planning"), std::string::npos);
+}
+
+TEST(ExecutionOrchestratorTest, StopRequestDuringExecutingIncludesExecutingPhase)
+{
+  ExecutionOrchestrator orchestrator;
+
+  const auto started = orchestrator.begin_goal("CARTESIAN_PATH");
+  ASSERT_TRUE(started.acquired);
+  orchestrator.update_phase(started.sequence, ExecutionPhase::kExecuting, "dispatch in progress");
+
+  std::string reason;
+  EXPECT_TRUE(orchestrator.request_stop(reason));
+  EXPECT_TRUE(orchestrator.stop_requested(started.sequence));
+  EXPECT_NE(reason.find("executing"), std::string::npos);
+}
+
+TEST(ExecutionOrchestratorTest, FinishWithStaleSequenceDoesNotClearActiveGoal)
+{
+  ExecutionOrchestrator orchestrator;
+
+  const auto started = orchestrator.begin_goal("PTP");
+  ASSERT_TRUE(started.acquired);
+  orchestrator.update_phase(started.sequence, ExecutionPhase::kDispatchWait, "dispatch pending");
+
+  orchestrator.finish_goal(started.sequence + 1U, "stale sequence");
+  const auto snapshot = orchestrator.snapshot();
+  EXPECT_TRUE(snapshot.active);
+  EXPECT_EQ(snapshot.sequence, started.sequence);
+
+  const auto second = orchestrator.begin_goal("LIN");
+  EXPECT_FALSE(second.acquired);
+  EXPECT_NE(second.reason.find("active goal"), std::string::npos);
+}
+
 TEST(ExecutionOrchestratorTest, StopWithoutActiveGoalFailsClosed)
 {
   ExecutionOrchestrator orchestrator;

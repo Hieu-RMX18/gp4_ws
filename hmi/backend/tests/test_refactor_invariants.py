@@ -126,5 +126,22 @@ class TestJointNameContract(unittest.TestCase):
         self.assertEqual(tuple(JOINT_NAMES), self.EXPECTED)
 
 
+class TestConstants(unittest.TestCase):
+    """Verify the consolidated constants module."""
+
+    def test_joint_names_tuple(self) -> None:
+        from hmi.backend.domain.constants import GP4_JOINT_NAMES
+
+        self.assertEqual(len(GP4_JOINT_NAMES), 6)
+        self.assertEqual(GP4_JOINT_NAMES[0], "joint_1_s")
+        self.assertEqual(GP4_JOINT_NAMES[5], "joint_6_t")
+        self.assertIsInstance(GP4_JOINT_NAMES, tuple)
+
+    def test_joint_count(self) -> None:
+        from hmi.backend.domain.constants import GP4_JOINT_COUNT, GP4_JOINT_NAMES
+
+        self.assertEqual(GP4_JOINT_COUNT, len(GP4_JOINT_NAMES))
+
+
 if __name__ == "__main__":
     unittest.main()

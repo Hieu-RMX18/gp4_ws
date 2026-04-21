@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import importlib.util
 import json
+import logging
 from math import degrees
 from pathlib import Path
 import re
@@ -12,6 +13,7 @@ from threading import Lock, Thread
 import time
 from typing import Any
 
+from ..domain.constants import GP4_JOINT_NAMES as DEFAULT_JOINT_NAMES
 from ..domain.models import (
     BridgeConnection,
     ConnectionHealth,
@@ -72,15 +74,6 @@ else:  # pragma: no cover - trivial constant assignment
     _ROS_IMPORT_ERROR = None
 
 
-DEFAULT_JOINT_NAMES = (
-    'joint_1_s',
-    'joint_2_l',
-    'joint_3_u',
-    'joint_4_r',
-    'joint_5_b',
-    'joint_6_t',
-)
-
 CONNECTION_FRESHNESS_SEC = {
     'ros': 3.0,
     'robot_status': 3.0,
@@ -90,12 +83,15 @@ CONNECTION_FRESHNESS_SEC = {
     'llm': 30.0,
     'alerts': 5.0,
 }
-DEFAULT_MOTION_VELOCITY_SCALE = 0.10
-DEFAULT_MOTION_ACCELERATION_SCALE = 0.10
+# Keep supervisor defaults at-or-below current validation limits so
+# sim execution fails closed less often on conservative profiles.
+DEFAULT_MOTION_VELOCITY_SCALE = 0.06
+DEFAULT_MOTION_ACCELERATION_SCALE = 0.06
 DEFAULT_VALIDATE_TIMEOUT_SEC = 5.0
 DEFAULT_ACTION_WAIT_TIMEOUT_SEC = 5.0
 DEFAULT_EXECUTION_TIMEOUT_SEC = 120.0
 _JOINT_NAME_TO_INDEX = {name: index for index, name in enumerate(DEFAULT_JOINT_NAMES)}
+LOGGER = logging.getLogger("uvicorn.error")
 
 
 @dataclass(slots=True)
@@ -178,11 +174,11 @@ KNOWN_WORKSPACE_ENDPOINTS = {
 
 
 class WorkspaceRosAdapter:
-    """ROS adapter for the HMI telemetry bridge and sim-only supervisor execution.
+    """ROS adapter for HMI telemetry and supervisor-owned execution handoff.
 
     Telemetry remains subscription-driven and read-oriented. The only write-capable
-    path this adapter opens is the supervisor-owned sim execution boundary:
-    ValidateCommand service -> ExecuteMotion action. Hardware mode stays blocked.
+    path this adapter opens is the supervisor-owned execution boundary:
+    ValidateCommand service -> ExecuteMotion action.
     """
 
     def __init__(
@@ -222,6 +218,7 @@ class WorkspaceRosAdapter:
         self._validate_client: Any = None
         self._execute_client: Any = None
         self._goal_handles: dict[str, Any] = {}
+        self._goal_correlation_ids: dict[str, str] = {}
         self._goal_lock = Lock()
         self._stop_requested = False
         self._command_interface_poll_period_sec = 0.5
@@ -275,6 +272,7 @@ class WorkspaceRosAdapter:
         self._subscriptions = []
         with self._goal_lock:
             self._goal_handles.clear()
+            self._goal_correlation_ids.clear()
         self._validate_client = None
         self._execute_client = None
         self._executor = None
@@ -302,6 +300,28 @@ class WorkspaceRosAdapter:
             "commandId": command_id,
         }
 
+    def _trace(
+        self,
+        stage: str,
+        *,
+        command_id: str,
+        correlation_id: str | None,
+        **fields: Any,
+    ) -> None:
+        rendered_fields = [
+            f"command_id={command_id}",
+            f"correlation_id={correlation_id or 'n/a'}",
+        ]
+        for key, value in fields.items():
+            if value is None:
+                continue
+            if isinstance(value, (dict, list, tuple)):
+                rendered_value = json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+            else:
+                rendered_value = str(value)
+            rendered_fields.append(f"{key}={rendered_value}")
+        LOGGER.info("[HMI ROS] %s | %s", stage, " | ".join(rendered_fields))
+
     def confirm_command(
         self,
         *,
@@ -312,13 +332,56 @@ class WorkspaceRosAdapter:
         lease_id: str,
         correlation_id: str,
         parsed_intent: dict[str, Any] | None = None,
+        requested_mode: str | None = None,
     ) -> dict[str, Any]:
+        self._trace(
+            "confirm.request",
+            command_id=command_id,
+            correlation_id=correlation_id,
+            plan_fingerprint=plan_fingerprint,
+            operator_id=operator_id,
+            session_id=session_id,
+        )
         runtime = self.read_runtime_snapshot()
-        if runtime.mode != RuntimeMode.SIM:
+        if requested_mode is not None and requested_mode != runtime.mode.value:
+            reason = (
+                f"requested mode {requested_mode} does not match runtime mode {runtime.mode.value}."
+            )
+            self._trace(
+                "confirm.blocked",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason=reason,
+                runtime_mode=runtime.mode.value,
+            )
             return self._execution_response(
                 accepted=False,
                 status='blocked',
-                summary='Supervisor execution remains blocked outside sim mode.',
+                summary=reason,
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=False,
+            )
+
+        preflight = self.evaluate_execution_preflight(target_mode=runtime.mode.value)
+        if not preflight["accepted"]:
+            reason = "; ".join(preflight["reasons"]) or "execution preflight failed"
+            self._trace(
+                "confirm.blocked",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason=reason,
+                runtime_mode=runtime.mode.value,
+                preflight=preflight,
+            )
+            return self._execution_response(
+                accepted=False,
+                status='blocked',
+                summary=reason,
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
                 operator_id=operator_id,
@@ -329,6 +392,12 @@ class WorkspaceRosAdapter:
             )
 
         if parsed_intent is None:
+            self._trace(
+                "confirm.blocked",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason="parsed intent missing at execution boundary",
+            )
             return self._execution_response(
                 accepted=False,
                 status='blocked',
@@ -345,6 +414,13 @@ class WorkspaceRosAdapter:
         try:
             command_payload = self._build_command_payload(parsed_intent)
         except ValueError as exc:
+            self._trace(
+                "payload.build_failed",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason=str(exc),
+                parsed_intent=parsed_intent,
+            )
             return self._execution_response(
                 accepted=False,
                 status='blocked',
@@ -358,8 +434,18 @@ class WorkspaceRosAdapter:
                 dispatched_to_ros=False,
             )
 
-        validation_result = self._validate_motion_request(command_payload)
+        validation_result = self._validate_motion_request(
+            command_payload,
+            command_id=command_id,
+            correlation_id=correlation_id,
+        )
         if not validation_result["accepted"]:
+            self._trace(
+                "validate.rejected",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason=validation_result["summary"],
+            )
             return self._execution_response(
                 accepted=False,
                 status='blocked',
@@ -386,19 +472,44 @@ class WorkspaceRosAdapter:
     def abort_command(self, *, command_id: str) -> tuple[bool, str]:
         with self._goal_lock:
             goal_handle = self._goal_handles.get(command_id)
+            correlation_id = self._goal_correlation_ids.get(command_id)
 
         if goal_handle is None:
+            self._trace(
+                "abort.skipped",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason="no active ExecuteMotion goal for command",
+            )
             return True, f"Command {command_id} cancelled before any ROS execution request."
 
         try:
             cancel_future = goal_handle.cancel_goal_async()
             wrapped = self._wait_for_future(cancel_future, DEFAULT_ACTION_WAIT_TIMEOUT_SEC)
         except Exception as exc:
+            self._trace(
+                "abort.failed",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason=str(exc),
+            )
             return False, f"Failed to cancel ExecuteMotion goal for {command_id}: {exc}"
 
         goals_canceling = getattr(wrapped, 'goals_canceling', [])
         if goals_canceling:
+            self._trace(
+                "abort.accepted",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                summary="ExecuteMotion cancellation accepted by action server",
+            )
             return True, f"Cancellation requested for ExecuteMotion goal {command_id}."
+        self._trace(
+            "abort.rejected",
+            command_id=command_id,
+            correlation_id=correlation_id,
+            summary="ExecuteMotion cancellation was not accepted by action server",
+        )
         return False, f"ExecuteMotion goal {command_id} did not accept cancellation."
 
     def _execution_response(
@@ -429,9 +540,121 @@ class WorkspaceRosAdapter:
             "dispatchedToRos": dispatched_to_ros,
         }
 
+    def evaluate_execution_preflight(self, *, target_mode: str | None = None) -> dict[str, Any]:
+        runtime = self.read_runtime_snapshot()
+        requested_mode_text = str(target_mode or runtime.mode.value).strip().lower() or runtime.mode.value
+        requested_mode = RuntimeMode(requested_mode_text) if requested_mode_text in RuntimeMode._value2member_map_ else RuntimeMode.UNKNOWN
+        source_statuses = self.read_source_statuses()
+        source_map = {source.name: source for source in source_statuses}
+        reasons: list[str] = []
+
+        if requested_mode not in {RuntimeMode.SIM, RuntimeMode.HARDWARE}:
+            reasons.append(f"runtime mode {requested_mode.value} is not command-capable.")
+
+        if runtime.mode != requested_mode:
+            reasons.append(
+                f"requested mode {requested_mode.value} does not match runtime mode {runtime.mode.value}."
+            )
+
+        if runtime.system_state != SystemRuntimeState.NORMAL:
+            reasons.append(f"runtime state {runtime.system_state.value} blocks execution.")
+
+        required_sources: list[str]
+        if requested_mode == RuntimeMode.SIM:
+            required_sources = [
+                "gateway_status",
+                "readiness",
+                "supervisor_alerts",
+                "joint_states_fallback",
+                "validate_command_service",
+                "execute_motion_action",
+            ]
+        elif requested_mode == RuntimeMode.HARDWARE:
+            required_sources = [
+                "gateway_status",
+                "readiness",
+                "supervisor_alerts",
+                "robot_status",
+                "joint_states_primary",
+                "validate_command_service",
+                "execute_motion_action",
+            ]
+        else:
+            required_sources = []
+
+        for source_name in required_sources:
+            source = source_map.get(source_name)
+            if source is None:
+                reasons.append(f"required telemetry source {source_name} is missing.")
+                continue
+            if not source.active:
+                reasons.append(f"required telemetry source {source_name} is inactive.")
+            if source.freshness_state != TelemetryFreshnessState.FRESH:
+                reasons.append(
+                    f"required telemetry source {source_name} is {source.freshness_state.value}."
+                )
+
+        if requested_mode == RuntimeMode.HARDWARE:
+            primary_joint_source = source_map.get("joint_states_primary")
+            if primary_joint_source is not None:
+                if not primary_joint_source.preferred:
+                    reasons.append("joint_states_primary is not marked preferred in hardware mode.")
+                if not primary_joint_source.active:
+                    reasons.append("joint_states_primary is not the active joint source in hardware mode.")
+
+            robot_status = source_map.get("robot_status")
+            if robot_status is not None and not robot_status.active:
+                reasons.append("robot_status source must stay active in hardware mode.")
+
+        return {
+            "accepted": len(reasons) == 0,
+            "mode": requested_mode.value,
+            "reasons": reasons,
+            "requiredSources": required_sources,
+            "runtimeState": runtime.system_state.value,
+            "sourceStatuses": [
+                {
+                    "name": source.name,
+                    "freshnessState": source.freshness_state.value,
+                    "active": source.active,
+                    "preferred": source.preferred,
+                    "detail": source.detail,
+                }
+                for source in source_statuses
+            ],
+        }
+
     def _build_command_payload(self, parsed_intent: dict[str, Any]) -> dict[str, Any]:
+        normalized_command = parsed_intent.get("normalizedCommand")
+        if isinstance(normalized_command, dict) and normalized_command.get("primitive_type"):
+            return dict(normalized_command)
+
         action = str(parsed_intent.get("action") or "").strip()
         parameters = dict(parsed_intent.get("parameters") or {})
+
+        if parsed_intent.get("primitive_type"):
+            return dict(parsed_intent)
+
+        primitive_action = action.upper()
+        if primitive_action in {
+            "HOME",
+            "PTP",
+            "LIN",
+            "CIRC",
+            "CARTESIAN_PATH",
+            "MOVE_REL",
+            "MOVE_JOINT",
+            "MOVE_JOINTS",
+            "WAIT",
+            "STOP",
+            "SET_SPEED",
+            "IO_SET",
+            "ALARM_RESET",
+            "GET_POSE",
+        }:
+            payload = {"primitive_type": primitive_action}
+            payload.update(parameters)
+            return payload
 
         if action == "move_home":
             return {
@@ -548,7 +771,19 @@ class WorkspaceRosAdapter:
                 return joint.position_deg
         return None
 
-    def _validate_motion_request(self, command_payload: dict[str, Any]) -> dict[str, Any]:
+    def _validate_motion_request(
+        self,
+        command_payload: dict[str, Any],
+        *,
+        command_id: str,
+        correlation_id: str,
+    ) -> dict[str, Any]:
+        self._trace(
+            "validate.request",
+            command_id=command_id,
+            correlation_id=correlation_id,
+            payload=command_payload,
+        )
         if self._node is None or ValidateCommand is None:
             return {
                 "accepted": False,
@@ -579,12 +814,25 @@ class WorkspaceRosAdapter:
                 DEFAULT_VALIDATE_TIMEOUT_SEC,
             )
         except Exception as exc:
+            self._trace(
+                "validate.error",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason=str(exc),
+            )
             return {
                 "accepted": False,
                 "summary": f"ValidateCommand call failed: {exc}",
             }
 
         if not response.valid:
+            self._trace(
+                "validate.response",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                valid=False,
+                reason=response.reason or "ValidateCommand rejected the request.",
+            )
             return {
                 "accepted": False,
                 "summary": response.reason or "ValidateCommand rejected the request.",
@@ -598,6 +846,13 @@ class WorkspaceRosAdapter:
             if isinstance(sanitized_payload, dict):
                 command_payload.clear()
                 command_payload.update(sanitized_payload)
+        self._trace(
+            "validate.response",
+            command_id=command_id,
+            correlation_id=correlation_id,
+            valid=True,
+            sanitized_payload=command_payload,
+        )
         return {
             "accepted": True,
             "summary": "ValidateCommand accepted the request.",
@@ -614,6 +869,13 @@ class WorkspaceRosAdapter:
         correlation_id: str,
         command_payload: dict[str, Any],
     ) -> dict[str, Any]:
+        self._trace(
+            "execute.request",
+            command_id=command_id,
+            correlation_id=correlation_id,
+            payload=command_payload,
+            action_name=self._execute_motion_action,
+        )
         if self._node is None or ExecuteMotion is None or ActionClient is None:
             return self._execution_response(
                 accepted=False,
@@ -661,6 +923,12 @@ class WorkspaceRosAdapter:
                 DEFAULT_ACTION_WAIT_TIMEOUT_SEC,
             )
         except Exception as exc:
+            self._trace(
+                "execute.send_failed",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason=str(exc),
+            )
             return self._execution_response(
                 accepted=False,
                 status='failed',
@@ -675,6 +943,12 @@ class WorkspaceRosAdapter:
             )
 
         if goal_handle is None or not goal_handle.accepted:
+            self._trace(
+                "execute.rejected",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason="ExecuteMotion action server rejected the goal",
+            )
             return self._execution_response(
                 accepted=False,
                 status='blocked',
@@ -690,12 +964,25 @@ class WorkspaceRosAdapter:
 
         with self._goal_lock:
             self._goal_handles[command_id] = goal_handle
+            self._goal_correlation_ids[command_id] = correlation_id
+        self._trace(
+            "execute.accepted",
+            command_id=command_id,
+            correlation_id=correlation_id,
+            summary="ExecuteMotion goal accepted by action server",
+        )
         try:
             wrapped_result = self._wait_for_future(
                 goal_handle.get_result_async(),
                 DEFAULT_EXECUTION_TIMEOUT_SEC,
             )
         except Exception as exc:
+            self._trace(
+                "execute.result_failed",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason=str(exc),
+            )
             return self._execution_response(
                 accepted=False,
                 status='failed',
@@ -711,9 +998,16 @@ class WorkspaceRosAdapter:
         finally:
             with self._goal_lock:
                 self._goal_handles.pop(command_id, None)
+                self._goal_correlation_ids.pop(command_id, None)
 
         result = getattr(wrapped_result, 'result', None)
         if result is None:
+            self._trace(
+                "execute.result_failed",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason="ExecuteMotion returned no result payload",
+            )
             return self._execution_response(
                 accepted=False,
                 status='failed',
@@ -728,6 +1022,13 @@ class WorkspaceRosAdapter:
             )
 
         if getattr(result, 'success', False):
+            self._trace(
+                "execute.result",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                status="succeeded",
+                summary=str(result.message or 'ExecuteMotion completed successfully.'),
+            )
             return self._execution_response(
                 accepted=True,
                 status='succeeded',
@@ -743,6 +1044,13 @@ class WorkspaceRosAdapter:
 
         summary = str(result.message or 'ExecuteMotion failed.')
         if 'cancel' in summary.lower():
+            self._trace(
+                "execute.result",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                status="cancelled",
+                summary=summary,
+            )
             return self._execution_response(
                 accepted=False,
                 status='cancelled',
@@ -756,6 +1064,13 @@ class WorkspaceRosAdapter:
                 dispatched_to_ros=True,
             )
 
+        self._trace(
+            "execute.result",
+            command_id=command_id,
+            correlation_id=correlation_id,
+            status="failed",
+            summary=summary,
+        )
         return self._execution_response(
             accepted=False,
             status='failed',
@@ -789,6 +1104,11 @@ class WorkspaceRosAdapter:
 
         if "target_pose" in command_payload and Pose is not None:
             goal.target_pose = self._dict_to_pose(command_payload["target_pose"])
+        if "waypoints" in command_payload and Pose is not None:
+            goal.waypoints = [
+                self._dict_to_pose(waypoint)
+                for waypoint in command_payload.get("waypoints", [])
+            ]
 
         return goal
 
@@ -1061,7 +1381,7 @@ class WorkspaceRosAdapter:
         snapshot: _TelemetryState,
         runtime_mode: RuntimeMode,
     ) -> list[TelemetrySourceSnapshot]:
-        active = runtime_mode == RuntimeMode.SIM
+        active = runtime_mode in {RuntimeMode.SIM, RuntimeMode.HARDWARE}
         return [
             self._build_source_status(
                 snapshot=snapshot,
@@ -1074,7 +1394,7 @@ class WorkspaceRosAdapter:
                 detail=(
                     snapshot.validate_command_detail
                     if active
-                    else 'Read-only outside sim mode.'
+                    else 'Read-only outside command-capable modes.'
                 ),
             ),
             self._build_source_status(
@@ -1088,7 +1408,7 @@ class WorkspaceRosAdapter:
                 detail=(
                     snapshot.execute_motion_detail
                     if active
-                    else 'Read-only outside sim mode.'
+                    else 'Read-only outside command-capable modes.'
                 ),
             ),
         ]
@@ -1096,8 +1416,8 @@ class WorkspaceRosAdapter:
     def _command_interface_health(self, snapshot: _TelemetryState, runtime_mode: RuntimeMode) -> ConnectionHealth:
         if snapshot.start_error:
             return ConnectionHealth.DOWN
-        if runtime_mode != RuntimeMode.SIM:
-            return ConnectionHealth.HEALTHY
+        if runtime_mode not in {RuntimeMode.SIM, RuntimeMode.HARDWARE}:
+            return ConnectionHealth.DOWN
         if snapshot.validate_command_ready and snapshot.execute_motion_ready:
             return ConnectionHealth.HEALTHY
         if snapshot.ros_started_at is not None:
@@ -1105,11 +1425,11 @@ class WorkspaceRosAdapter:
         return ConnectionHealth.DOWN
 
     def _command_interface_active(self, runtime_mode: RuntimeMode) -> bool:
-        return runtime_mode == RuntimeMode.SIM
+        return runtime_mode in {RuntimeMode.SIM, RuntimeMode.HARDWARE}
 
     def _command_interface_detail(self, snapshot: _TelemetryState, runtime_mode: RuntimeMode) -> str | None:
-        if runtime_mode != RuntimeMode.SIM:
-            return 'Command ingress stays read-only outside sim mode.'
+        if runtime_mode not in {RuntimeMode.SIM, RuntimeMode.HARDWARE}:
+            return 'Command ingress stays read-only outside command-capable modes.'
         parts: list[str] = []
         if snapshot.validate_command_detail:
             parts.append(snapshot.validate_command_detail)

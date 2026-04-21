@@ -1,3 +1,5 @@
+# DEPRECATED (2026-04-21): This launch file is a thin wrapper around sim.launch.py.
+# Use sim.launch.py directly. Will be removed in a future cleanup.
 import os
 
 from ament_index_python.packages import get_package_share_directory

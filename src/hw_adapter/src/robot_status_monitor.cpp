@@ -3,6 +3,7 @@
 
 #include "hw_adapter/robot_status_monitor.hpp"
 
+#include <chrono>
 #include <sstream>
 #include <utility>
 
@@ -65,9 +66,19 @@ std::string build_status_summary(
 
 namespace hw_adapter
 {
-RobotStatusMonitor::RobotStatusMonitor(rclcpp::Node & node, std::string topic_name)
-: logger_(node.get_logger())
+RobotStatusMonitor::RobotStatusMonitor(
+  rclcpp::Node & node,
+  std::string topic_name,
+  std::chrono::milliseconds max_age)
+: logger_(node.get_logger()),
+  clock_(node.get_clock()),
+  max_age_(max_age)
 {
+  if (max_age_.count() <= 0)
+  {
+    max_age_ = std::chrono::milliseconds(200);
+  }
+
   readiness_pub_ = node.create_publisher<interfaces::msg::RobotReadiness>(
     "/hw_adapter/ready",
     rclcpp::QoS(1).reliable().transient_local());
@@ -81,7 +92,34 @@ RobotStatusMonitor::RobotStatusMonitor(rclcpp::Node & node, std::string topic_na
 RobotStatusSnapshot RobotStatusMonitor::latest_snapshot() const
 {
   std::lock_guard<std::mutex> lock(snapshot_mutex_);
-  return snapshot_;
+  RobotStatusSnapshot snapshot = snapshot_;
+  if (!has_status_)
+  {
+    snapshot.has_status = false;
+    snapshot.ready = false;
+    snapshot.fresh = false;
+    snapshot.age = std::chrono::milliseconds::max();
+    snapshot.status_message = "unknown: no robot status received";
+    return snapshot;
+  }
+
+  snapshot.has_status = true;
+  const auto age_ns = (clock_->now() - receive_time_).nanoseconds();
+  const auto non_negative_age_ns = age_ns < 0 ? 0 : age_ns;
+  snapshot.age = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::nanoseconds(non_negative_age_ns));
+  snapshot.fresh = snapshot.age <= max_age_;
+  if (!snapshot.fresh)
+  {
+    std::ostringstream stream;
+    stream << snapshot.status_message
+           << " (stale robot status: age=" << snapshot.age.count()
+           << " ms exceeds max_age=" << max_age_.count() << " ms)";
+    snapshot.status_message = stream.str();
+    snapshot.ready = false;
+  }
+
+  return snapshot;
 }
 
 bool RobotStatusMonitor::has_status() const
@@ -115,13 +153,14 @@ interfaces::msg::RobotReadiness RobotStatusMonitor::readiness_msg() const
 
 bool RobotStatusMonitor::is_ready_for_motion(std::string & reason) const
 {
-  if (is_ready())
+  const auto snapshot = latest_snapshot();
+  if (snapshot.ready)
   {
     reason.clear();
     return true;
   }
 
-  reason = status_summary();
+  reason = snapshot.status_message;
   return false;
 }
 
@@ -146,6 +185,7 @@ void RobotStatusMonitor::status_callback(const industrial_msgs::msg::RobotStatus
   next_snapshot.in_motion = tri_state_is_true(msg->in_motion.val);
   next_snapshot.in_error = tri_state_is_true(msg->in_error.val);
   next_snapshot.mode = msg->mode.val;
+  next_snapshot.header_stamp = msg->header.stamp;
   next_snapshot.error_codes = msg->error_codes;
   const bool mode_is_auto = msg->mode.val == industrial_msgs::msg::RobotMode::AUTO;
   const bool tri_state_known =
@@ -184,6 +224,8 @@ void RobotStatusMonitor::status_callback(const industrial_msgs::msg::RobotStatus
   {
     std::lock_guard<std::mutex> lock(snapshot_mutex_);
     snapshot_ = std::move(next_snapshot);
+    has_status_ = true;
+    receive_time_ = clock_->now();
   }
 
   publish_readiness();

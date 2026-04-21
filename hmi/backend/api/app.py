@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import os
+from typing import Any
 
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
@@ -16,6 +18,7 @@ from .contracts import (
     ConnectionStateResponseModel,
     HMI_STREAM_EVENT_ADAPTER,
     HmiStateSnapshotModel,
+    JogCommandRequestModel,
     LeaseAcquireRequestModel,
     LeaseMutationResponseModel,
     LeaseReleaseRequestModel,
@@ -26,9 +29,14 @@ from .contracts import (
 )
 from ..ros.adapter import WorkspaceRosAdapter
 from ..services.audit_service import AuditService
+from ..services.jog_pendant_service import JogPendantService
 from ..services.session_lock_service import SessionLockService
 from ..services.supervisor_service import SupervisorService, SupervisorServiceError
 from ..services.telemetry_bridge_service import TelemetryBridgeService
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def build_default_services() -> tuple[TelemetryBridgeService, SupervisorService]:
@@ -44,6 +52,7 @@ def build_default_services() -> tuple[TelemetryBridgeService, SupervisorService]
         audit_service=audit_service,
         session_lock_service=session_lock_service,
         ros_adapter=ros_adapter,
+        sim_auto_confirm=_env_flag_enabled("HMI_SIM_AUTO_CONFIRM"),
     )
     supervisor_service.bind_telemetry_service(telemetry_service)
     return telemetry_service, supervisor_service
@@ -53,6 +62,7 @@ def build_default_services() -> tuple[TelemetryBridgeService, SupervisorService]
 def create_app(
     telemetry_service: TelemetryBridgeService | None = None,
     supervisor_service: SupervisorService | None = None,
+    jog_pendant_service: JogPendantService | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -64,13 +74,22 @@ def create_app(
             service = telemetry_service
             supervisor = supervisor_service
             supervisor.bind_telemetry_service(service)
+
+        if jog_pendant_service is None:
+            jog_svc = JogPendantService()
+        else:
+            jog_svc = jog_pendant_service
+
         await service.start()
+        jog_svc.start()
         app.state.telemetry_service = service
         app.state.supervisor_service = supervisor
+        app.state.jog_pendant_service = jog_svc
         try:
             yield
         finally:
             await service.stop()
+            jog_svc.stop()
 
     app = FastAPI(
         title='GP4 HMI Telemetry + Supervisor Bridge',
@@ -207,6 +226,32 @@ def create_app(
     def replay_detail(command_id: str) -> dict:
         return app.state.supervisor_service.replay_detail(command_id)
 
+    # ── Jog Pendant Endpoints ───────────────────────────────────────────────
+
+    @app.post('/api/hmi/jog/activate')
+    def jog_activate() -> dict:
+        svc = app.state.jog_pendant_service
+        accepted, message = svc.activate_bridge()
+        return {'accepted': accepted, 'message': message}
+
+    @app.post('/api/hmi/jog/deactivate')
+    def jog_deactivate() -> dict:
+        svc = app.state.jog_pendant_service
+        accepted, message = svc.deactivate_bridge()
+        return {'accepted': accepted, 'message': message}
+
+    @app.post('/api/hmi/jog/command')
+    def jog_command(request: JogCommandRequestModel) -> dict:
+        svc = app.state.jog_pendant_service
+        ok = svc.send_jog_command(
+            joint_index=request.jointIndex,
+            direction=request.direction,
+            mode=request.mode,
+            velocity_scale=request.velocityScale,
+            step_degrees=request.stepDegrees,
+        )
+        return {'accepted': ok, 'message': 'published' if ok else 'failed'}
+
     @app.websocket('/api/hmi/stream')
     async def stream_state(
         websocket: WebSocket,
@@ -215,7 +260,9 @@ def create_app(
     ) -> None:
         await websocket.accept()
         service = app.state.telemetry_service
-        queue = service.subscribe(session_id=session_id, operator_id=operator_id)
+        jog_svc = app.state.jog_pendant_service
+        telemetry_queue = service.subscribe(session_id=session_id, operator_id=operator_id)
+        jog_queue = jog_svc.subscribe()
 
         try:
             await websocket.send_json(
@@ -226,23 +273,78 @@ def create_app(
                     }
                 ).model_dump(mode='json')
             )
+            # Send initial jog status
+            jog_status = jog_svc.get_status()
+            await websocket.send_json({
+                'type': 'jog_bridge_status',
+                'jogBridgeStatus': {
+                    'state': jog_status.state.value,
+                    'pointsQueued': jog_status.points_queued,
+                    'effectiveHz': jog_status.effective_hz,
+                    'robotReady': jog_status.robot_ready,
+                    'servoActive': jog_status.servo_active,
+                    'bridgeActive': jog_status.bridge_active,
+                    'lastError': jog_status.last_error,
+                    'rejectionReason': jog_status.rejection_reason,
+                },
+            })
+
             while True:
-                try:
-                    payload = await asyncio.wait_for(
-                        queue.get(),
-                        timeout=service.heartbeat_interval_sec,
-                    )
-                except asyncio.TimeoutError:
-                    payload = service.get_heartbeat_event()
-                await websocket.send_json(
-                    HMI_STREAM_EVENT_ADAPTER.validate_python(payload).model_dump(mode='json')
+                import asyncio as _asyncio
+                done, pending = await _asyncio.wait(
+                    [
+                        _asyncio.create_task(_async_queue_get(telemetry_queue)),
+                        _asyncio.create_task(_async_queue_get(jog_queue)),
+                    ],
+                    timeout=service.heartbeat_interval_sec,
+                    return_when=_asyncio.FIRST_COMPLETED,
                 )
+
+                for task in pending:
+                    task.cancel()
+
+                if not done:
+                    payload = service.get_heartbeat_event()
+                    await websocket.send_json(
+                        HMI_STREAM_EVENT_ADAPTER.validate_python(payload).model_dump(mode='json')
+                    )
+                else:
+                    for task in done:
+                        payload = task.result()
+                        if payload is not None:
+                            await websocket.send_json(
+                                HMI_STREAM_EVENT_ADAPTER.validate_python(payload).model_dump(mode='json')
+                            )
+
         except WebSocketDisconnect:
             pass
         finally:
-            service.unsubscribe(queue)
+            service.unsubscribe(telemetry_queue)
+            jog_svc.unsubscribe(jog_queue)
 
     return app
 
 
-app = create_app()
+async def _async_queue_get(q: Any) -> Any:
+    """Get from asyncio.Queue or queue.Queue without blocking the event loop."""
+    try:
+        if isinstance(q, asyncio.Queue):
+            return await asyncio.wait_for(q.get(), timeout=60.0)
+
+        # JogPendantService uses stdlib queue.Queue from a ROS spin thread.
+        # Poll non-blocking so WebSocket handling stays responsive.
+        import queue as thread_queue
+        import time
+
+        deadline = time.monotonic() + 60.0
+        while time.monotonic() < deadline:
+            try:
+                return q.get_nowait()
+            except thread_queue.Empty:
+                await asyncio.sleep(0.05)
+        return None
+    except asyncio.TimeoutError:
+        return None
+
+
+app = create_app()  # noqa: N816 — exported at module level for uvicorn import

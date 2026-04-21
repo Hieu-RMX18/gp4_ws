@@ -56,10 +56,9 @@ def test_move_rel_forbidden_zone_constants_match_safety_rules():
     move_rel_limits = _load_move_rel_limits()
 
     constant_prefixes = {
-        "table_clearance_guard": "TableClearance",
-        "avoid_left_region": "AvoidLeft",
-        "wall_region": "Wall",
-        "corner_clearance_guard": "CornerGuard",
+        "front_wall_guard": "FrontWall",
+        "right_wall_guard": "RightWall",
+        "floor_clearance_guard": "FloorClearance",
     }
     field_suffixes = {
         "x": "X",

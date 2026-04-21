@@ -16,6 +16,29 @@
     <!-- Import ros2_control xacro -->
     <xacro:include filename="motoman_gp4.ros2_control.xacro" />
 
+    <!--
+      Station visual is embedded in MoveIt robot_description so gp4_bringup
+      always shows the real cell model in RViz.
+      Collision authority stays in gp4_bringup/config/scene_objects.yaml.
+    -->
+    <link name="station_visual_link">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0" />
+        <geometry>
+          <mesh filename="package://gp4_station/meshes/station3.stl" scale="0.001 0.001 0.001" />
+        </geometry>
+        <material name="station_grey">
+          <color rgba="0.35 0.35 0.35 1.0" />
+        </material>
+      </visual>
+    </link>
+
+    <joint name="base_to_station_visual" type="fixed">
+      <parent link="base_link" />
+      <child link="station_visual_link" />
+      <origin xyz="0 0 0" rpy="0 0 ${pi}" />
+    </joint>
+
     <!-- Gọi macro với tham số thật/giả -->
     <xacro:motoman_gp4_ros2_control
         name="GP4RealSystem"

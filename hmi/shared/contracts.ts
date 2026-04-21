@@ -63,6 +63,28 @@ export interface BridgeCapabilities {
   executionAllowed: boolean;
   replayAvailable: boolean;
   simOnly: boolean;
+  hardwareGate: HardwareGateStatus;
+}
+
+export interface HardwareGateChecklist {
+  timingJitter: boolean;
+  disconnectReconnect: boolean;
+  robotStatusSemantics: boolean;
+  jointSourcePrecedence: boolean;
+  auditVisibility: boolean;
+}
+
+export interface HardwareGateStatus {
+  unlocked: boolean;
+  reasons: string[];
+  flagEnabled: boolean;
+  evidencePath: string;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  reportPath: string | null;
+  reportSha256: string | null;
+  reportSha256Match: boolean;
+  checklist: HardwareGateChecklist | null;
 }
 
 export interface TelemetrySourceStatus {
@@ -144,6 +166,8 @@ export interface CommandValidationResult {
   criticalSources: ValidationSourceStatus[];
   optionalSources: ValidationSourceStatus[];
   eventDrivenSources: ValidationSourceStatus[];
+  hardwareGate: HardwareGateStatus;
+  preflight: Record<string, unknown>;
 }
 
 export interface CommandExecutionResult {
@@ -339,7 +363,52 @@ export type HmiStreamEvent =
   | { type: 'lease_state'; lease: LeaseView; capabilities: BridgeCapabilities }
   | { type: 'command_lifecycle'; command: CommandView; messages?: ChatMessage[]; planMetrics?: PlanMetrics | null }
   | { type: 'replay_updated'; replayItems: ReplayListItem[] }
-  | { type: 'connection_state'; transportState: TransportState; connections?: BridgeConnection[] };
+  | { type: 'connection_state'; transportState: TransportState; connections?: BridgeConnection[] }
+  | { type: 'jog_bridge_status'; jogBridgeStatus: JogBridgeStatusSnapshot };
+
+// ── Jog Pendant Types ──────────────────────────────────────────────────────
+
+export type JogMode = 'continuous' | 'discrete';
+
+export type JogBridgeState =
+  | 'IDLE'
+  | 'STARTING'
+  | 'READY'
+  | 'ACTIVE'
+  | 'HALTING'
+  | 'HALTED'
+  | 'ERROR'
+  | 'REJECTED_NOT_READY'
+  | 'REJECTED_FJT_ACTIVE'
+  | 'TIMEOUT'
+  | 'BUSY_RETRY';
+
+export interface JogBridgeStatusSnapshot {
+  state: JogBridgeState;
+  pointsQueued: number;
+  effectiveHz: number;
+  robotReady: boolean;
+  servoActive: boolean;
+  bridgeActive: boolean;
+  lastError: string;
+  rejectionReason: string;
+}
+
+export interface JogCommandRequest {
+  jointIndex: number;       // 0-5
+  direction: 1 | -1;        // +1 = positive, -1 = negative
+  mode: JogMode;
+  velocityScale: number;     // 0.0-0.3
+  stepDegrees: number;       // for discrete mode
+}
+
+export interface JogBridgeCapabilities {
+  jogAvailable: boolean;
+  bridgeServiceAvailable: boolean;
+  canActivateBridge: boolean;
+  bridgeState: JogBridgeState;
+  isExclusiveMode: boolean;  // true when jog bridge is active (blocks FJT path)
+}
 
 export interface GP4BridgeClient {
   connect(params: {
@@ -359,4 +428,8 @@ export interface GP4BridgeClient {
   getLeaseState(sessionId: string, operatorId: string): Promise<LeaseStateResponse>;
   listReplay(query?: ReplayListQuery): Promise<ReplayListResponse>;
   getReplayDetail(commandId: string): Promise<ReplayDetail>;
+  // Jog pendant
+  activateJogBridge(): Promise<{ accepted: boolean; message: string }>;
+  deactivateJogBridge(): Promise<{ accepted: boolean; message: string }>;
+  sendJogCommand(cmd: JogCommandRequest): void;  // fire-and-forget via REST
 }

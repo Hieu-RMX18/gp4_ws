@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 from typing import Any, Dict
 import yaml
-from ament_index_python.packages import get_package_share_directory
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class SemanticValidator:
@@ -17,22 +20,25 @@ class SemanticValidator:
         "SET_SPEED", "WAIT", "STOP", "MOVE_JOINT", "MOVE_JOINTS",
         "IO_SET", "ALARM_RESET",
     }
-    _MIN_VELOCITY_SCALE = 0.05
+    # Command-validation lower bound (keeps caller input sane).
+    # Note: safety_rules.require_human_approval is advisory metadata in this stack
+    # unless another runtime gate enforces it explicitly.
+    _MIN_VELOCITY_SCALE = 0.01
     _MAX_VELOCITY_SCALE = 0.06
 
     # MOVE_REL: max single-command translation norm (meters).
     # Fallback; runtime loads from safety_rules.yaml motion_limits.max_move_rel_translation.
-    # This pass raises fallback from 0.03 to 0.08.
-    _MAX_MOVE_REL_DELTA = 0.08
+    # Hardware pass keeps MOVE_REL short and conservative.
+    _MAX_MOVE_REL_DELTA = 0.05
 
     # GP4 has 6 joints (0..5)
     _NUM_JOINTS = 6
 
     # Fallback bounds — overridden by safety_rules.yaml at construction
     _DEFAULT_BOUNDS = {
-        "x": (-0.25, 0.38),
-        "y": (-0.25, 0.38),
-        "z": (0.20, 0.56),
+        "x": (-0.45, 0.45),
+        "y": (-0.16, 0.52),
+        "z": (0.23, 0.52),
     }
 
     def __init__(self, safety_rules: dict | None = None):
@@ -71,11 +77,25 @@ class SemanticValidator:
     @staticmethod
     def _load_safety_rules() -> dict:
         try:
+            from ament_index_python.packages import get_package_share_directory
+        except Exception as ex:
+            _LOGGER.warning(
+                "SemanticValidator: ament_index unavailable; using empty safety rules fallback: %s",
+                ex,
+            )
+            return {}
+
+        try:
             pkg_share = get_package_share_directory('safety')
             yaml_path = os.path.join(pkg_share, 'config', 'safety_rules.yaml')
             with open(yaml_path, 'r') as f:
                 return yaml.safe_load(f) or {}
-        except Exception:
+        except Exception as ex:
+            _LOGGER.warning(
+                "SemanticValidator: failed to load safety rules from package; "
+                "using empty fallback: %s",
+                ex,
+            )
             return {}
 
     def validate(self, command: Dict[str, Any]) -> bool:

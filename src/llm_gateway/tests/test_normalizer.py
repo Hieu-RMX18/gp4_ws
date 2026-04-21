@@ -42,7 +42,7 @@ def test_normalizer_defaults(normalizer):
     assert normalized["velocity_scale"] == 0.06
     assert normalized["acceleration_scale"] == 0.06
     assert normalized["planner_id"] == "PILZ_PTP"
-    assert normalized["require_approval"] is True
+    assert normalized["require_approval"] is False
 
 
 def test_normalizer_accepts_quaternion_orientation(normalizer):

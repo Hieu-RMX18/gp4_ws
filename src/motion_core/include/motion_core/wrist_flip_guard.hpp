@@ -12,7 +12,7 @@ class WristFlipGuard
 public:
   // V4 F1: per-joint delta thresholds instead of one fixed value for all joints.
   // J1/J2/J3 (large joints): 25° = 0.436 rad
-  // J4/J5 (wrist joints): 20° = 0.349 rad
+  // J4/J5 (wrist joints): 45° = 0.785 rad
   // J6 (wrist rotate): 30° = 0.524 rad (with unwrap for continuous rotation)
   static constexpr double kDeltaRadJ123 = 0.4363323129985824;  // 25°
   static constexpr double kDeltaRadJ45  = 0.7853981633974483;  // 45°

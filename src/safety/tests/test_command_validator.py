@@ -11,7 +11,7 @@ def test_valid_home_command(safety_rules):
 
 def test_velocity_scale_exceeds(safety_rules):
     validator = CommandValidator(safety_rules)
-    cmd = json.dumps({"primitive_type": "HOME", "velocity_scale": 0.08})
+    cmd = json.dumps({"primitive_type": "HOME", "velocity_scale": 0.09})
     valid, reason = validator.validate(cmd)
     assert valid is False
     assert "exceeds max allowed" in reason
@@ -34,9 +34,9 @@ def test_set_speed_valid_at_015(safety_rules):
     assert valid is True
 
 def test_set_speed_rejected_above_030(safety_rules):
-    """SET_SPEED with velocity_scale 0.08 exceeds commissioning max_velocity_scale 0.06."""
+    """SET_SPEED with velocity_scale 0.07 exceeds hardware max_velocity_scale 0.06."""
     validator = CommandValidator(safety_rules)
-    cmd = json.dumps({"primitive_type": "SET_SPEED", "velocity_scale": 0.08})
+    cmd = json.dumps({"primitive_type": "SET_SPEED", "velocity_scale": 0.07})
     valid, reason = validator.validate(cmd)
     assert valid is False
     assert "exceeds max allowed" in reason
@@ -96,13 +96,13 @@ def test_move_joint_valid_with_velocity(safety_rules):
     valid, reason = validator.validate(cmd)
     assert valid is True
 
-def test_move_joint_rejects_acceleration_above_commissioning_cap(safety_rules):
+def test_move_joint_rejects_acceleration_above_hardware_cap(safety_rules):
     validator = CommandValidator(safety_rules)
     cmd = json.dumps({
         "primitive_type": "MOVE_JOINT",
         "joint_index": 2, "joint_angle": 0.5,
         "velocity_scale": 0.06,
-        "acceleration_scale": 0.08
+        "acceleration_scale": 0.07
     })
     valid, reason = validator.validate(cmd)
     assert valid is False
@@ -152,3 +152,19 @@ def test_move_joints_accepts_missing_velocity_scale(safety_rules):
     valid, reason = validator.validate(cmd)
     assert valid is True
     assert reason == ""
+
+
+def test_default_scale_fallback_is_hardware_safe():
+    """If safety_rules are missing, defaults stay at conservative cap 0.06."""
+    validator = CommandValidator({})
+
+    valid, reason = validator.validate(
+        json.dumps({"primitive_type": "HOME", "velocity_scale": 0.06})
+    )
+    assert valid is True, reason
+
+    valid, reason = validator.validate(
+        json.dumps({"primitive_type": "HOME", "velocity_scale": 0.07})
+    )
+    assert valid is False
+    assert "exceeds max allowed 0.06" in reason

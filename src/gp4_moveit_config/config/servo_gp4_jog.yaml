@@ -20,8 +20,8 @@ command_in_type: "unitless"  # Scales the displacement by scale.joint
 scale:
   # Conservative joint velocity limit for experimental jog.
   # This is applied as a multiplier to joint.max_velocity from joint_limits.yaml.
-  # Effective max ~= 0.1 * joint.max_velocity rad/s.
-  joint: 0.1
+  # Effective max ~= 0.08 * joint.max_velocity rad/s.
+  joint: 0.08
 
 publish_period: 0.05  # 20 Hz publish rate (50ms)
 

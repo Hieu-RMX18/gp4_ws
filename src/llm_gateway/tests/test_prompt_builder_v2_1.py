@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 from llm_gateway.prompt_builder import FROZEN_SEMANTIC_INTENTS, build_system_prompt
 
@@ -25,6 +26,12 @@ from llm_gateway.prompt_builder import FROZEN_SEMANTIC_INTENTS, build_system_pro
 def prompt() -> str:
     """Build the system prompt with a placeholder schema."""
     return build_system_prompt("{}")
+
+
+def _load_workspace_bounds() -> dict:
+    safety_yaml = Path(__file__).resolve().parents[2] / "safety" / "config" / "safety_rules.yaml"
+    safety_rules = yaml.safe_load(safety_yaml.read_text()) or {}
+    return safety_rules["workspace_bounds"]
 
 
 # ── 1. Frozen intent list is exactly correct ──────────────────────────────────
@@ -119,12 +126,17 @@ def test_prompt_includes_unsupported_error_format(prompt: str):
 # ── 6. Prompt includes workspace and velocity constraints ─────────────────────
 
 def test_prompt_includes_workspace_limits(prompt: str):
-    assert "-0.25" in prompt and "0.38" in prompt, "Workspace x-limits missing"
-    assert "-0.25" in prompt and "0.38" in prompt, "Workspace y-limits missing"
-    assert "0.20" in prompt and "0.56" in prompt, "Workspace z-limits missing"
+    bounds = _load_workspace_bounds()
+    expected_line = (
+        f"WORKSPACE LIMITS (meters): "
+        f"x: {bounds['x_min']:.2f}–{bounds['x_max']:.2f}, "
+        f"y: {bounds['y_min']:.2f}–{bounds['y_max']:.2f}, "
+        f"z: {bounds['z_min']:.2f}–{bounds['z_max']:.2f}"
+    )
+    assert expected_line in prompt, "Prompt workspace limits are not synced with safety_rules.yaml"
 
 def test_prompt_includes_velocity_scale_range(prompt: str):
-    assert "0.05" in prompt and "0.06" in prompt, "Velocity scale range missing"
+    assert "0.01" in prompt and "0.06" in prompt, "Velocity scale range missing"
 
 def test_prompt_includes_unit_conversions(prompt: str):
     assert "0.01" in prompt or "cm" in prompt, "Unit conversion rules missing"

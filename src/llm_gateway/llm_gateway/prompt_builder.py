@@ -12,6 +12,11 @@ part of this prompt's output contract.
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
+import yaml
+
 
 # ── Frozen semantic intent list ─────────────────────────────────────────────
 # Must match IntentRouter._route_single_intent exactly.
@@ -36,6 +41,73 @@ FROZEN_SEMANTIC_INTENTS = frozenset({
     # "sequence" is a meta-intent handled by IntentRouter; the LLM
     # does not output multi-step sequences in v2.1.
 })
+
+_DEFAULT_WORKSPACE_BOUNDS = {
+    "x_min": -0.45,
+    "x_max": 0.45,
+    "y_min": -0.16,
+    "y_max": 0.52,
+    "z_min": 0.23,
+    "z_max": 0.52,
+}
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _coerce_workspace_bounds(raw: dict | None) -> dict[str, float]:
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        key: float(raw.get(key, default))
+        for key, default in _DEFAULT_WORKSPACE_BOUNDS.items()
+    }
+
+
+def _load_yaml(path: Path) -> dict:
+    if not path.exists():
+        _LOGGER.warning("PromptBuilder: safety rules path not found: %s", path)
+        return {}
+    try:
+        return yaml.safe_load(path.read_text()) or {}
+    except Exception as ex:
+        _LOGGER.warning("PromptBuilder: failed to parse YAML '%s': %s", path, ex)
+        return {}
+
+
+def _load_workspace_bounds() -> dict[str, float]:
+    try:
+        from ament_index_python.packages import get_package_share_directory
+
+        safety_yaml = Path(get_package_share_directory("safety")) / "config" / "safety_rules.yaml"
+        safety_rules = _load_yaml(safety_yaml)
+        if safety_rules:
+            return _coerce_workspace_bounds(safety_rules.get("workspace_bounds"))
+        _LOGGER.warning(
+            "PromptBuilder: safety package YAML empty; falling back to workspace copy '%s'",
+            safety_yaml,
+        )
+    except Exception as ex:
+        _LOGGER.warning(
+            "PromptBuilder: failed package-level safety rules lookup; "
+            "falling back to workspace copy: %s",
+            ex,
+        )
+
+    workspace_yaml = Path(__file__).resolve().parents[2] / "safety" / "config" / "safety_rules.yaml"
+    safety_rules = _load_yaml(workspace_yaml)
+    if not safety_rules:
+        _LOGGER.warning(
+            "PromptBuilder: workspace safety rules missing/unreadable; using default bounds."
+        )
+    return _coerce_workspace_bounds(safety_rules.get("workspace_bounds"))
+
+
+def _format_workspace_bounds(bounds: dict[str, float]) -> str:
+    return (
+        f"x: {bounds['x_min']:.2f}–{bounds['x_max']:.2f}, "
+        f"y: {bounds['y_min']:.2f}–{bounds['y_max']:.2f}, "
+        f"z: {bounds['z_min']:.2f}–{bounds['z_max']:.2f}"
+    )
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
@@ -92,12 +164,12 @@ get_pose
 
 set_speed
   Change motion velocity scale.
-  Required: velocity_scale (float 0.05–0.06)
+  Required: velocity_scale (float 0.01–0.06)
   VN: "đặt tốc độ", "nhanh hơn", "chậm lại", "tốc độ X phần trăm"
   Rules:
     - "nhanh hơn" / "faster" without number → velocity_scale: 0.06
-    - "chậm lại" / "slower" without number → velocity_scale: 0.05
-    - Percentage → multiply by 0.06, then clamp to the valid range [0.05, 0.06]
+    - "chậm lại" / "slower" without number → velocity_scale: 0.01
+    - Percentage → multiply by 0.06, then clamp to the valid range [0.01, 0.06]
   → {"intent": "set_speed", "velocity_scale": 0.06}
 
 wait
@@ -110,7 +182,7 @@ move_relative
   Move BY a relative amount from current position.
   Required: delta (object with x, y, z — all floats in meters; set unused axes to 0.0)
   Optional: reference_frame (default: "base_link")
-  Safety: single MOVE_REL translation norm must stay ≤ 0.08 m during commissioning.
+  Safety: single MOVE_REL translation norm must stay ≤ 0.05 m for hardware use.
   VN: "nâng lên", "hạ xuống", "dịch lên/xuống", "nhích lên", "đẩy lên", "kéo xuống"
   Axis mapping:
     up/lên/nâng/nhấc     → delta.z positive
@@ -127,7 +199,7 @@ absolute_move_ptp
   Required: target_pose.position (object with x, y, z — floats in meters)
   Optional: orientation_preset ("tool-down"|"tool-forward"|"tool-up"),
             keep_current_orientation (boolean, default: true if orientation unspecified),
-            velocity_scale (float 0.05–0.06),
+            velocity_scale (float 0.01–0.06),
             reference_frame (default: "base_link")
   Orientation rule: if user does NOT specify orientation,
     OMIT orientation_preset and let keep_current_orientation default to true.
@@ -269,7 +341,7 @@ User: "set tốc độ nhanh hơn một chút"
 → {"intent": "set_speed", "velocity_scale": 0.06}
 
 User: "chậm lại"
-→ {"intent": "set_speed", "velocity_scale": 0.05}
+→ {"intent": "set_speed", "velocity_scale": 0.01}
 
 User: "robot đang ở đâu vậy?"
 → {"intent": "get_pose"}
@@ -329,9 +401,9 @@ User: "write @@@"
 → {"error": "UNSUPPORTED_OR_AMBIGUOUS_COMMAND"}
 
 ══════════════════════════════════════════════════════
-WORKSPACE LIMITS (meters): x: -0.25–0.38, y: -0.25–0.38, z: 0.20–0.56
+WORKSPACE LIMITS (meters): __WORKSPACE_LIMITS__
 UNIT CONVERSIONS: 1 phân = 1 cm = 0.01 m | 1 mm = 0.001 m
-VELOCITY SCALE: 0.05 (slow) to 0.06 (fast)
+VELOCITY SCALE: 0.01 (slow) to 0.06 (fast)
 ORIENTATION PRESETS: tool-down | tool-forward | tool-up
 ALL POSITIONS AND DISTANCES IN METERS in the output JSON.
 ALL JOINT ANGLES IN RADIANS in the output JSON.
@@ -344,4 +416,8 @@ __JSON_SCHEMA__
 
 def build_system_prompt(schema_json: str) -> str:
     """Build the system prompt for the LLM, injecting the JSON schema."""
-    return _SYSTEM_PROMPT_TEMPLATE.replace("__JSON_SCHEMA__", schema_json)
+    workspace_limits = _format_workspace_bounds(_load_workspace_bounds())
+    return (
+        _SYSTEM_PROMPT_TEMPLATE.replace("__WORKSPACE_LIMITS__", workspace_limits)
+        .replace("__JSON_SCHEMA__", schema_json)
+    )

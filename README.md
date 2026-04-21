@@ -52,9 +52,14 @@ graph TD
 | `hw_adapter`        | The exclusive backend interfacing with the physical robot/simulator logic. Dispatches motion and non-motion primitives.                     |
 | `supervisor`        | Diagnostics, telemetry logging, auditing, benchmark evaluation.                                                                             |
 | `primitives`        | Core ROS definitions for complex and atomic motions (e.g., Joint targets, Cartesian targets).                                               |
+| `jog_pendant`       | **Experimental** MoveIt Servo + MotoROS2 point-queue bridge for real-time joint jogging via HMI. NOT for production use.                   |
 | `interfaces`        | `ExecuteMotion.action`, `GetCurrentPose.srv`, etc.                                                                                          |
 | `gp4_bringup`       | Unified launch files (real system and fake simulation modes).                                                                               |
 | `gp4_moveit_config` | Auto-generated/updated MoveIt 2 semantic descriptions and limits.                                                                           |
+
+> Known technical debt: planning ownership is still split between `primitives` and
+> `motion_core`. Keep behavior-compatible changes explicit and avoid duplicating
+> primitive planning logic across both packages.
 
 ---
 
@@ -67,11 +72,24 @@ You are interacting with real industrial hardware. By default, **Safety override
 - **Conservative Kinematics:** Velocity and acceleration are forcibly throttled in `motion_core` regardless of user requests unless verified.
 - **Fail Closed:** Any parse failure, IK failure, collision warning, or hardware timeout immediately aborts the active plan and halts the manipulator.
 
+### Current Safety Limits
+
+| Parameter | Value |
+|-----------|-------|
+| Max velocity scale | `0.06` |
+| Max acceleration scale | `0.06` |
+| Max MOVE_REL translation | `0.08 m` |
+| Workspace X | `[-0.25, 0.38] m` |
+| Workspace Y | `[-0.25, 0.38] m` |
+| Workspace Z | `[0.20, 0.56] m` |
+| Human approval required above velocity scale | `0.06` |
+| Human approval required when distance from HOME | `> 0.35 m` |
+
 ---
 
 ## 🔌 Supported Primitives (Version 1.2)
 
-12 base operations are supported and fully integrated across the 4-tier pipeline.
+13 public primitives are fully integrated across the 4-tier pipeline.
 
 ### Motion Primitives
 
@@ -80,6 +98,7 @@ You are interacting with real industrial hardware. By default, **Safety override
 | **HOME**        | Moves to the safe factory default position.              |
 | **PTP**         | Point-to-Point joint configuration move.                 |
 | **LIN**         | Cartesian linear translation.                            |
+| **CIRC**        | Circular arc interpolation via an intermediate waypoint. |
 | **MOVE_REL**    | Relative Cartesian displacement from current TCP.        |
 | **MOVE_JOINT**  | Moves a single designated joint index to a target angle. |
 | **MOVE_JOINTS** | Alias for a multi-axis `PTP` configuration sequence.     |
@@ -147,7 +166,28 @@ ros2 launch gp4_bringup sim.launch.py
 Make sure the physical YRC1000 controller is in _REMOTE_ mode, E-STOPs are cleared, and MotoROS2 service is actively broadcasting.
 
 ```bash
-ros2 launch gp4_bringup system.launch.py robot_ip:=192.168.1.33
+ros2 launch gp4_bringup system.launch.py robot_ip:=192.168.1.33 agent_ip:=192.168.1.99
+```
+
+### Option 3: Joint Jogging (Experimental)
+
+For real-time joint jogging via HMI web interface, use the experimental `jog_pendant` stack. **Not for production use.**
+
+```bash
+ros2 launch jog_pendant jog_pendant_experimental.launch.py
+```
+
+### Option 4: Workspace Reachability Scanner (Simulation-First)
+
+Runs a non-executing scan against MoveIt planning services and writes JSON
+results for reachability and CIRC sampling diagnostics.
+
+```bash
+source /opt/ros/humble/setup.bash
+cd ~/gp4_ws
+colcon build --packages-select gp4_bringup
+source install/setup.bash
+ros2 run gp4_bringup workspace_scanner --ros-args -p output_path:=/tmp/gp4_workspace_scan_results.json
 ```
 
 ---
@@ -212,12 +252,10 @@ much easier to read and less error-prone.
 
 ## ⚙️ Configuration
 
-The LLM logic requires proper authentication limits. Set your keys explicitly on your shell or inject them carefully via ROS parameters.
-
-| Environment Variable | Description                                                    |
-| -------------------- | -------------------------------------------------------------- |
-| `GP4_LLM_API_KEY`    | Key needed to run the `llm_gateway` node backend connection.   |
-| `MOTO_MAX_VEL`       | (Optional) Global percentage cap. Defaults to 10% in `safety`. |
+| Environment Variable | Description                                                         |
+| ------------------ | --------------------------------------------------------------------- |
+| `GP4_LLM_API_KEY`  | API key for `llm_gateway` node backend connection.                  |
+| `MOTO_MAX_VEL`     | (Optional) Global velocity percentage cap. Defaults to `0.06` in safety. |
 
 ---
 

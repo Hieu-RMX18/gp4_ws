@@ -3,6 +3,7 @@
 //
 // V4 J9: YAML-driven planning scene manager.
 // Loads collision objects from scene_objects.yaml on startup.
+// Supported object types: box, cylinder, mesh.
 // Fail-closed: if scene is not loaded, planning is blocked.
 #pragma once
 

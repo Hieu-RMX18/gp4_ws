@@ -11,13 +11,44 @@ from interfaces.action import ExecuteMotion
 class GoalMapper:
     """Create action goals and JSON-safe payloads from normalized commands."""
 
+    def __init__(
+        self,
+        *,
+        default_velocity_scale: float = 0.06,
+        default_acceleration_scale: float = 0.06,
+        default_require_approval: bool = False,
+    ) -> None:
+        self._default_velocity_scale = float(default_velocity_scale)
+        self._default_acceleration_scale = float(default_acceleration_scale)
+        self._default_require_approval = bool(default_require_approval)
+
+    @staticmethod
+    def _pose_to_payload(pose: Pose) -> Dict[str, Any]:
+        return {
+            "position": {
+                "x": float(pose.position.x),
+                "y": float(pose.position.y),
+                "z": float(pose.position.z),
+            },
+            "orientation": {
+                "x": float(pose.orientation.x),
+                "y": float(pose.orientation.y),
+                "z": float(pose.orientation.z),
+                "w": float(pose.orientation.w),
+            },
+        }
+
     def to_execute_motion_goal(self, command: Dict[str, Any]) -> ExecuteMotion.Goal:
         goal = ExecuteMotion.Goal()
         goal.primitive_type = str(command["primitive_type"])
-        goal.velocity_scale = float(command.get("velocity_scale", 0.0))
-        goal.acceleration_scale = float(command.get("acceleration_scale", 0.0))
+        goal.velocity_scale = float(command.get("velocity_scale", self._default_velocity_scale))
+        goal.acceleration_scale = float(
+            command.get("acceleration_scale", self._default_acceleration_scale)
+        )
         goal.planner_id = str(command.get("planner_id", ""))
-        goal.require_approval = bool(command.get("require_approval", True))
+        goal.require_approval = bool(
+            command.get("require_approval", self._default_require_approval)
+        )
         goal.joint_target = list(command.get("joint_target", []))
         goal.target_pose = command.get("target_pose_msg", Pose())
 
@@ -61,20 +92,7 @@ class GoalMapper:
         if command.get("joint_target"):
             payload["joint_target"] = [float(value) for value in command["joint_target"]]
         if "target_pose_msg" in command:
-            pose = command["target_pose_msg"]
-            payload["target_pose"] = {
-                "position": {
-                    "x": float(pose.position.x),
-                    "y": float(pose.position.y),
-                    "z": float(pose.position.z),
-                },
-                "orientation": {
-                    "x": float(pose.orientation.x),
-                    "y": float(pose.orientation.y),
-                    "z": float(pose.orientation.z),
-                    "w": float(pose.orientation.w),
-                },
-            }
+            payload["target_pose"] = self._pose_to_payload(command["target_pose_msg"])
 
         # MOVE_REL delta fields
         if command.get("primitive_type") == "MOVE_REL":
@@ -97,8 +115,21 @@ class GoalMapper:
             if "io_value" in command:
                 payload["io_value"] = int(command["io_value"])
 
-        # CARTESIAN_PATH waypoints for debug
+        # CIRC safety path requires the auxiliary waypoint in command_json so
+        # safety.execution_gate can validate it against WorkspaceGuard.
+        if command.get("primitive_type") == "CIRC" and command.get("waypoints_msg"):
+            payload["waypoints"] = [
+                self._pose_to_payload(pose)
+                for pose in command["waypoints_msg"]
+            ]
+
+        # CARTESIAN_PATH waypoints are required by safety.execution_gate for
+        # waypoint-by-waypoint workspace validation.
         if command.get("primitive_type") == "CARTESIAN_PATH" and command.get("waypoints_msg"):
+            payload["waypoints"] = [
+                self._pose_to_payload(pose)
+                for pose in command["waypoints_msg"]
+            ]
             payload["waypoints_count"] = len(command["waypoints_msg"])
 
         return payload

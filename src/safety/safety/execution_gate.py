@@ -8,8 +8,8 @@ from .workspace_guard import WorkspaceGuard
 
 # MOVE_REL delta safety limits — must match motion_core/move_rel_validator.hpp.
 # Defense-in-depth: gate rejects bad deltas before they reach motion_core.
-# This pass raises from 0.03 to 0.08 to enable practical short task nudges.
-_MOVE_REL_MAX_DELTA_NORM = 0.08
+# Hardware conservative MOVE_REL cap — short nudges only.
+_MOVE_REL_MAX_DELTA_NORM = 0.05
 _MOVE_REL_ALLOWED_FRAMES = {"", "base_link"}
 
 
@@ -25,7 +25,7 @@ class ExecutionGate:
     computed from (current_pose + delta) inside motion_core at planning
     time.  Fail-closed is maintained by three layers of defense:
 
-      1. This gate validates delta magnitude (≤ 0.08 m) and reference
+      1. This gate validates delta magnitude (≤ 0.05 m) and reference
          frame (base_link only) right here — catching bad commands before
          they reach motion_core.
       2. motion_core validates the resolved target against the same
@@ -148,37 +148,70 @@ class ExecutionGate:
 
         # 3c. CIRC: validate auxiliary waypoint[0] workspace bounds (fail-closed)
         if prim_type == "CIRC":
-            waypoints = cmd_data.get("waypoints", [])
-            if waypoints and len(waypoints) >= 1:
-                aux_wp = waypoints[0]
-                if isinstance(aux_wp, dict) and "position" in aux_wp:
-                    try:
-                        ax = float(aux_wp["position"].get("x", 0.0))
-                        ay = float(aux_wp["position"].get("y", 0.0))
-                        az = float(aux_wp["position"].get("z", 0.0))
-                        # Build a temporary pose for WorkspaceGuard
-                        aux_pose = request.target_pose.__class__()
-                        aux_pose.position.x = ax
-                        aux_pose.position.y = ay
-                        aux_pose.position.z = az
-                        aux_pose.orientation.x = 0.0
-                        aux_pose.orientation.y = 0.0
-                        aux_pose.orientation.z = 0.0
-                        aux_pose.orientation.w = 1.0
-                        aux_is_valid, aux_reason = self.guard.check_pose(aux_pose)
-                        if not aux_is_valid:
-                            self.node.get_logger().warn(
-                                f"CIRC auxiliary waypoint validation failed: {aux_reason}")
-                            response.valid = False
-                            response.reason = f"CIRC auxiliary pose: {aux_reason}"
-                            response.sanitized_json = ""
-                            return response
-                    except (TypeError, ValueError) as e:
-                        self.node.get_logger().warn(f"CIRC auxiliary waypoint parse error: {e}")
-                        response.valid = False
-                        response.reason = f"CIRC auxiliary waypoint: parse error"
-                        response.sanitized_json = ""
-                        return response
+            waypoints = cmd_data.get("waypoints")
+            if not isinstance(waypoints, list) or len(waypoints) != 1:
+                response.valid = False
+                response.reason = "CIRC requires exactly 1 auxiliary waypoint"
+                response.sanitized_json = ""
+                return response
+
+            aux_wp = waypoints[0]
+            if not isinstance(aux_wp, dict) or not isinstance(aux_wp.get("position"), dict):
+                response.valid = False
+                response.reason = "CIRC auxiliary waypoint must include position{x,y,z}"
+                response.sanitized_json = ""
+                return response
+
+            try:
+                ax = float(aux_wp["position"].get("x", 0.0))
+                ay = float(aux_wp["position"].get("y", 0.0))
+                az = float(aux_wp["position"].get("z", 0.0))
+            except (TypeError, ValueError) as e:
+                self.node.get_logger().warn(f"CIRC auxiliary waypoint parse error: {e}")
+                response.valid = False
+                response.reason = "CIRC auxiliary waypoint: parse error"
+                response.sanitized_json = ""
+                return response
+
+            if not (math.isfinite(ax) and math.isfinite(ay) and math.isfinite(az)):
+                response.valid = False
+                response.reason = "CIRC auxiliary waypoint position must be finite"
+                response.sanitized_json = ""
+                return response
+
+            # Build a temporary pose for WorkspaceGuard
+            aux_pose = request.target_pose.__class__()
+            aux_pose.position.x = ax
+            aux_pose.position.y = ay
+            aux_pose.position.z = az
+            aux_pose.orientation.x = 0.0
+            aux_pose.orientation.y = 0.0
+            aux_pose.orientation.z = 0.0
+            aux_pose.orientation.w = 1.0
+
+            aux_is_valid, aux_reason = self.guard.check_pose(aux_pose)
+            if not aux_is_valid:
+                self.node.get_logger().warn(
+                    f"CIRC auxiliary waypoint validation failed: {aux_reason}")
+                response.valid = False
+                response.reason = f"CIRC auxiliary pose: {aux_reason}"
+                response.sanitized_json = ""
+                return response
+
+        # 3d. CARTESIAN_PATH: validate every waypoint against WorkspaceGuard.
+        if prim_type == "CARTESIAN_PATH":
+            cart_ok, cart_reason = self._validate_cartesian_path_waypoints(
+                waypoints=cmd_data.get("waypoints"),
+                pose_cls=request.target_pose.__class__,
+            )
+            if not cart_ok:
+                self.node.get_logger().warn(
+                    f"CARTESIAN_PATH waypoint validation failed: {cart_reason}"
+                )
+                response.valid = False
+                response.reason = cart_reason
+                response.sanitized_json = ""
+                return response
 
         # 4. Valid command
         response.valid = True
@@ -220,5 +253,54 @@ class ExecutionGate:
                 f"MOVE_REL: delta norm {norm:.4f} m exceeds "
                 f"limit {self._max_move_rel_delta_norm} m"
             )
+
+        return True, ""
+
+    def _validate_cartesian_path_waypoints(self, waypoints, pose_cls) -> tuple:
+        if not isinstance(waypoints, list) or len(waypoints) == 0:
+            return False, "CARTESIAN_PATH requires non-empty waypoints"
+
+        for idx, waypoint in enumerate(waypoints):
+            if not isinstance(waypoint, dict):
+                return False, f"CARTESIAN_PATH waypoint[{idx}] must be an object"
+
+            position = waypoint.get("position")
+            if not isinstance(position, dict):
+                return False, (
+                    f"CARTESIAN_PATH waypoint[{idx}] must include position{{x,y,z}}"
+                )
+
+            for axis in ("x", "y", "z"):
+                if axis not in position:
+                    return False, (
+                        f"CARTESIAN_PATH waypoint[{idx}] position.{axis} is required"
+                    )
+
+            try:
+                x = float(position["x"])
+                y = float(position["y"])
+                z = float(position["z"])
+            except (TypeError, ValueError):
+                return False, (
+                    f"CARTESIAN_PATH waypoint[{idx}] position must be numeric"
+                )
+
+            if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(z)):
+                return False, (
+                    f"CARTESIAN_PATH waypoint[{idx}] position must be finite"
+                )
+
+            waypoint_pose = pose_cls()
+            waypoint_pose.position.x = x
+            waypoint_pose.position.y = y
+            waypoint_pose.position.z = z
+            waypoint_pose.orientation.x = 0.0
+            waypoint_pose.orientation.y = 0.0
+            waypoint_pose.orientation.z = 0.0
+            waypoint_pose.orientation.w = 1.0
+
+            is_valid, reason = self.guard.check_pose(waypoint_pose)
+            if not is_valid:
+                return False, f"CARTESIAN_PATH waypoint[{idx}]: {reason}"
 
         return True, ""

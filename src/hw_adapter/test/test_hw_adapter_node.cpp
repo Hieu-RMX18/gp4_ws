@@ -18,6 +18,7 @@
 #include <motoros2_interfaces/srv/start_traj_mode.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 
@@ -49,6 +50,16 @@ trajectory_msgs::msg::JointTrajectory make_trajectory()
   }
 
   return traj;
+}
+
+sensor_msgs::msg::JointState make_joint_state(const double offset = 0.0)
+{
+  sensor_msgs::msg::JointState joint_state;
+  joint_state.name = {
+    "joint_1_s", "joint_2_l", "joint_3_u", "joint_4_r", "joint_5_b", "joint_6_t"};
+  joint_state.position = {
+    0.0 + offset, 0.1 + offset, -0.2 + offset, 0.3 + offset, -0.4 + offset, 0.5 + offset};
+  return joint_state;
 }
 
 industrial_msgs::msg::RobotStatus make_ready_status()
@@ -228,6 +239,7 @@ protected:
 
   static rclcpp::NodeOptions make_node_options(
     const std::string & robot_status_topic,
+    const std::string & joint_states_topic,
     const std::string & action_name,
     const std::string & start_service,
     const std::string & stop_service = std::string(),
@@ -236,11 +248,15 @@ protected:
     rclcpp::NodeOptions options;
     options.parameter_overrides({
       rclcpp::Parameter("robot_status_topic", robot_status_topic),
+      rclcpp::Parameter("joint_states_topic", joint_states_topic),
       rclcpp::Parameter("follow_joint_trajectory_action", action_name),
       rclcpp::Parameter("start_traj_mode_service", start_service),
       rclcpp::Parameter("reset_error_service", "/test_hw_adapter/reset_error_unused"),
       rclcpp::Parameter("stop_motion_service", stop_service),
-      rclcpp::Parameter("dispatch_action_name", dispatch_action_name)});
+      rclcpp::Parameter("dispatch_action_name", dispatch_action_name),
+      rclcpp::Parameter("joint_state_max_age_ms", 5000),
+      rclcpp::Parameter("robot_status_max_age_ms", 5000),
+      rclcpp::Parameter("trajectory_header_max_age_ms", 5000)});
     return options;
   }
 };
@@ -249,10 +265,12 @@ protected:
 TEST_F(HwAdapterNodeTest, orchestrator_blocks_when_not_ready)
 {
   const std::string robot_status_topic = "/test_hw_adapter/orchestrator_not_ready_status";
+  const std::string joint_states_topic = "/test_hw_adapter/orchestrator_not_ready_joint_states";
   const std::string action_name = "/test_hw_adapter/orchestrator_not_ready_action";
   const std::string start_service = "/test_hw_adapter/orchestrator_not_ready_start";
 
   auto server_node = std::make_shared<rclcpp::Node>("hw_adapter_node_not_ready_server");
+  auto publisher_node = std::make_shared<rclcpp::Node>("hw_adapter_node_not_ready_publisher");
   std::atomic<int> start_requests{0};
   auto start_server = server_node->create_service<motoros2_interfaces::srv::StartTrajMode>(
     start_service,
@@ -266,8 +284,29 @@ TEST_F(HwAdapterNodeTest, orchestrator_blocks_when_not_ready)
     });
   (void)start_server;
 
+  auto joint_state_publisher =
+    publisher_node->create_publisher<sensor_msgs::msg::JointState>(joint_states_topic, rclcpp::QoS(10));
+
   auto hw_node = std::make_shared<hw_adapter::HwAdapterNode>(
-    make_node_options(robot_status_topic, action_name, start_service));
+    make_node_options(robot_status_topic, joint_states_topic, action_name, start_service));
+
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(server_node);
+  executor.add_node(publisher_node);
+  executor.add_node(hw_node);
+  ExecutorThread spin_thread(executor);
+
+  ASSERT_TRUE(wait_until(
+    [&joint_state_publisher]() {return joint_state_publisher->get_subscription_count() > 0;},
+    500ms));
+  joint_state_publisher->publish(make_joint_state());
+  ASSERT_TRUE(wait_until(
+    [&hw_node]() {
+      std::string reason;
+      (void)hw_node->is_ready_for_execution(reason);
+      return reason.find("unknown") != std::string::npos;
+    },
+    500ms));
 
   const auto report = hw_node->execute_trajectory(make_trajectory(), 300ms);
 
@@ -281,6 +320,7 @@ TEST_F(HwAdapterNodeTest, orchestrator_blocks_when_not_ready)
 TEST_F(HwAdapterNodeTest, orchestrator_allows_execution_when_ready)
 {
   const std::string robot_status_topic = "/test_hw_adapter/orchestrator_ready_status";
+  const std::string joint_states_topic = "/test_hw_adapter/orchestrator_ready_joint_states";
   const std::string action_name = "/test_hw_adapter/orchestrator_ready_action";
   const std::string start_service = "/test_hw_adapter/orchestrator_ready_start";
 
@@ -307,9 +347,11 @@ TEST_F(HwAdapterNodeTest, orchestrator_allows_execution_when_ready)
 
   auto status_publisher =
     publisher_node->create_publisher<industrial_msgs::msg::RobotStatus>(robot_status_topic, rclcpp::QoS(10));
+  auto joint_state_publisher =
+    publisher_node->create_publisher<sensor_msgs::msg::JointState>(joint_states_topic, rclcpp::QoS(10));
 
   auto hw_node = std::make_shared<hw_adapter::HwAdapterNode>(
-    make_node_options(robot_status_topic, action_name, start_service));
+    make_node_options(robot_status_topic, joint_states_topic, action_name, start_service));
 
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(server_node);
@@ -318,7 +360,11 @@ TEST_F(HwAdapterNodeTest, orchestrator_allows_execution_when_ready)
   ExecutorThread spin_thread(executor);
 
   ASSERT_TRUE(wait_until([&status_publisher]() {return status_publisher->get_subscription_count() > 0;} , 500ms));
+  ASSERT_TRUE(wait_until(
+    [&joint_state_publisher]() {return joint_state_publisher->get_subscription_count() > 0;},
+    500ms));
   status_publisher->publish(make_ready_status());
+  joint_state_publisher->publish(make_joint_state());
   ASSERT_TRUE(wait_until([&hw_node]() {return hw_node->robot_status_monitor().is_ready();}, 500ms));
 
   const auto report = hw_node->execute_trajectory(make_trajectory(), 500ms);
@@ -340,6 +386,7 @@ TEST_F(HwAdapterNodeTest, orchestrator_allows_execution_when_ready)
 TEST_F(HwAdapterNodeTest, fatal_error_path_calls_stop_motion)
 {
   const std::string robot_status_topic = "/test_hw_adapter/orchestrator_fatal_status";
+  const std::string joint_states_topic = "/test_hw_adapter/orchestrator_fatal_joint_states";
   const std::string action_name = "/test_hw_adapter/orchestrator_fatal_action";
   const std::string start_service = "/test_hw_adapter/orchestrator_fatal_start";
 
@@ -366,9 +413,11 @@ TEST_F(HwAdapterNodeTest, fatal_error_path_calls_stop_motion)
 
   auto status_publisher =
     publisher_node->create_publisher<industrial_msgs::msg::RobotStatus>(robot_status_topic, rclcpp::QoS(10));
+  auto joint_state_publisher =
+    publisher_node->create_publisher<sensor_msgs::msg::JointState>(joint_states_topic, rclcpp::QoS(10));
 
   auto hw_node = std::make_shared<hw_adapter::HwAdapterNode>(
-    make_node_options(robot_status_topic, action_name, start_service));
+    make_node_options(robot_status_topic, joint_states_topic, action_name, start_service));
 
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(server_node);
@@ -377,7 +426,11 @@ TEST_F(HwAdapterNodeTest, fatal_error_path_calls_stop_motion)
   ExecutorThread spin_thread(executor);
 
   ASSERT_TRUE(wait_until([&status_publisher]() {return status_publisher->get_subscription_count() > 0;} , 500ms));
+  ASSERT_TRUE(wait_until(
+    [&joint_state_publisher]() {return joint_state_publisher->get_subscription_count() > 0;},
+    500ms));
   status_publisher->publish(make_ready_status());
+  joint_state_publisher->publish(make_joint_state());
   ASSERT_TRUE(wait_until([&hw_node]() {return hw_node->robot_status_monitor().is_ready();}, 500ms));
 
   const auto report = hw_node->execute_trajectory(make_trajectory(), 50ms);
@@ -403,6 +456,7 @@ TEST_F(HwAdapterNodeTest, fatal_error_path_calls_stop_motion)
 TEST_F(HwAdapterNodeTest, dispatch_action_rejects_overlapping_goals)
 {
   const std::string robot_status_topic = "/test_hw_adapter/dispatch_overlap_status";
+  const std::string joint_states_topic = "/test_hw_adapter/dispatch_overlap_joint_states";
   const std::string action_name = "/test_hw_adapter/dispatch_overlap_fjt";
   const std::string start_service = "/test_hw_adapter/dispatch_overlap_start";
   const std::string dispatch_action_name = "/test_hw_adapter/dispatch_overlap";
@@ -429,9 +483,17 @@ TEST_F(HwAdapterNodeTest, dispatch_action_rejects_overlapping_goals)
 
   auto status_publisher =
     publisher_node->create_publisher<industrial_msgs::msg::RobotStatus>(robot_status_topic, rclcpp::QoS(10));
+  auto joint_state_publisher =
+    publisher_node->create_publisher<sensor_msgs::msg::JointState>(joint_states_topic, rclcpp::QoS(10));
 
   auto hw_node = std::make_shared<hw_adapter::HwAdapterNode>(
-    make_node_options(robot_status_topic, action_name, start_service, std::string(), dispatch_action_name));
+    make_node_options(
+      robot_status_topic,
+      joint_states_topic,
+      action_name,
+      start_service,
+      std::string(),
+      dispatch_action_name));
   auto dispatch_client =
     rclcpp_action::create_client<DispatchTrajectory>(client_node, dispatch_action_name);
 
@@ -443,7 +505,11 @@ TEST_F(HwAdapterNodeTest, dispatch_action_rejects_overlapping_goals)
   ExecutorThread spin_thread(executor);
 
   ASSERT_TRUE(wait_until([&status_publisher]() {return status_publisher->get_subscription_count() > 0;}, 500ms));
+  ASSERT_TRUE(wait_until(
+    [&joint_state_publisher]() {return joint_state_publisher->get_subscription_count() > 0;},
+    500ms));
   status_publisher->publish(make_ready_status());
+  joint_state_publisher->publish(make_joint_state());
   ASSERT_TRUE(wait_until([&hw_node]() {return hw_node->robot_status_monitor().is_ready();}, 500ms));
   ASSERT_TRUE(dispatch_client->wait_for_action_server(500ms));
 
@@ -491,6 +557,7 @@ TEST_F(HwAdapterNodeTest, dispatch_action_rejects_overlapping_goals)
 TEST_F(HwAdapterNodeTest, dispatch_action_cancel_propagates_to_follow_joint_trajectory)
 {
   const std::string robot_status_topic = "/test_hw_adapter/dispatch_cancel_status";
+  const std::string joint_states_topic = "/test_hw_adapter/dispatch_cancel_joint_states";
   const std::string action_name = "/test_hw_adapter/dispatch_cancel_fjt";
   const std::string start_service = "/test_hw_adapter/dispatch_cancel_start";
   const std::string dispatch_action_name = "/test_hw_adapter/dispatch_cancel";
@@ -517,9 +584,17 @@ TEST_F(HwAdapterNodeTest, dispatch_action_cancel_propagates_to_follow_joint_traj
 
   auto status_publisher =
     publisher_node->create_publisher<industrial_msgs::msg::RobotStatus>(robot_status_topic, rclcpp::QoS(10));
+  auto joint_state_publisher =
+    publisher_node->create_publisher<sensor_msgs::msg::JointState>(joint_states_topic, rclcpp::QoS(10));
 
   auto hw_node = std::make_shared<hw_adapter::HwAdapterNode>(
-    make_node_options(robot_status_topic, action_name, start_service, std::string(), dispatch_action_name));
+    make_node_options(
+      robot_status_topic,
+      joint_states_topic,
+      action_name,
+      start_service,
+      std::string(),
+      dispatch_action_name));
   auto dispatch_client =
     rclcpp_action::create_client<DispatchTrajectory>(client_node, dispatch_action_name);
 
@@ -531,7 +606,11 @@ TEST_F(HwAdapterNodeTest, dispatch_action_cancel_propagates_to_follow_joint_traj
   ExecutorThread spin_thread(executor);
 
   ASSERT_TRUE(wait_until([&status_publisher]() {return status_publisher->get_subscription_count() > 0;}, 500ms));
+  ASSERT_TRUE(wait_until(
+    [&joint_state_publisher]() {return joint_state_publisher->get_subscription_count() > 0;},
+    500ms));
   status_publisher->publish(make_ready_status());
+  joint_state_publisher->publish(make_joint_state());
   ASSERT_TRUE(wait_until([&hw_node]() {return hw_node->robot_status_monitor().is_ready();}, 500ms));
   ASSERT_TRUE(dispatch_client->wait_for_action_server(500ms));
 

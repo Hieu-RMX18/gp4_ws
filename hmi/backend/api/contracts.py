@@ -42,6 +42,28 @@ class BridgeCapabilitiesModel(StrictModel):
     executionAllowed: bool = False
     replayAvailable: bool = False
     simOnly: bool = False
+    hardwareGate: HardwareGateStatusModel
+
+
+class HardwareGateChecklistModel(StrictModel):
+    timingJitter: bool
+    disconnectReconnect: bool
+    robotStatusSemantics: bool
+    jointSourcePrecedence: bool
+    auditVisibility: bool
+
+
+class HardwareGateStatusModel(StrictModel):
+    unlocked: bool
+    reasons: list[str]
+    flagEnabled: bool
+    evidencePath: str
+    approvedBy: str | None
+    approvedAt: str | None
+    reportPath: str | None
+    reportSha256: str | None
+    reportSha256Match: bool
+    checklist: HardwareGateChecklistModel | None
 
 
 class JointPositionModel(StrictModel):
@@ -123,6 +145,8 @@ class CommandValidationResultModel(StrictModel):
     criticalSources: list[ValidationSourceStatusModel]
     optionalSources: list[ValidationSourceStatusModel]
     eventDrivenSources: list[ValidationSourceStatusModel]
+    hardwareGate: HardwareGateStatusModel
+    preflight: dict[str, Any]
 
 
 class CommandExecutionResultModel(StrictModel):
@@ -353,10 +377,37 @@ class ReplayUpdatedStreamEventModel(StrictModel):
     replayItems: list[ReplayListItemModel]
 
 
+# ── Jog Pendant Models ──────────────────────────────────────────────────────
+
+class JogBridgeStatusModel(StrictModel):
+    state: str
+    pointsQueued: int
+    effectiveHz: float
+    robotReady: bool
+    servoActive: bool
+    bridgeActive: bool
+    lastError: str
+    rejectionReason: str
+
+
+class JogBridgeStatusStreamEventModel(StrictModel):
+    type: Literal['jog_bridge_status']
+    jogBridgeStatus: JogBridgeStatusModel
+
+
+class JogCommandRequestModel(StrictModel):
+    jointIndex: int = Field(..., ge=0, le=5)
+    direction: Literal[-1, 1]
+    mode: Literal['continuous', 'discrete']
+    velocityScale: float = Field(..., ge=0.0, le=0.3)
+    stepDegrees: float = Field(0.0, ge=0.0, le=10.0)
+
+
 HMI_STREAM_EVENT_ADAPTER = TypeAdapter(
     SnapshotStreamEventModel
     | HeartbeatStreamEventModel
     | LeaseStateStreamEventModel
     | CommandLifecycleStreamEventModel
     | ReplayUpdatedStreamEventModel
+    | JogBridgeStatusStreamEventModel
 )

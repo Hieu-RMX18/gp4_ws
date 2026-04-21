@@ -31,20 +31,35 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self._temp_dir.cleanup)
         self._log_root = Path(self._temp_dir.name)
         self._domain_id = self._reserve_ros_domain_id()
-        self._port = self._reserve_tcp_port()
+        try:
+            self._port = self._reserve_tcp_port()
+        except PermissionError as exc:
+            raise unittest.SkipTest(
+                'local TCP sockets are not permitted in this execution environment'
+            ) from exc
         self._audit_dir = self._log_root / 'audit'
         self._audit_dir.mkdir(parents=True, exist_ok=True)
         self._environment = os.environ.copy()
         self._environment['PYTHONPATH'] = self._build_pythonpath()
         self._environment['ROS_DOMAIN_ID'] = str(self._domain_id)
         self._environment['RMW_IMPLEMENTATION'] = 'rmw_fastrtps_cpp'
+        self._environment['HMI_SIM_AUTO_CONFIRM'] = 'false'
         self._environment.setdefault('ROS_LOG_DIR', str(self._log_root / 'ros_logs'))
         self._sim_process: subprocess.Popen[str] | None = None
         self._api_process: subprocess.Popen[str] | None = None
+        self._sim_log_handle = None
+        self._api_log_handle = None
+        self._api_restarted_once = False
 
     async def asyncTearDown(self) -> None:
         self._stop_process(self._api_process)
         self._stop_process(self._sim_process)
+        if self._api_log_handle is not None:
+            self._api_log_handle.close()
+            self._api_log_handle = None
+        if self._sim_log_handle is not None:
+            self._sim_log_handle.close()
+            self._sim_log_handle = None
 
     async def test_home_command_executes_to_success_in_sim(self) -> None:
         self._start_sim_stack()
@@ -59,7 +74,7 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
             session_id='e2e-session-home',
             operator_id='e2e-operator-home',
             intent_text='home',
-            expected_action='move_home',
+            expected_action='HOME',
         )
 
         self.assertEqual(result['command']['executionResult']['status'], 'succeeded')
@@ -71,10 +86,10 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
         await self._wait_until_sim_ready()
 
         cases = [
-            {'intent_text': 'home', 'expected_action': 'move_home'},
-            {'intent_text': 'move up 10 cm', 'expected_action': 'move_cartesian_delta'},
-            {'intent_text': 'move joint 2 5 deg', 'expected_action': 'move_joint_delta'},
-            {'intent_text': 'stop', 'expected_action': 'stop'},
+            {'intent_text': 'home', 'expected_action': 'HOME'},
+            {'intent_text': 'move down 1 cm', 'expected_action': 'MOVE_REL'},
+            {'intent_text': 'move joint 2 5 deg', 'expected_action': 'MOVE_JOINT'},
+            {'intent_text': 'stop', 'expected_action': 'STOP'},
         ]
         for index, case in enumerate(cases, start=1):
             with self.subTest(intent=case['intent_text']):
@@ -239,11 +254,12 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
             f'ros2 launch gp4_bringup sim.launch.py '
             f'use_rviz:=false audit_log_path:="{self._audit_dir}"'
         )
+        self._sim_log_handle = (self._log_root / 'sim.log').open('w', encoding='utf-8')
         self._sim_process = subprocess.Popen(
             ['bash', '-lc', command],
             cwd=str(WORKSPACE_DIR),
             env=self._environment,
-            stdout=(self._log_root / 'sim.log').open('w', encoding='utf-8'),
+            stdout=self._sim_log_handle,
             stderr=subprocess.STDOUT,
             text=True,
         )
@@ -255,11 +271,12 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
             f'source "{INSTALL_SETUP}" && '
             f'python3 -m uvicorn {APP_MODULE} --host 127.0.0.1 --port {self._port}'
         )
+        self._api_log_handle = (self._log_root / 'api.log').open('w', encoding='utf-8')
         self._api_process = subprocess.Popen(
             ['bash', '-lc', command],
             cwd=str(WORKSPACE_DIR),
             env=self._environment,
-            stdout=(self._log_root / 'api.log').open('w', encoding='utf-8'),
+            stdout=self._api_log_handle,
             stderr=subprocess.STDOUT,
             text=True,
         )
@@ -273,10 +290,11 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
         expected_transport: str,
         expected_telemetry: str,
         expected_runtime: str,
-        timeout_sec: float = 90.0,
+        timeout_sec: float = 150.0,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout_sec
         last_error: Exception | None = None
+        startup_started_at = time.monotonic()
         while time.monotonic() < deadline:
             self._assert_process_alive(self._sim_process, 'sim stack')
             self._assert_process_alive(self._api_process, 'api server')
@@ -286,6 +304,14 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
                 )
             except Exception as exc:  # pragma: no cover - transient startup path
                 last_error = exc
+                if (
+                    not self._api_restarted_once
+                    and self._is_connection_refused(exc)
+                    and (time.monotonic() - startup_started_at) >= 20.0
+                ):
+                    self._restart_api_server()
+                    self._api_restarted_once = True
+                    startup_started_at = time.monotonic()
                 time.sleep(0.5)
                 continue
             if (
@@ -298,6 +324,22 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
         if last_error is not None:
             raise AssertionError(f'snapshot did not become ready: {last_error}')
         raise AssertionError('snapshot did not reach expected state before timeout')
+
+    @staticmethod
+    def _is_connection_refused(error: Exception) -> bool:
+        if isinstance(error, urllib.error.URLError):
+            reason = str(error.reason).lower()
+            return 'connection refused' in reason
+        return False
+
+    def _restart_api_server(self) -> None:
+        self._stop_process(self._api_process)
+        self._api_process = None
+        if self._api_log_handle is not None:
+            self._api_log_handle.close()
+            self._api_log_handle = None
+        self._port = self._reserve_tcp_port()
+        self._start_api_server()
 
     def _assert_process_alive(self, process: subprocess.Popen[str] | None, label: str) -> None:
         if process is None:

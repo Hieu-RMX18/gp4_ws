@@ -135,11 +135,11 @@ properties:
       type: number
   velocity_scale:
     type: number
-    minimum: 0.05
+    minimum: 0.01
     maximum: 0.06
   acceleration_scale:
     type: number
-    minimum: 0.05
+    minimum: 0.01
     maximum: 0.06
   planner_id:
     type: string

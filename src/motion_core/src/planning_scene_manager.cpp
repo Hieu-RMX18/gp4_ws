@@ -4,11 +4,18 @@
 #include "motion_core/planning_scene_manager.hpp"
 
 #include <fstream>
+#include <memory>
 #include <vector>
 
+#include <Eigen/Core>
+#include <boost/variant/get.hpp>
+#include <geometric_shapes/mesh_operations.h>
+#include <geometric_shapes/shape_operations.h>
+#include <geometric_shapes/shape_messages.h>
 #include <moveit/planning_scene_interface/planning_scene_interface.h>
-#include <shape_msgs/msg/solid_primitive.hpp>
 #include <geometry_msgs/msg/pose.hpp>
+#include <shape_msgs/msg/mesh.hpp>
+#include <shape_msgs/msg/solid_primitive.hpp>
 #include <yaml-cpp/yaml.h>
 
 namespace motion_core
@@ -37,6 +44,7 @@ static bool parse_one_object(
   const std::string & name,
   const YAML::Node & node,
   moveit_msgs::msg::CollisionObject & object,
+  std::string & parsed_type,
   std::string & reason,
   const rclcpp::Logger & logger)
 {
@@ -50,6 +58,7 @@ static bool parse_one_object(
   }
 
   const std::string type = node["type"].as<std::string>("");
+  parsed_type = type;
   const std::string frame_id = node["frame_id"].as<std::string>("base_link");
 
   object.id = name;
@@ -78,9 +87,64 @@ static bool parse_one_object(
     }
   }
 
+  if (type == "mesh")
+  {
+    std::string mesh_resource;
+    if (node["resource"])
+    {
+      mesh_resource = node["resource"].as<std::string>("");
+    }
+    if (mesh_resource.empty() && node["mesh_resource"])
+    {
+      mesh_resource = node["mesh_resource"].as<std::string>("");
+    }
+    if (mesh_resource.empty())
+    {
+      reason = "mesh requires resource (or mesh_resource)";
+      return false;
+    }
+
+    Eigen::Vector3d scale(1.0, 1.0, 1.0);
+    if (node["scale"])
+    {
+      if (!node["scale"].IsSequence() || node["scale"].size() != 3)
+      {
+        reason = "mesh scale must be [sx, sy, sz]";
+        return false;
+      }
+      scale.x() = node["scale"][0].as<double>();
+      scale.y() = node["scale"][1].as<double>();
+      scale.z() = node["scale"][2].as<double>();
+    }
+
+    std::unique_ptr<shapes::Mesh> mesh(shapes::createMeshFromResource(mesh_resource, scale));
+    if (!mesh)
+    {
+      reason = "failed to load mesh resource '" + mesh_resource + "'";
+      return false;
+    }
+
+    shapes::ShapeMsg shape_msg;
+    if (!shapes::constructMsgFromShape(mesh.get(), shape_msg))
+    {
+      reason = "failed to construct shape message from mesh '" + mesh_resource + "'";
+      return false;
+    }
+
+    const auto * mesh_msg = boost::get<shape_msgs::msg::Mesh>(&shape_msg);
+    if (mesh_msg == nullptr)
+    {
+      reason = "mesh resource did not convert to shape_msgs/Mesh";
+      return false;
+    }
+
+    object.meshes.push_back(*mesh_msg);
+    object.mesh_poses.push_back(pose);
+    return true;
+  }
+
   // Parse primitive shape
   shape_msgs::msg::SolidPrimitive primitive;
-
   if (type == "box")
   {
     if (!node["dimensions"] || !node["dimensions"].IsSequence() ||
@@ -115,7 +179,7 @@ static bool parse_one_object(
   }
   else
   {
-    reason = "unsupported type '" + type + "' (supported: box, cylinder)";
+    reason = "unsupported type '" + type + "' (supported: box, cylinder, mesh)";
     return false;
   }
 
@@ -161,9 +225,10 @@ SceneLoadResult PlanningSceneManager::load_and_apply(const std::string & yaml_pa
   {
     const std::string name = entry.first.as<std::string>();
     moveit_msgs::msg::CollisionObject obj;
+    std::string parsed_type;
     std::string reason;
 
-    if (!parse_one_object(name, entry.second, obj, reason, logger_))
+    if (!parse_one_object(name, entry.second, obj, parsed_type, reason, logger_))
     {
       RCLCPP_WARN(logger_, "PlanningSceneManager: skipping '%s': %s",
         name.c_str(), reason.c_str());
@@ -172,7 +237,7 @@ SceneLoadResult PlanningSceneManager::load_and_apply(const std::string & yaml_pa
 
     RCLCPP_INFO(logger_, "PlanningSceneManager: parsed '%s' (type=%s, frame=%s)",
       name.c_str(),
-      obj.primitives[0].type == shape_msgs::msg::SolidPrimitive::BOX ? "box" : "cylinder",
+      parsed_type.c_str(),
       obj.header.frame_id.c_str());
     collision_objects.push_back(std::move(obj));
   }

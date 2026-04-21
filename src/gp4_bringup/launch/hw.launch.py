@@ -242,6 +242,13 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        LogInfo(
+            msg=(
+                "[launch hygiene] hw.launch.py starts only the hardware motion stack. "
+                "Use system.launch.py for the full guarded hardware path "
+                "(safety + supervisor + llm_gateway)."
+            )
+        ),
         SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'),
         robot_ip_arg,
         agent_ip_arg,

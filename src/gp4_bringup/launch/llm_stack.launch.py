@@ -20,10 +20,11 @@ def generate_launch_description():
         default_value='/tmp/gp4_audit',
         description='Directory used by supervisor audit_logger for rosbag2 and JSONL output.',
     )
-    # SAFETY: approval auto-clear is ONLY enabled for sim/fake-hardware.
-    # Real hardware MUST require explicit approval. This argument is forwarded
-    # from system.launch.py so that the auto_clear parameter tracks
-    # the hardware mode consistently.
+    # Commissioning policy:
+    # - default command flow is non-approval (require_approval=false upstream)
+    # - plan_only still forces require_approval=true
+    # - auto_clear_unimplemented_approval is only relevant for explicit
+    #   require_approval=true payloads during sim/fake-hardware workflows.
     use_fake_hardware_arg = DeclareLaunchArgument(
         'use_fake_hardware',
         default_value='false',
@@ -65,8 +66,7 @@ def generate_launch_description():
         ],
     )
 
-    # SAFETY: auto_clear_unimplemented_approval is gated by use_fake_hardware.
-    # When use_fake_hardware is false (real hardware), approval is NEVER auto-cleared.
+    # auto_clear_unimplemented_approval stays launch-gated to fake/sim mode.
     auto_clear_value = PythonExpression(
         ["'", use_fake_hardware, "'.lower() == 'true'"]
     )

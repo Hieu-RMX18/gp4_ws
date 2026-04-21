@@ -1,13 +1,23 @@
 #include "motion_core/seed_manager.hpp"
 
 #include <algorithm>
+#include <cstdint>
+#include <sstream>
 
 namespace motion_core
 {
 SeedManager::SeedManager(rclcpp::Node & node)
 : logger_(node.get_logger()),
+  clock_(node.get_clock()),
   ordered_joint_names_(default_joint_names())
 {
+  const auto joint_state_max_age_ms = node.declare_parameter<int64_t>("joint_state_max_age_ms", 200);
+  joint_state_max_age_ = std::chrono::milliseconds(
+    joint_state_max_age_ms > 0 ? joint_state_max_age_ms : 200);
+  bool use_sim_time = false;
+  (void)node.get_parameter("use_sim_time", use_sim_time);
+  allow_fallback_seed_ = node.declare_parameter<bool>("allow_fallback_seed", use_sim_time);
+
   joint_state_sub_ = node.create_subscription<sensor_msgs::msg::JointState>(
     "/yaskawa/joint_states",
     rclcpp::SensorDataQoS(),
@@ -21,13 +31,25 @@ bool SeedManager::get_seed_state(std::vector<double> & seed) const
 
 bool SeedManager::get_seed_state(const std::string & primitive_family, std::vector<double> & seed) const
 {
+  std::string current_state_reason = "latest /yaskawa/joint_states unavailable";
+
   // V4 D2 Priority 1: current joint state
   {
     std::lock_guard<std::mutex> lock(joint_state_mutex_);
-    if (has_joint_state_ && extract_ordered_positions(seed))
+    std::chrono::milliseconds age{0};
+    if (is_joint_state_fresh_locked(age, current_state_reason) && extract_ordered_positions(seed))
     {
       return true;
     }
+  }
+
+  if (!allow_fallback_seed_)
+  {
+    RCLCPP_WARN(
+      logger_,
+      "Seed unavailable: %s; allow_fallback_seed=false (fail closed).",
+      current_state_reason.c_str());
+    return false;
   }
 
   // V4 D2 Priority 2: last successful seed by primitive family
@@ -52,20 +74,39 @@ bool SeedManager::get_seed_state(const std::string & primitive_family, std::vect
   // V4 D2 Priority 4: refreshed current state (retry) — already attempted in priority 1
   RCLCPP_WARN(
     logger_,
-    "Seed unavailable: no joint state, no cached seed, no named-target fallback.");
+    "Seed unavailable: %s; no cached seed and no named-target fallback.",
+    current_state_reason.c_str());
   return false;
 }
 
 bool SeedManager::get_current_joint_positions(std::vector<double> & positions) const
 {
+  builtin_interfaces::msg::Time stamp;
+  return get_current_joint_positions(positions, stamp);
+}
+
+bool SeedManager::get_current_joint_positions(
+  std::vector<double> & positions,
+  builtin_interfaces::msg::Time & stamp) const
+{
   std::lock_guard<std::mutex> lock(joint_state_mutex_);
-  if (!has_joint_state_)
+  std::chrono::milliseconds age{0};
+  std::string reason;
+  if (!is_joint_state_fresh_locked(age, reason))
   {
     positions.clear();
+    stamp = builtin_interfaces::msg::Time();
+    RCLCPP_WARN(logger_, "Current joint position request rejected: %s", reason.c_str());
     return false;
   }
 
-  return extract_ordered_positions(positions);
+  if (!extract_ordered_positions(positions))
+  {
+    stamp = builtin_interfaces::msg::Time();
+    return false;
+  }
+  stamp = latest_joint_state_.header.stamp;
+  return true;
 }
 
 void SeedManager::cache_successful_seed(
@@ -102,7 +143,37 @@ void SeedManager::joint_state_callback(const sensor_msgs::msg::JointState::Share
 
   std::lock_guard<std::mutex> lock(joint_state_mutex_);
   latest_joint_state_ = *msg;
+  receive_time_ = clock_->now();
   has_joint_state_ = true;
+}
+
+bool SeedManager::is_joint_state_fresh_locked(
+  std::chrono::milliseconds & age,
+  std::string & reason) const
+{
+  // NOTE: must be called with joint_state_mutex_ held.
+  if (!has_joint_state_)
+  {
+    age = std::chrono::milliseconds::max();
+    reason = "no /yaskawa/joint_states sample received";
+    return false;
+  }
+
+  const auto age_ns = (clock_->now() - receive_time_).nanoseconds();
+  const auto non_negative_age_ns = age_ns < 0 ? 0 : age_ns;
+  age = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::nanoseconds(non_negative_age_ns));
+  if (age > joint_state_max_age_)
+  {
+    std::ostringstream stream;
+    stream << "/yaskawa/joint_states is stale: age=" << age.count()
+           << " ms exceeds max_age=" << joint_state_max_age_.count() << " ms";
+    reason = stream.str();
+    return false;
+  }
+
+  reason.clear();
+  return true;
 }
 
 bool SeedManager::extract_ordered_positions(std::vector<double> & seed) const

@@ -46,6 +46,18 @@ function createDisconnectedSnapshot(): HmiStateSnapshot {
       executionAllowed: false,
       replayAvailable: false,
       simOnly: true,
+      hardwareGate: {
+        unlocked: false,
+        reasons: ['hardware gate status unavailable while bridge is disconnected'],
+        flagEnabled: false,
+        evidencePath: 'hmi/data/hardware_gate.json',
+        approvedBy: null,
+        approvedAt: null,
+        reportPath: null,
+        reportSha256: null,
+        reportSha256Match: false,
+        checklist: null,
+      },
     },
     lease: {
       leaseId: null,
@@ -142,6 +154,7 @@ export interface UseGp4BridgeResult {
   isController: boolean;
   blockingRuntime: boolean;
   submitCommand: (rawText: string) => Promise<CommandMutationResponse>;
+  confirmCommandById: (commandId: string, planFingerprint: string) => Promise<CommandMutationResponse>;
   acquireControllerLease: () => Promise<LeaseMutationResponse>;
   releaseLease: () => Promise<LeaseMutationResponse | null>;
   confirmActiveCommand: () => Promise<CommandMutationResponse | null>;
@@ -237,21 +250,25 @@ export function useGP4Bridge(
     return response;
   }, [client, operatorId, sessionId, state.lease.leaseToken, state.mode]);
 
-  const confirmActiveCommand = useCallback(async () => {
-    if (!state.activeCommand || !state.activeCommand.planFingerprint) {
-      return null;
-    }
-    const response = await client.confirmCommand(state.activeCommand.commandId, {
+  const confirmCommandById = useCallback(async (commandId: string, planFingerprint: string) => {
+    const response = await client.confirmCommand(commandId, {
       sessionId,
       operatorId,
       leaseToken: state.lease.leaseToken,
-      planFingerprint: state.activeCommand.planFingerprint,
+      planFingerprint,
     });
     if (response.snapshot) {
       setState(response.snapshot);
     }
     return response;
-  }, [client, operatorId, sessionId, state.activeCommand, state.lease.leaseToken]);
+  }, [client, operatorId, sessionId, state.lease.leaseToken]);
+
+  const confirmActiveCommand = useCallback(async () => {
+    if (!state.activeCommand || !state.activeCommand.planFingerprint) {
+      return null;
+    }
+    return confirmCommandById(state.activeCommand.commandId, state.activeCommand.planFingerprint);
+  }, [confirmCommandById, state.activeCommand]);
 
   const abortActiveCommand = useCallback(async (reason?: string) => {
     if (!state.activeCommand) {
@@ -285,6 +302,7 @@ export function useGP4Bridge(
     isController: state.lease.ownsControl && !state.capabilities.readOnly,
     blockingRuntime,
     submitCommand,
+    confirmCommandById,
     acquireControllerLease,
     releaseLease,
     confirmActiveCommand,

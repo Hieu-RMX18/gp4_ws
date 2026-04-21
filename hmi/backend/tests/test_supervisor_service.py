@@ -8,6 +8,8 @@ from tempfile import TemporaryDirectory
 from hmi.backend.domain.models import (
     BridgeConnection,
     ConnectionHealth,
+    HardwareGateChecklistSnapshot,
+    HardwareGateStatusSnapshot,
     JointPosition,
     RobotStatusSnapshot,
     RuntimeMode,
@@ -24,6 +26,28 @@ from hmi.backend.services.supervisor_service import (
     SupervisorService,
 )
 from hmi.backend.services.telemetry_bridge_service import TelemetryBridgeService
+
+
+class AlwaysUnlockedHardwareGate:
+    def evaluate(self) -> HardwareGateStatusSnapshot:
+        return HardwareGateStatusSnapshot(
+            unlocked=True,
+            reasons=[],
+            flag_enabled=True,
+            evidence_path="hmi/data/hardware_gate.json",
+            approved_by="qa.engineer",
+            approved_at="2026-04-18T12:00:00Z",
+            report_path="hmi/HARDWARE_TELEMETRY_VALIDATION.md",
+            report_sha256="f" * 64,
+            report_sha256_match=True,
+            checklist=HardwareGateChecklistSnapshot(
+                timing_jitter=True,
+                disconnect_reconnect=True,
+                robot_status_semantics=True,
+                joint_source_precedence=True,
+                audit_visibility=True,
+            ),
+        )
 
 
 class FakeSupervisorAdapter:
@@ -128,6 +152,14 @@ class FakeSupervisorAdapter:
             'summary': 'Sim execution completed successfully.',
             'dispatchedToRos': True,
         }
+        self._preflight_result = {
+            'accepted': True,
+            'mode': 'sim',
+            'reasons': [],
+            'requiredSources': [],
+            'sourceStatuses': [],
+            'runtimeState': 'NORMAL',
+        }
 
     def start(self) -> None:
         self.started = True
@@ -160,6 +192,12 @@ class FakeSupervisorAdapter:
             'correlationId': kwargs['correlation_id'],
         })
         return response
+
+    def evaluate_execution_preflight(self, *, target_mode: str | None = None):
+        result = dict(self._preflight_result)
+        if target_mode is not None:
+            result['mode'] = target_mode
+        return result
 
     def abort_command(self, **kwargs):
         self.abort_calls.append(kwargs)
@@ -201,6 +239,16 @@ class FakeSupervisorAdapter:
 
     def set_confirm_result(self, **kwargs) -> None:
         self._confirm_result.update(kwargs)
+
+    def set_preflight(self, *, accepted: bool, reasons: list[str]) -> None:
+        self._preflight_result = {
+            'accepted': accepted,
+            'mode': self._runtime.mode.value,
+            'reasons': list(reasons),
+            'requiredSources': [],
+            'sourceStatuses': [],
+            'runtimeState': self._runtime.system_state.value,
+        }
 
 
 class SupervisorServiceTests(unittest.TestCase):
@@ -286,9 +334,10 @@ class SupervisorServiceTests(unittest.TestCase):
             mode='sim',
         )
         self.assertTrue(response['accepted'])
-        self.assertEqual(response['command']['parsedIntent']['parameters']['frame'], 'base_link')
+        self.assertEqual(response['command']['parsedIntent']['action'], 'MOVE_REL')
+        self.assertEqual(response['command']['parsedIntent']['normalizedCommand']['reference_frame'], 'base_link')
 
-    def test_joint_delta_intent_captures_absolute_target_from_current_joint_state(self) -> None:
+    def test_joint_text_intent_maps_to_absolute_joint_target(self) -> None:
         lease_token = self._acquire_lease()
         response = self.supervisor.submit_intent(
             session_id=self.session_id,
@@ -298,11 +347,10 @@ class SupervisorServiceTests(unittest.TestCase):
             mode='sim',
         )
         self.assertTrue(response['accepted'])
-        parameters = response['command']['parsedIntent']['parameters']
-        self.assertEqual(parameters['jointIndexZeroBased'], 1)
-        self.assertEqual(parameters['jointNameResolved'], 'joint_2_l')
-        self.assertAlmostEqual(parameters['currentPositionDeg'], 5.0)
-        self.assertAlmostEqual(parameters['resolvedTargetDeg'], 10.0)
+        normalized_command = response['command']['parsedIntent']['normalizedCommand']
+        self.assertEqual(normalized_command['primitive_type'], 'MOVE_JOINT')
+        self.assertEqual(normalized_command['joint_index'], 1)
+        self.assertAlmostEqual(normalized_command['joint_angle'], 5.0 * 3.141592653589793 / 180.0)
 
     def test_confirmation_required_command_stops_before_execution_boundary(self) -> None:
         lease_token = self._acquire_lease()
@@ -317,6 +365,28 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertEqual(response['command']['lifecycleState'], 'NEEDS_CONFIRMATION')
         self.assertEqual(self.adapter.confirm_calls, [])
 
+    def test_sim_auto_confirm_executes_immediately_when_enabled(self) -> None:
+        supervisor = SupervisorService(
+            audit_service=self.audit,
+            session_lock_service=self.session_lock,
+            ros_adapter=self.adapter,
+            confirmation_window_sec=5.0,
+            sim_auto_confirm=True,
+        )
+        supervisor.bind_telemetry_service(self.telemetry)
+        lease_token = self._acquire_lease()
+        response = supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='home',
+            mode='sim',
+        )
+        self.assertTrue(response['accepted'])
+        self.assertEqual(response['command']['lifecycleState'], 'SUCCEEDED')
+        self.assertEqual(response['command']['finalState'], 'SUCCEEDED')
+        self.assertEqual(len(self.adapter.confirm_calls), 1)
+
     def test_stale_critical_telemetry_rejects_execution_path(self) -> None:
         lease_token = self._acquire_lease()
         self.adapter.set_source_freshness(stale_names={'joint_states_fallback'})
@@ -329,6 +399,76 @@ class SupervisorServiceTests(unittest.TestCase):
         )
         self.assertFalse(response['accepted'])
         self.assertEqual(response['command']['lifecycleState'], 'REJECTED')
+        self.assertIn('joint_states_fallback', response['reason'])
+
+    def test_hardware_mode_requires_dual_gate_before_command_ingress(self) -> None:
+        lease_token = self._acquire_lease()
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='home',
+            mode='hardware',
+        )
+        self.assertFalse(response['accepted'])
+        self.assertEqual(response['command']['lifecycleState'], 'REJECTED')
+        self.assertIn('HMI_ENABLE_HARDWARE_COMMANDS', response['reason'])
+
+    def test_hardware_mode_allows_command_when_gate_and_preflight_pass(self) -> None:
+        supervisor = SupervisorService(
+            audit_service=self.audit,
+            session_lock_service=self.session_lock,
+            ros_adapter=self.adapter,
+            confirmation_window_sec=5.0,
+            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
+        )
+        supervisor.bind_telemetry_service(self.telemetry)
+        lease_token = self._acquire_lease()
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+        self.adapter.set_preflight(accepted=True, reasons=[])
+        response = supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='home',
+            mode='hardware',
+        )
+        self.assertTrue(response['accepted'])
+        self.assertEqual(response['command']['lifecycleState'], 'NEEDS_CONFIRMATION')
+        self.assertEqual(response['command']['mode'], 'hardware')
+
+    def test_missing_structured_fields_fail_closed_with_operator_visible_reason(self) -> None:
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='',
+            structured_intent={
+                'primitive_type': 'MOVE_JOINT',
+                'joint_index': 1,
+            },
+            mode='sim',
+        )
+        self.assertFalse(response['accepted'])
+        self.assertEqual(response['command']['lifecycleState'], 'REJECTED')
+        self.assertIn('joint_angle', response['reason'])
+
+    def test_preflight_failures_reject_command_with_explicit_reason(self) -> None:
+        lease_token = self._acquire_lease()
+        self.adapter.set_preflight(
+            accepted=False,
+            reasons=['required telemetry source joint_states_fallback is stale.'],
+        )
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='home',
+            mode='sim',
+        )
+        self.assertFalse(response['accepted'])
         self.assertIn('joint_states_fallback', response['reason'])
 
     def test_confirmation_expires_correctly(self) -> None:
@@ -623,6 +763,75 @@ class SupervisorServiceTests(unittest.TestCase):
         runtime_messages = [row['message'] for row in detail['runtime_events']]
         self.assertIn('validation result recorded', runtime_messages)
         self.assertIn('execution boundary response recorded', runtime_messages)
+
+    def test_step_messages_exist_for_parse_validate_confirm_and_result(self) -> None:
+        lease_token = self._acquire_lease()
+        submit_response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='home',
+            mode='sim',
+        )
+        self.assertTrue(submit_response['accepted'])
+        submit_messages = [msg['text'] for msg in submit_response['snapshot']['messages']]
+        self.assertTrue(any('Step 1/6 PARSING' in text for text in submit_messages))
+        self.assertTrue(any('Step 2/6 VALIDATING' in text for text in submit_messages))
+        self.assertTrue(any('Step 3/6 NEEDS_CONFIRMATION' in text for text in submit_messages))
+
+        confirm_response = self.supervisor.confirm_command(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            command_id=submit_response['commandId'],
+            plan_fingerprint=submit_response['command']['planFingerprint'],
+        )
+        confirm_messages = [msg['text'] for msg in confirm_response['snapshot']['messages']]
+        self.assertTrue(any('Step 4/6 CONFIRMED' in text for text in confirm_messages))
+        self.assertTrue(any('Step 5/6 EXECUTION_REQUESTED' in text for text in confirm_messages))
+        self.assertTrue(any('Step 6/6 RESULT' in text for text in confirm_messages))
+
+    def test_terminal_command_trace_logs_are_human_readable(self) -> None:
+        lease_token = self._acquire_lease()
+        with self.assertLogs('uvicorn.error', level='INFO') as captured:
+            response = self.supervisor.submit_intent(
+                session_id=self.session_id,
+                operator_id=self.operator_id,
+                lease_token=lease_token,
+                raw_text='home',
+                mode='sim',
+            )
+            self.supervisor.confirm_command(
+                session_id=self.session_id,
+                operator_id=self.operator_id,
+                lease_token=lease_token,
+                command_id=response['commandId'],
+                plan_fingerprint=response['command']['planFingerprint'],
+            )
+
+        output = '\n'.join(captured.output)
+        self.assertIn('[HMI CMD] request.received', output)
+        self.assertIn('[HMI CMD] parse.accepted', output)
+        self.assertIn('[HMI CMD] validation.accepted', output)
+        self.assertIn('[HMI CMD] confirmation.accepted', output)
+        self.assertIn('[HMI CMD] execution.requested', output)
+        self.assertIn('[HMI CMD] terminal.succeeded', output)
+
+    def test_rejection_trace_logs_include_reason(self) -> None:
+        lease_token = self._acquire_lease()
+        with self.assertLogs('uvicorn.error', level='INFO') as captured:
+            self.supervisor.submit_intent(
+                session_id=self.session_id,
+                operator_id=self.operator_id,
+                lease_token=lease_token,
+                raw_text='draw a dragon on the table',
+                mode='sim',
+            )
+
+        output = '\n'.join(captured.output)
+        self.assertIn('[HMI CMD] parse.rejected', output)
+        self.assertIn('[HMI CMD] terminal.rejected', output)
+        self.assertIn('reason=intent is ambiguous or unsupported', output)
 
 if __name__ == '__main__':
     unittest.main()

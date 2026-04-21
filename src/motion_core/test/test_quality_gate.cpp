@@ -1,8 +1,10 @@
 #include <cstddef>
+#include <limits>
 #include <string>
 
 #include <gtest/gtest.h>
 
+#include <rclcpp/rclcpp.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 #include <trajectory_msgs/msg/joint_trajectory_point.hpp>
 
@@ -22,6 +24,7 @@ trajectory_msgs::msg::JointTrajectory make_valid_trajectory(std::size_t point_co
   {
     trajectory_msgs::msg::JointTrajectoryPoint point;
     point.positions = { static_cast<double>(i) * 0.001 };
+    point.time_from_start = rclcpp::Duration::from_seconds(static_cast<double>(i) * 0.1);
     traj.points.push_back(point);
   }
 
@@ -86,6 +89,28 @@ TEST(QualityGateTest, PrimitiveDispatchRoutesDifferentThresholds)
   EXPECT_GT(circ_min, 0.0);
   EXPECT_GT(cart_min, 0.0);
   EXPECT_GT(fallback, 0.0);
+}
+
+TEST(QualityGateTest, RejectsPlanWithNonFiniteValues)
+{
+  const QualityGate gate;
+  auto traj = make_valid_trajectory(2);
+  traj.points[1].positions[0] = std::numeric_limits<double>::quiet_NaN();
+
+  std::string reason;
+  EXPECT_FALSE(gate.validate_plan(traj, QualityGate::kFractionNotApplicable, "PTP", reason));
+  EXPECT_NE(reason.find("non-finite"), std::string::npos);
+}
+
+TEST(QualityGateTest, RejectsPlanWithNonMonotonicTimestamps)
+{
+  const QualityGate gate;
+  auto traj = make_valid_trajectory(2);
+  traj.points[1].time_from_start = traj.points[0].time_from_start;
+
+  std::string reason;
+  EXPECT_FALSE(gate.validate_plan(traj, QualityGate::kFractionNotApplicable, "PTP", reason));
+  EXPECT_EQ(reason, "trajectory time_from_start must be strictly monotonic");
 }
 }  // namespace
 }  // namespace motion_core

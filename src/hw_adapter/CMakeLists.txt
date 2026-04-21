@@ -10,6 +10,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(control_msgs REQUIRED)
@@ -25,6 +26,7 @@ find_package(motoros2_interfaces QUIET)
 
 add_library(${PROJECT_NAME}_components SHARED
   src/backend_capabilities.cpp
+  src/joint_state_monitor.cpp
   src/robot_status_monitor.cpp
   src/motoros2_session_manager.cpp
   src/trajectory_executor.cpp
@@ -39,6 +41,7 @@ target_include_directories(${PROJECT_NAME}_components PUBLIC
 )
 
 ament_target_dependencies(${PROJECT_NAME}_components
+  builtin_interfaces
   rclcpp
   rclcpp_action
   control_msgs
@@ -84,6 +87,7 @@ install(TARGETS
 
 ament_export_targets(${PROJECT_NAME}_targets HAS_LIBRARY_TARGET)
 ament_export_dependencies(
+  builtin_interfaces
   rclcpp
   rclcpp_action
   control_msgs
@@ -134,6 +138,22 @@ if(BUILD_TESTING)
       rclcpp
       industrial_msgs
       interfaces
+    )
+  endif()
+
+  ament_add_gtest(test_joint_state_monitor
+    test/test_joint_state_monitor.cpp
+  )
+  if(TARGET test_joint_state_monitor)
+    target_link_libraries(test_joint_state_monitor
+      ${PROJECT_NAME}_components
+    )
+    target_include_directories(test_joint_state_monitor PRIVATE
+      include
+    )
+    ament_target_dependencies(test_joint_state_monitor
+      rclcpp
+      sensor_msgs
     )
   endif()
 
@@ -207,6 +227,7 @@ if(BUILD_TESTING)
         industrial_msgs
         interfaces
         motoros2_interfaces
+        sensor_msgs
         trajectory_msgs
       )
     endif()

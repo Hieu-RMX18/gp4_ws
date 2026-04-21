@@ -239,7 +239,7 @@ def build_command_argument_parser() -> argparse.ArgumentParser:
     set_speed_parser.add_argument(
         "speed",
         type=float,
-        help="Velocity scale to request. Commissioning range is 0.05 to 0.06.",
+        help="Velocity scale to request. Hardware-conservative range is 0.01 to 0.06.",
     )
 
     move_rel_parser = subparsers.add_parser(

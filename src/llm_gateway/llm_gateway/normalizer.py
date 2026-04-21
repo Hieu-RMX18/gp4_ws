@@ -151,7 +151,11 @@ class Normalizer:
         "MOVE_JOINTS": "PILZ_PTP",
     }
 
-    def __init__(self, default_velocity_scale: float = 0.06, default_acceleration_scale: float = 0.06):
+    def __init__(
+        self,
+        default_velocity_scale: float = 0.06,
+        default_acceleration_scale: float = 0.06,
+    ):
         self.default_velocity_scale = float(default_velocity_scale)
         self.default_acceleration_scale = float(default_acceleration_scale)
 
@@ -234,9 +238,9 @@ class Normalizer:
             "planner_id",
             self._PLANNER_DEFAULTS.get(primitive_type, "OMPL_RRTConnect"),
         )
-        # Default to explicit downstream approval because llm_gateway is not
-        # the final safety authority for real hardware execution.
-        normalized.setdefault("require_approval", True)
+        # Commissioning default is non-approval execution until a real
+        # human-in-the-loop approval workflow is implemented end-to-end.
+        normalized.setdefault("require_approval", False)
         if normalized.get("plan_only"):
             normalized["require_approval"] = True
         return normalized

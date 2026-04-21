@@ -181,6 +181,129 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertEqual(payload["joint_index"], 1)
         self.assertAlmostEqual(payload["joint_angle"], 10.0 * 3.141592653589793 / 180.0)
 
+    def test_build_command_payload_uses_normalized_command_passthrough(self) -> None:
+        adapter = WorkspaceRosAdapter()
+        payload = adapter._build_command_payload(  # pylint: disable=protected-access
+            {
+                "action": "MOVE_REL",
+                "normalizedCommand": {
+                    "primitive_type": "MOVE_REL",
+                    "delta_x": 0.01,
+                    "delta_y": 0.0,
+                    "delta_z": 0.0,
+                    "reference_frame": "base_link",
+                },
+            }
+        )
+        self.assertEqual(payload["primitive_type"], "MOVE_REL")
+        self.assertAlmostEqual(payload["delta_x"], 0.01)
+
+    def test_build_command_payload_passthrough_preserves_wait_and_io_fields(self) -> None:
+        adapter = WorkspaceRosAdapter()
+        wait_payload = adapter._build_command_payload(  # pylint: disable=protected-access
+            {
+                "action": "WAIT",
+                "normalizedCommand": {
+                    "primitive_type": "WAIT",
+                    "wait_duration_sec": 2.0,
+                    "reference_frame": "base_link",
+                },
+            }
+        )
+        self.assertEqual(wait_payload["primitive_type"], "WAIT")
+        self.assertAlmostEqual(wait_payload["wait_duration_sec"], 2.0)
+        self.assertEqual(wait_payload["reference_frame"], "base_link")
+
+        io_payload = adapter._build_command_payload(  # pylint: disable=protected-access
+            {
+                "action": "IO_SET",
+                "normalizedCommand": {
+                    "primitive_type": "IO_SET",
+                    "io_address": 10010,
+                    "io_value": 1,
+                    "reference_frame": "base_link",
+                },
+            }
+        )
+        self.assertEqual(io_payload["primitive_type"], "IO_SET")
+        self.assertEqual(io_payload["io_address"], 10010)
+        self.assertEqual(io_payload["io_value"], 1)
+        self.assertEqual(io_payload["reference_frame"], "base_link")
+
+    def test_build_command_payload_passthrough_preserves_joint_and_pose_motion_fields(self) -> None:
+        adapter = WorkspaceRosAdapter()
+        move_joint_payload = adapter._build_command_payload(  # pylint: disable=protected-access
+            {
+                "action": "MOVE_JOINT",
+                "normalizedCommand": {
+                    "primitive_type": "MOVE_JOINT",
+                    "joint_index": 2,
+                    "joint_angle": 0.5,
+                    "velocity_scale": 0.06,
+                    "acceleration_scale": 0.06,
+                    "planner_id": "PILZ_PTP",
+                    "require_approval": False,
+                },
+            }
+        )
+        self.assertEqual(move_joint_payload["primitive_type"], "MOVE_JOINT")
+        self.assertEqual(move_joint_payload["joint_index"], 2)
+        self.assertAlmostEqual(move_joint_payload["joint_angle"], 0.5)
+        self.assertAlmostEqual(move_joint_payload["velocity_scale"], 0.06)
+        self.assertAlmostEqual(move_joint_payload["acceleration_scale"], 0.06)
+        self.assertEqual(move_joint_payload["planner_id"], "PILZ_PTP")
+        self.assertFalse(move_joint_payload["require_approval"])
+
+        lin_payload = adapter._build_command_payload(  # pylint: disable=protected-access
+            {
+                "action": "LIN",
+                "normalizedCommand": {
+                    "primitive_type": "LIN",
+                    "target_pose": {
+                        "position": {"x": 0.30, "y": 0.0, "z": 0.35},
+                        "orientation": {"x": 0.0, "y": 0.707, "z": 0.0, "w": 0.707},
+                    },
+                    "reference_frame": "base_link",
+                    "velocity_scale": 0.05,
+                    "acceleration_scale": 0.04,
+                    "planner_id": "PILZ_LIN",
+                    "require_approval": True,
+                },
+            }
+        )
+        self.assertEqual(lin_payload["primitive_type"], "LIN")
+        self.assertEqual(lin_payload["reference_frame"], "base_link")
+        self.assertIn("target_pose", lin_payload)
+        self.assertAlmostEqual(lin_payload["velocity_scale"], 0.05)
+        self.assertAlmostEqual(lin_payload["acceleration_scale"], 0.04)
+        self.assertEqual(lin_payload["planner_id"], "PILZ_LIN")
+        self.assertTrue(lin_payload["require_approval"])
+
+    def test_hardware_preflight_detects_missing_primary_joint_source(self) -> None:
+        adapter = WorkspaceRosAdapter()
+        now = adapter._now()
+        adapter._state.start_error = None
+        adapter._state.ros_started_at = now
+        adapter._state.readiness.received_at = now
+        adapter._state.readiness.ready = True
+        adapter._state.readiness.status_message = 'hardware ready'
+        adapter._state.robot_status.received_at = now
+        adapter._state.robot_status.e_stopped = False
+        adapter._state.robot_status.in_error = False
+        adapter._state.joint_received_at = now
+        adapter._state.joint_source_topic = '/joint_states'
+        adapter._state.joint_topic_received_at['/joint_states'] = now
+        adapter._state.validate_command_ready = True
+        adapter._state.execute_motion_ready = True
+        adapter._state.validate_command_ready_at = now
+        adapter._state.execute_motion_ready_at = now
+        preflight = adapter.evaluate_execution_preflight(target_mode='hardware')
+        self.assertFalse(preflight["accepted"])
+        self.assertTrue(
+            any("joint_states_primary" in reason for reason in preflight["reasons"]),
+            msg=preflight,
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

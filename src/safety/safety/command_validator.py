@@ -9,6 +9,8 @@ _VELOCITY_BYPASS_PRIMITIVES = {
     "GET_POSE",
 }
 
+_DEFAULT_MAX_SCALE = 0.06
+
 
 class CommandValidator:
     def __init__(self, safety_rules: dict):
@@ -17,11 +19,11 @@ class CommandValidator:
         legacy_limits = self.safety_rules.get("joint_limits_override", {})
         self.max_velocity = motion_limits.get(
             "max_velocity_scale",
-            legacy_limits.get("max_velocity_scale", 0.5),
+            legacy_limits.get("max_velocity_scale", _DEFAULT_MAX_SCALE),
         )
         self.max_acceleration = motion_limits.get(
             "max_acceleration_scale",
-            legacy_limits.get("max_acceleration_scale", 0.5),
+            legacy_limits.get("max_acceleration_scale", _DEFAULT_MAX_SCALE),
         )
 
     def validate(self, command_json: str) -> tuple[bool, str]:

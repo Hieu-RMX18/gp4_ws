@@ -92,6 +92,8 @@ def generate_launch_description():
             "follow_joint_trajectory_action": "/controller_manager/follow_joint_trajectory",
             "dispatch_action_name": "/hw_adapter/dispatch_trajectory",
             "robot_status_topic": "/yaskawa/robot_status",
+            # Fake ros2_control publishes /joint_states directly in sim.
+            "joint_states_topic": "/joint_states",
             "start_traj_mode_service": "",
             "reset_error_service": "",
             "sim_mode": True,

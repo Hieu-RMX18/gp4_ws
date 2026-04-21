@@ -9,13 +9,15 @@ explicit reason visible in pytest output.
 """
 
 import json
-import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
-pytestmark = pytest.mark.ros_integration
+pytestmark = [
+    pytest.mark.ros_integration,
+    pytest.mark.usefixtures("ros_integration_context"),
+]
 
 # ── Import availability detection ────────────────────────────────────────────
 _INTERFACES_AVAILABLE = False
@@ -26,19 +28,6 @@ except ImportError:
     pass
 
 _SKIP_REASON = "requires colcon-sourced workspace with built interfaces"
-
-
-@pytest.fixture(scope="module", autouse=True)
-def ros_context():
-    """Initialize rclpy for integration tests, or skip the module entirely."""
-    if not _INTERFACES_AVAILABLE:
-        pytest.skip(_SKIP_REASON)
-    os.environ.setdefault("ROS_LOG_DIR", "/tmp/ros_logs")
-    if not rclpy.ok():
-        rclpy.init()
-    yield
-    if rclpy.ok():
-        rclpy.shutdown()
 
 
 # Conditional imports — only available when interfaces is on PYTHONPATH.
@@ -82,7 +71,7 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
         {
             "primitive_type": "LIN",
             "target_pose": {
-                "position": {"x": 0.35, "y": 0.1, "z": 0.2},
+                "position": {"x": 0.30, "y": 0.0, "z": 0.30},
                 "orientation": {"x": 0.0, "y": 0.707, "z": 0.0, "w": 0.707},
             },
             "velocity_scale": 0.06,
@@ -108,7 +97,7 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
     )
     node._execute_client.send_goal_async = MagicMock(return_value=ImmediateFuture(mock_goal_handle))
 
-    node.process_intent("di chuyển thẳng tới x 0.35 y 0.1 z 0.2")
+    node.process_intent("di chuyển thẳng tới x 0.30 y 0.0 z 0.30")
 
     goal = node._execute_client.send_goal_async.call_args.args[0]
     assert goal.velocity_scale == 0.06
@@ -179,7 +168,7 @@ def test_gateway_fails_closed_when_validate_service_unavailable(openai_payload):
     node._validate_client.wait_for_service = MagicMock(return_value=False)
     node._execute_client.send_goal_async = MagicMock()
 
-    node.process_intent("di chuyển thẳng tới x 0.35 y 0.1 z 0.2")
+    node.process_intent("di chuyển thẳng tới x 0.30 y 0.0 z 0.30")
 
     node._execute_client.send_goal_async.assert_not_called()
     assert debug_messages[-1]["reason"] == "ValidateCommand service unavailable"
@@ -203,7 +192,7 @@ def test_gateway_fails_closed_when_execute_motion_unavailable(openai_payload):
     node._execute_client.server_is_ready = MagicMock(return_value=False)
     node._execute_client.send_goal_async = MagicMock()
 
-    node.process_intent("di chuyển thẳng tới x 0.35 y 0.1 z 0.2")
+    node.process_intent("di chuyển thẳng tới x 0.30 y 0.0 z 0.30")
 
     node._execute_client.send_goal_async.assert_not_called()
     assert debug_messages[-1]["reason"] == "ExecuteMotion action server unavailable"
@@ -267,7 +256,7 @@ def test_gateway_routes_semantic_ir_single_command():
                             {
                                 "intent": "absolute_move_lin",
                                 "target_pose": {
-                                    "position": {"x": 0.35, "y": 0.10, "z": 0.25}
+                                    "position": {"x": 0.30, "y": 0.00, "z": 0.30}
                                 },
                                 "reference_frame": "base_link",
                                 "velocity_scale": 0.06,
@@ -295,7 +284,7 @@ def test_gateway_routes_semantic_ir_single_command():
     )
     node._execute_client.send_goal_async = MagicMock(return_value=ImmediateFuture(mock_goal_handle))
 
-    node.process_intent("move linearly to x 0.35 y 0.10 z 0.25")
+    node.process_intent("move linearly to x 0.30 y 0.00 z 0.30")
 
     assert "routed" in statuses
     goal = node._execute_client.send_goal_async.call_args.args[0]
@@ -342,7 +331,7 @@ def test_gateway_executes_sequence_step_by_step():
                                     {
                                         "intent": "absolute_move_lin",
                                         "target_pose": {
-                                            "position": {"x": 0.35, "y": 0.10, "z": 0.25}
+                                            "position": {"x": 0.30, "y": 0.00, "z": 0.30}
                                         },
                                         "reference_frame": "base_link",
                                     },
@@ -422,7 +411,7 @@ def test_gateway_aborts_sequence_after_first_failed_step_and_marks_manual_recove
                                     {
                                         "intent": "absolute_move_lin",
                                         "target_pose": {
-                                            "position": {"x": 0.35, "y": 0.10, "z": 0.25}
+                                            "position": {"x": 0.30, "y": 0.00, "z": 0.30}
                                         },
                                         "reference_frame": "base_link",
                                     },

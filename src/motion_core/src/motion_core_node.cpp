@@ -27,9 +27,11 @@
 #include <interfaces/srv/io_set.hpp>
 
 #include "motion_core/execute_motion_action_support.hpp"
+#include "motion_core/goal_execution_utils.hpp"
 #include "motion_core/ik_selector.hpp"
 #include "motion_core/dispatch_trajectory_executor.hpp"
 #include "motion_core/execution_orchestrator.hpp"
+#include "motion_core/motion_primitive_executor.hpp"
 #include "motion_core/non_motion_primitive_executor.hpp"
 #include "motion_core/orientation_filter.hpp"
 #include "motion_core/planner_router.hpp"
@@ -220,12 +222,6 @@ private:
   static constexpr double kMaxVelocityScale = 0.06;
   static constexpr double kMaxAccelerationScale = 0.06;
   static constexpr double kPlanningTimeSec = 5.0;
-  // Standard Cartesian eef_step — tighter fidelity for CARTESIAN_PATH.
-  static constexpr double kCartesianEefStep = 0.005;
-  // Relaxed eef_step for LIN/CIRC fallback paths to reduce point density.
-  static constexpr double kCartesianEefStepRelaxed = 0.010;
-  // V4 G0: jump_threshold must be >= 1.5 in Cartesian planning config.
-  static constexpr double kCartesianJumpThreshold = 1.5;
   static constexpr const char * kPlanningGroup = "gp4_arm";
   // Production point-budget policy.
   static constexpr std::size_t kTrajectorySafeBudgetPoints = 180;
@@ -278,57 +274,6 @@ private:
     std::string note;
   };
 
-  std::string interrupt_reason(
-    const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
-    const std::uint64_t sequence,
-    const std::string & stage) const
-  {
-    if (shutdown_requested_.load())
-    {
-      return "node shutdown requested during " + stage;
-    }
-
-    if (goal_handle->is_canceling())
-    {
-      return "goal canceled during " + stage;
-    }
-
-    if (execution_orchestrator_.stop_requested(sequence))
-    {
-      return "STOP requested during " + stage;
-    }
-
-    return {};
-  }
-
-  bool ensure_scene_ready(std::string & reason) const
-  {
-    reason.clear();
-    if (!require_planning_scene_)
-    {
-      return true;
-    }
-
-    if (scene_manager_.is_scene_loaded())
-    {
-      return true;
-    }
-
-    std::ostringstream stream;
-    stream << "planning scene is required but not loaded";
-    if (!scene_objects_path_.empty())
-    {
-      stream << " (path='" << scene_objects_path_ << "', status="
-             << scene_load_result_name(scene_load_result_) << ")";
-    }
-    else
-    {
-      stream << " (scene_objects_path is empty)";
-    }
-    reason = stream.str();
-    return false;
-  }
-
   bool ensure_move_group(std::string & reason)
   {
     reason.clear();
@@ -360,15 +305,6 @@ private:
       reason = std::string("failed to initialize MoveGroupInterface: ") + ex.what();
       return false;
     }
-  }
-
-  static void set_result_timing(
-    const std::chrono::steady_clock::time_point & started_at,
-    ExecuteMotion::Result & result)
-  {
-    const auto ended_at = std::chrono::steady_clock::now();
-    result.execution_time_sec =
-      std::chrono::duration_cast<std::chrono::duration<double>>(ended_at - started_at).count();
   }
 
   bool build_current_robot_state(
@@ -500,41 +436,6 @@ private:
     return true;
   }
 
-  void publish_feedback(
-    const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
-    double progress,
-    const std::string & state) const
-  {
-    auto feedback = std::make_shared<ExecuteMotion::Feedback>();
-    feedback->progress = progress;
-    feedback->current_state = state;
-    goal_handle->publish_feedback(feedback);
-  }
-
-  void abort_with_message(
-    const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
-    const std::chrono::steady_clock::time_point & started_at,
-    const std::string & message) const
-  {
-    auto result = std::make_shared<ExecuteMotion::Result>();
-    result->success = false;
-    result->message = message;
-    set_result_timing(started_at, *result);
-    goal_handle->abort(result);
-  }
-
-  void cancel_with_message(
-    const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
-    const std::chrono::steady_clock::time_point & started_at,
-    const std::string & message) const
-  {
-    auto result = std::make_shared<ExecuteMotion::Result>();
-    result->success = false;
-    result->message = message;
-    set_result_timing(started_at, *result);
-    goal_handle->canceled(result);
-  }
-
   StageResult plan_with_interruption(
     moveit::planning_interface::MoveGroupInterface::Plan & plan,
     const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
@@ -562,7 +463,11 @@ private:
     std::string interrupted_reason;
     while (!planning_finished.load())
     {
-      interrupted_reason = interrupt_reason(goal_handle, sequence, stage);
+      interrupted_reason = make_interrupt_reason(
+        shutdown_requested_.load(),
+        goal_handle->is_canceling(),
+        execution_orchestrator_.stop_requested(sequence),
+        stage);
       if (!interrupted_reason.empty())
       {
         move_group_->stop();
@@ -731,7 +636,11 @@ private:
       goal_id.c_str(),
       primitive.c_str());
 
-    const std::string initial_interrupt = interrupt_reason(goal_handle, goal_sequence, "goal_start");
+    const std::string initial_interrupt = make_interrupt_reason(
+      shutdown_requested_.load(),
+      goal_handle->is_canceling(),
+      execution_orchestrator_.stop_requested(goal_sequence),
+      "goal_start");
     if (!initial_interrupt.empty())
     {
       cancel_with_message(goal_handle, started_at, initial_interrupt);
@@ -766,74 +675,44 @@ private:
       return;
     }
 
-    // ── Motion primitives below require MoveGroup ──
-    execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kPlanning, "ensure_move_group");
-    std::string move_group_reason;
-    if (!ensure_move_group(move_group_reason))
+    if (!dispatch_executor_ || !primitive_router_dispatch_)
     {
-      abort_with_message(goal_handle, started_at, move_group_reason);
+      abort_with_message(goal_handle, started_at, "motion primitive executor dependencies unavailable");
       return;
     }
 
-    std::string scene_reason;
-    if (!ensure_scene_ready(scene_reason))
-    {
-      abort_with_message(goal_handle, started_at, scene_reason);
-      return;
-    }
-
-    // Step 3.9: MOVE_JOINTS is a semantic alias for PTP (full joint-space target).
-    // Use a local effective primitive string — no const_cast, no goal mutation.
-    const std::string effective_primitive =
-      (primitive == "MOVE_JOINTS") ? "PTP" : primitive;
-
-    const double velocity_scale =
-      (goal->velocity_scale > 0.0) ? goal->velocity_scale : TrajectoryPostProcessor::kDefaultVelocityScaling;
-    const double acceleration_scale =
-      (goal->acceleration_scale > 0.0) ? goal->acceleration_scale : TrajectoryPostProcessor::kDefaultAccelerationScaling;
-    moveit::core::RobotState current_robot_state(move_group_->getRobotModel());
-    builtin_interfaces::msg::Time source_joint_state_stamp;
-    std::string current_state_reason;
-    if (!build_current_robot_state(
-          current_robot_state,
-          current_state_reason,
-          &source_joint_state_stamp))
-    {
-      abort_with_message(goal_handle, started_at,
-        "failed to read current joint state: " + current_state_reason);
-      return;
-    }
-
-    const auto * joint_model_group =
-      current_robot_state.getJointModelGroup(kPlanningGroup);
-    if (!joint_model_group)
-    {
-      abort_with_message(goal_handle, started_at,
-        "planning group '" + std::string(kPlanningGroup) + "' not found");
-      return;
-    }
-
-    std::vector<double> current_joint_positions;
-    current_robot_state.copyJointGroupPositions(joint_model_group, current_joint_positions);
-    const auto & active_joint_models = joint_model_group->getActiveJointModels();
-    const auto & active_joint_names = joint_model_group->getActiveJointModelNames();
-    execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kPlanning, "planning_request_prepared");
-    publish_feedback(goal_handle, 0.2, "planning_request_prepared");
-
-    PrimitiveRouterDispatch::PlanningRequest planning_request(current_robot_state);
-    planning_request.goal = goal;
-    planning_request.primitive = primitive;
-    planning_request.effective_primitive = effective_primitive;
-    planning_request.goal_sequence = goal_sequence;
-    planning_request.velocity_scale = velocity_scale;
-    planning_request.acceleration_scale = acceleration_scale;
-    planning_request.current_joint_positions = current_joint_positions;
-    planning_request.active_joint_models = active_joint_models;
-    planning_request.active_joint_names = active_joint_names;
-    planning_request.plan_with_interruption =
+    MotionPrimitiveExecutor motion_executor({
+      *primitive_router_dispatch_,
+      *dispatch_executor_,
+      execution_orchestrator_,
+      kPlanningGroup,
+      [this](std::string & reason) -> bool
+      {
+        return ensure_move_group(reason);
+      },
+      [this](std::string & reason) -> bool
+      {
+        return motion_core::ensure_scene_ready(
+          require_planning_scene_,
+          scene_manager_,
+          scene_objects_path_,
+          scene_load_result_,
+          reason);
+      },
+      [this]() -> std::shared_ptr<moveit::planning_interface::MoveGroupInterface>
+      {
+        return move_group_;
+      },
+      [this](
+        moveit::core::RobotState & current_state,
+        std::string & reason,
+        builtin_interfaces::msg::Time * source_joint_state_stamp) -> bool
+      {
+        return build_current_robot_state(current_state, reason, source_joint_state_stamp);
+      },
       [this, goal_handle, goal_sequence](
-      moveit::planning_interface::MoveGroupInterface::Plan & plan,
-      const std::string & stage) -> PrimitiveRouterDispatch::PlanningStageResult
+        moveit::planning_interface::MoveGroupInterface::Plan & plan,
+        const std::string & stage) -> PrimitiveRouterDispatch::PlanningStageResult
       {
         const auto stage_result = plan_with_interruption(plan, goal_handle, goal_sequence, stage);
         PrimitiveRouterDispatch::PlanningStageResult converted;
@@ -852,52 +731,14 @@ private:
         }
         converted.reason = stage_result.reason;
         return converted;
-      };
-    planning_request.interrupt_reason =
+      },
       [this, goal_handle, goal_sequence](const std::string & stage) -> std::string
       {
-        return interrupt_reason(goal_handle, goal_sequence, stage);
-      };
-
-    const auto planning_result = primitive_router_dispatch_->plan_for_primitive(planning_request);
-    if (planning_result.status == PrimitiveRouterDispatch::PlanningStatus::kCanceled)
-    {
-      const std::string cancel_reason = planning_result.is_move_joint ?
-        ("MOVE_JOINT planning canceled: " + planning_result.reason) :
-        ("planning canceled: " + planning_result.reason);
-      cancel_with_message(goal_handle, started_at, cancel_reason);
-      return;
-    }
-    if (planning_result.status != PrimitiveRouterDispatch::PlanningStatus::kSuccess)
-    {
-      abort_with_message(goal_handle, started_at, planning_result.reason);
-      return;
-    }
-
-    publish_feedback(goal_handle, 0.55, "post_processing");
-    if (!dispatch_executor_)
-    {
-      abort_with_message(goal_handle, started_at, "dispatch trajectory executor is unavailable");
-      return;
-    }
-    trajectory_msgs::msg::JointTrajectory output_traj = planning_result.trajectory;
-    DispatchTrajectoryExecutor::DispatchMetadata dispatch_metadata;
-    dispatch_metadata.command_id = goal_id;
-    dispatch_metadata.primitive = planning_result.dispatch_primitive;
-    dispatch_metadata.planner_id = planning_result.planner_id;
-    dispatch_metadata.source_joint_state_stamp = source_joint_state_stamp;
-    dispatch_metadata.enforce_start_state_match = true;
-
-    std::size_t dispatched_point_count = 0U;
-    std::size_t dispatched_segment_count = 0U;
-    const auto dispatch_result = dispatch_executor_->apply_budget_quality_and_dispatch(
-      output_traj,
-      planning_result.dispatch_primitive,
-      dispatch_metadata,
-      planning_result.cartesian_fraction,
-      [this, goal_handle, goal_sequence](const std::string & stage) -> std::string
-      {
-        return interrupt_reason(goal_handle, goal_sequence, stage);
+        return make_interrupt_reason(
+          shutdown_requested_.load(),
+          goal_handle->is_canceling(),
+          execution_orchestrator_.stop_requested(goal_sequence),
+          stage);
       },
       [this, goal_handle](const double progress, const std::string & state)
       {
@@ -907,62 +748,26 @@ private:
       {
         execution_orchestrator_.update_phase(goal_sequence, phase, detail);
       },
-      dispatched_point_count,
-      dispatched_segment_count);
-    if (dispatch_result.status == DispatchTrajectoryExecutor::Status::kCanceled)
-    {
-      const std::string cancel_reason = planning_result.is_move_joint ?
-        ("MOVE_JOINT dispatch canceled: " + dispatch_result.reason) :
-        ("trajectory dispatch canceled: " + dispatch_result.reason);
-      cancel_with_message(goal_handle, started_at, cancel_reason);
-      return;
-    }
-    if (dispatch_result.status != DispatchTrajectoryExecutor::Status::kSuccess)
-    {
-      const std::string abort_reason = planning_result.is_move_joint ?
-        ("MOVE_JOINT dispatch failed: " + dispatch_result.reason) :
-        ("trajectory dispatch failed: " + dispatch_result.reason);
-      abort_with_message(goal_handle, started_at, abort_reason);
-      return;
-    }
+    });
 
-    publish_feedback(goal_handle, 0.95, "trajectory_execution_complete");
+    const auto motion_result =
+      motion_executor.execute(goal, goal_id, primitive, goal_sequence);
+    switch (motion_result.status)
+    {
+      case MotionPrimitiveExecutor::Status::kCanceled:
+        cancel_with_message(goal_handle, started_at, motion_result.message);
+        return;
+      case MotionPrimitiveExecutor::Status::kAborted:
+        abort_with_message(goal_handle, started_at, motion_result.message);
+        return;
+      case MotionPrimitiveExecutor::Status::kSucceeded:
+      default:
+        break;
+    }
 
     auto result = std::make_shared<ExecuteMotion::Result>();
     result->success = true;
-
-    std::ostringstream message;
-    if (planning_result.is_move_joint)
-    {
-      message << "MOVE_JOINT success: joint[" << planning_result.move_joint_index << "]="
-              << planning_result.move_joint_target_angle << " rad, points=" << dispatched_point_count
-              << ", segments=" << dispatched_segment_count;
-    }
-    else
-    {
-      message << "execution success; primitive=" << primitive
-              << ", planner_id=" << planning_result.planner_id
-              << ", points=" << dispatched_point_count
-              << ", segments=" << dispatched_segment_count;
-      if (planning_result.cartesian_fraction >= 0.0)
-      {
-        message << ", cartesian_fraction=" << planning_result.cartesian_fraction;
-      }
-    }
-    if (!planning_result.time_parameterization_note.empty())
-    {
-      message << ", " << planning_result.time_parameterization_note;
-    }
-    if (!planning_result.ruckig_reason.empty())
-    {
-      message << ", ruckig_status=" << planning_result.ruckig_reason;
-    }
-    if (!dispatch_result.note.empty())
-    {
-      message << ", " << dispatch_result.note;
-    }
-
-    result->message = message.str();
+    result->message = motion_result.message;
     set_result_timing(started_at, *result);
     goal_handle->succeed(result);
   }

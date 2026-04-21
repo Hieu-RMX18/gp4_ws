@@ -29,6 +29,7 @@
 #include "motion_core/ik_selector.hpp"
 #include "motion_core/dispatch_trajectory_executor.hpp"
 #include "motion_core/execution_orchestrator.hpp"
+#include "motion_core/non_motion_primitive_executor.hpp"
 #include "motion_core/orientation_filter.hpp"
 #include "motion_core/planner_router.hpp"
 #include "motion_core/planning_scene_manager.hpp"
@@ -114,6 +115,21 @@ public:
       "io_set_service_name",
       "/hw_adapter/io_set");
     io_set_client_ = create_client<IoSet>(io_set_service_name_);
+    non_motion_executor_ = std::make_unique<NonMotionPrimitiveExecutor>(
+      get_logger(),
+      execution_orchestrator_,
+      dispatch_client_,
+      alarm_reset_client_,
+      alarm_reset_service_name_,
+      io_set_client_,
+      io_set_service_name_,
+      [this]()
+      {
+        if (move_group_)
+        {
+          move_group_->stop();
+        }
+      });
 
     RCLCPP_INFO(
       get_logger(),
@@ -214,6 +230,7 @@ private:
   rclcpp::Service<GetCurrentPose>::SharedPtr get_pose_service_;
   std::unique_ptr<QueryHandler> query_handler_;
   std::unique_ptr<PrimitiveRouterDispatch> primitive_router_dispatch_;
+  std::unique_ptr<NonMotionPrimitiveExecutor> non_motion_executor_;
   std::unique_ptr<DispatchTrajectoryExecutor> dispatch_executor_;
   // Step 3.6/3.7: service clients for ALARM_RESET and IO_SET (via hw_adapter)
   rclcpp::Client<AlarmReset>::SharedPtr alarm_reset_client_;
@@ -793,30 +810,16 @@ private:
     // ── Step 3.3: STOP — top-priority, cancel everything immediately ──
     if (primitive == "STOP")
     {
-      std::string stop_reason;
-      const bool had_active_goal = execution_orchestrator_.request_stop(stop_reason);
-      RCLCPP_WARN(
-        get_logger(),
-        "STOP primitive received for goal_id=%s — %s",
-        goal_id.c_str(),
-        had_active_goal ? stop_reason.c_str() : "no active execute_motion goal to stop");
-      // Cancel any in-flight dispatch goals
-      if (dispatch_client_)
+      if (non_motion_executor_ &&
+        non_motion_executor_->handle_stop_primitive(
+          primitive,
+          goal_id,
+          goal_handle,
+          started_at))
       {
-        dispatch_client_->async_cancel_all_goals();
+        return;
       }
-      // Stop MoveGroup planning/execution if available
-      if (move_group_)
-      {
-        move_group_->stop();
-      }
-      auto result = std::make_shared<ExecuteMotion::Result>();
-      result->success = true;
-      result->message = had_active_goal ?
-        ("STOP: motion halt requested, dispatch cancel issued (" + stop_reason + ")") :
-        "STOP: no active execute_motion goal was running";
-      set_result_timing(started_at, *result);
-      goal_handle->succeed(result);
+      abort_with_message(goal_handle, started_at, "STOP handler unavailable");
       return;
     }
 
@@ -860,171 +863,31 @@ private:
       return;
     }
 
-    // ── Step 3.4: SET_SPEED — stateless acknowledge-only ──
-    // Does NOT persist velocity across future goals. Each motion command must
-    // include its own velocity_scale. This is a convenience primitive for the
-    // LLM gateway to acknowledge speed-related user intent without side effects.
-    if (primitive == "SET_SPEED")
+    if (is_non_motion_primitive(primitive))
     {
-      execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kAccepted, "set_speed");
-      const double requested_scale = goal->velocity_scale;
-      auto result = std::make_shared<ExecuteMotion::Result>();
-      result->success = true;
-      std::ostringstream msg;
-      msg << "SET_SPEED acknowledged: goal_seq=" << goal_sequence
-          << ", velocity_scale=" << requested_scale
-          << ". NOTE: this is stateless — subsequent motion commands must "
-             "include their own velocity_scale field to take effect.";
-      result->message = msg.str();
-      set_result_timing(started_at, *result);
-      RCLCPP_INFO(get_logger(), "%s", result->message.c_str());
-      goal_handle->succeed(result);
-      return;
-    }
-
-    // ── Step 3.5: WAIT — cancellation-aware timed pause ──
-    // execute() runs in an owned async worker launched by handle_accepted(),
-    // so blocking sleep is safe here and lifecycle remains bounded.
-    if (primitive == "WAIT")
-    {
-      execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kAccepted, "wait");
-      const double wait_sec = std::max(goal->wait_duration_sec, 0.0);
-      RCLCPP_INFO(
-        get_logger(),
-        "WAIT goal_seq=%lu: pausing for %.3f seconds.",
-        static_cast<unsigned long>(goal_sequence),
-        wait_sec);
-      publish_feedback(goal_handle, 0.1, "wait_started");
-
-      const auto wait_start = std::chrono::steady_clock::now();
-      const auto wait_duration = std::chrono::duration<double>(wait_sec);
-      constexpr auto poll_interval = std::chrono::milliseconds(50);
-
-      while (true)
+      if (non_motion_executor_ &&
+        non_motion_executor_->handle_non_motion_primitive(
+          primitive,
+          goal_sequence,
+          goal,
+          goal_handle,
+          started_at,
+          [this, goal_handle](const double progress, const std::string & state)
+          {
+            publish_feedback(goal_handle, progress, state);
+          },
+          [this, goal_handle, started_at](const std::string & message)
+          {
+            abort_with_message(goal_handle, started_at, message);
+          },
+          [this, goal_handle, started_at](const std::string & message)
+          {
+            cancel_with_message(goal_handle, started_at, message);
+          }))
       {
-        const auto elapsed = std::chrono::steady_clock::now() - wait_start;
-        if (elapsed >= wait_duration)
-        {
-          break;
-        }
-        if (goal_handle->is_canceling())
-        {
-          cancel_with_message(goal_handle, started_at, "WAIT: cancelled during wait");
-          return;
-        }
-        if (execution_orchestrator_.stop_requested(goal_sequence))
-        {
-          cancel_with_message(goal_handle, started_at, "WAIT: STOP requested during wait");
-          return;
-        }
-        const double progress = std::min(
-          0.1 + 0.8 * (std::chrono::duration<double>(elapsed).count() / wait_sec),
-          0.9);
-        publish_feedback(goal_handle, progress, "waiting");
-        std::this_thread::sleep_for(poll_interval);
-      }
-
-      auto result = std::make_shared<ExecuteMotion::Result>();
-      result->success = true;
-      result->message = "WAIT: completed " + std::to_string(wait_sec) + " seconds";
-      set_result_timing(started_at, *result);
-      goal_handle->succeed(result);
-      return;
-    }
-
-    // ── Step 3.6: ALARM_RESET — delegate to hw_adapter via service ──
-    if (primitive == "ALARM_RESET")
-    {
-      execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kAccepted, "alarm_reset");
-      RCLCPP_INFO(
-        get_logger(),
-        "ALARM_RESET goal_seq=%lu: sending reset request to %s",
-        static_cast<unsigned long>(goal_sequence),
-        alarm_reset_service_name_.c_str());
-
-      if (!alarm_reset_client_->wait_for_service(std::chrono::seconds(5)))
-      {
-        abort_with_message(goal_handle, started_at,
-          "ALARM_RESET: service unavailable at " + alarm_reset_service_name_);
         return;
       }
-
-      auto request = std::make_shared<AlarmReset::Request>();
-      auto future = alarm_reset_client_->async_send_request(request);
-
-      if (future.wait_for(std::chrono::seconds(10)) != std::future_status::ready)
-      {
-        abort_with_message(goal_handle, started_at,
-          "ALARM_RESET: timed out waiting for response from " + alarm_reset_service_name_);
-        return;
-      }
-
-      auto response = future.get();
-      auto result = std::make_shared<ExecuteMotion::Result>();
-      result->success = response->success;
-      result->message = response->success
-        ? "ALARM_RESET: " + response->message
-        : "ALARM_RESET failed: " + response->message;
-      set_result_timing(started_at, *result);
-
-      if (response->success)
-      {
-        goal_handle->succeed(result);
-      }
-      else
-      {
-        goal_handle->abort(result);
-      }
-      return;
-    }
-
-    // ── Step 3.7: IO_SET — delegate to hw_adapter via service ──
-    if (primitive == "IO_SET")
-    {
-      execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kAccepted, "io_set");
-      RCLCPP_INFO(
-        get_logger(),
-        "IO_SET goal_seq=%lu: address=%u, value=%d -> %s",
-        static_cast<unsigned long>(goal_sequence),
-        goal->io_address,
-        goal->io_value,
-        io_set_service_name_.c_str());
-
-      if (!io_set_client_->wait_for_service(std::chrono::seconds(5)))
-      {
-        abort_with_message(goal_handle, started_at,
-          "IO_SET: service unavailable at " + io_set_service_name_);
-        return;
-      }
-
-      auto request = std::make_shared<IoSet::Request>();
-      request->address = goal->io_address;
-      request->value = goal->io_value;
-      auto future = io_set_client_->async_send_request(request);
-
-      if (future.wait_for(std::chrono::seconds(10)) != std::future_status::ready)
-      {
-        abort_with_message(goal_handle, started_at,
-          "IO_SET: timed out waiting for response from " + io_set_service_name_);
-        return;
-      }
-
-      auto response = future.get();
-      auto result = std::make_shared<ExecuteMotion::Result>();
-      result->success = response->success;
-      result->message = response->success
-        ? "IO_SET: " + response->message
-        : "IO_SET failed: " + response->message;
-      set_result_timing(started_at, *result);
-
-      if (response->success)
-      {
-        goal_handle->succeed(result);
-      }
-      else
-      {
-        goal_handle->abort(result);
-      }
+      abort_with_message(goal_handle, started_at, "non-motion primitive handler unavailable");
       return;
     }
 

@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 # Copyright 2026 hieu2
-# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """
 jog_input_node.py — Experimental jog pendant input translator.
@@ -24,7 +35,6 @@ from __future__ import annotations
 
 import math
 import threading
-import time
 from typing import Optional
 
 import rclpy
@@ -36,17 +46,6 @@ from interfaces.msg import JogCommand
 
 # GP4 joint names in order (0-based index)
 GP4_JOINT_NAMES = [
-    'joint_1_s',
-    'joint_2_l',
-    'joint_3_u',
-    'joint_4_r',
-    'joint_5_b',
-    'joint_5_b',   # typo in name, but following actual codebase
-    'joint_6_t',
-]
-
-# Actual joint names from ros2_controllers.yaml
-GP4_JOINT_NAMES_CORRECT = [
     'joint_1_s',
     'joint_2_l',
     'joint_3_u',
@@ -79,7 +78,7 @@ class JogInputNode(Node):
         super().__init__('jog_input_node')
 
         # ── Parameters ────────────────────────────────────────────────
-        self.declare_parameter('joint_names', GP4_JOINT_NAMES_CORRECT)
+        self.declare_parameter('joint_names', GP4_JOINT_NAMES)
         self.declare_parameter('max_velocity_scale', 0.3)
         self.declare_parameter('min_velocity_scale', 0.01)
         self.declare_parameter('max_step_degrees', 10.0)
@@ -87,7 +86,10 @@ class JogInputNode(Node):
         self.declare_parameter('watchdog_timeout_ms', 200)
         self.declare_parameter('default_velocity_scale', 0.05)
         self.declare_parameter('servo_cmd_topic', 'delta_joint_cmds')
-        self.declare_parameter('joint_max_velocity_rad_s', list(GP4_JOINT_MAX_VELOCITY_RAD_S.values()))
+        self.declare_parameter(
+            'joint_max_velocity_rad_s',
+            list(GP4_JOINT_MAX_VELOCITY_RAD_S.values()),
+        )
 
         self._joint_names: list[str] = self.get_parameter('joint_names').value
         self._max_velocity_scale = self.get_parameter('max_velocity_scale').value
@@ -97,7 +99,9 @@ class JogInputNode(Node):
         self._watchdog_timeout_ms = self.get_parameter('watchdog_timeout_ms').value
         self._default_velocity_scale = self.get_parameter('default_velocity_scale').value
         self._servo_cmd_topic = self.get_parameter('servo_cmd_topic').value
-        self._joint_max_velocity: list[float] = self.get_parameter('joint_max_velocity_rad_s').value
+        self._joint_max_velocity: list[float] = self.get_parameter(
+            'joint_max_velocity_rad_s'
+        ).value
 
         if len(self._joint_max_velocity) != len(self._joint_names):
             self.get_logger().warn(
@@ -137,9 +141,8 @@ class JogInputNode(Node):
         )
 
         # ── Watchdog timer ─────────────────────────────────────────
-        watchdog_period_ms = self._watchdog_timeout_ms // 2
         self._watchdog_timer = self.create_timer(
-            float(watchdog_timeout_ms := self._watchdog_timeout_ms) / 1000.0 * 0.5,
+            float(self._watchdog_timeout_ms) / 1000.0 * 0.5,
             self._on_watchdog,
         )
 
@@ -164,7 +167,9 @@ class JogInputNode(Node):
             return
 
         if msg.direction not in (-1, 1):
-            self.get_logger().warn(f'rejected: invalid direction={msg.direction} (must be -1 or +1)')
+            self.get_logger().warn(
+                f'rejected: invalid direction={msg.direction} (must be -1 or +1)'
+            )
             return
 
         # ── Parse mode ──────────────────────────────────────────────
@@ -191,7 +196,13 @@ class JogInputNode(Node):
         joint_name = self._joint_names[msg.joint_index]
 
         if mode == 'discrete':
-            self._publish_discrete(joint_name, msg.joint_index, msg.direction, step_degrees, velocity_scale)
+            self._publish_discrete(
+                joint_name,
+                msg.joint_index,
+                msg.direction,
+                step_degrees,
+                velocity_scale,
+            )
         else:
             self._publish_continuous(
                 joint_name, msg.joint_index, msg.direction, velocity_scale
@@ -208,8 +219,11 @@ class JogInputNode(Node):
             with self._state_lock:
                 if self._state != 'IDLE':
                     self.get_logger().warn(
-                        f'watchdog: no heartbeat for {elapsed_ms:.0f}ms > {self._watchdog_timeout_ms}ms; '
-                        'halting motion'
+                        (
+                            f'watchdog: no heartbeat for {elapsed_ms:.0f}ms > '
+                            f'{self._watchdog_timeout_ms}ms; '
+                            'halting motion'
+                        )
                     )
                     self._halt_locked()
                     self._state = 'IDLE'
@@ -234,7 +248,8 @@ class JogInputNode(Node):
         cmd.joint_names = [joint_name]
         cmd.displacements = []          # use velocities, not displacements
         cmd.velocities = [velocity_rad_s]
-        cmd.duration = 0.0            # 0 = indefinite; Servo's incoming_command_timeout is the guard
+        # 0 = indefinite; Servo's incoming_command_timeout is the guard.
+        cmd.duration = 0.0
 
         self._jog_pub.publish(cmd)
 

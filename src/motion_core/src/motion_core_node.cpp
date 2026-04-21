@@ -109,15 +109,15 @@ public:
         std::placeholders::_1,
         std::placeholders::_2));
 
-    // Step 3.6: ALARM_RESET service client to hw_adapter
-    // VERIFY_FROM_WORKSPACE before deployment: actual hw_adapter alarm service name
+    // Step 3.6: ALARM_RESET service client to hw_adapter.
+    // Workspace invariant: hw_adapter exposes /hw_adapter/alarm_reset.
     alarm_reset_service_name_ = declare_parameter<std::string>(
       "alarm_reset_service_name",
       "/hw_adapter/alarm_reset");
     alarm_reset_client_ = create_client<AlarmReset>(alarm_reset_service_name_);
 
-    // Step 3.7: IO_SET service client to hw_adapter
-    // VERIFY_FROM_WORKSPACE before deployment: actual hw_adapter io service name
+    // Step 3.7: IO_SET service client to hw_adapter.
+    // Workspace invariant: hw_adapter exposes /hw_adapter/io_set.
     io_set_service_name_ = declare_parameter<std::string>(
       "io_set_service_name",
       "/hw_adapter/io_set");

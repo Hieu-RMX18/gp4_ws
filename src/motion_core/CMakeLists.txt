@@ -37,6 +37,7 @@ add_library(${PROJECT_NAME}_components SHARED
   src/quality_gate.cpp
   src/orientation_filter.cpp
   src/planning_scene_manager.cpp
+  src/dispatch_trajectory_executor.cpp
   src/primitive_router_dispatch.cpp
   src/query_handler.cpp
 )

@@ -2,8 +2,6 @@ from __future__ import annotations
 import json
 import time
 from typing import Any
-from ..domain.constants import GP4_JOINT_NAMES as DEFAULT_JOINT_NAMES
-from ..domain.joint_utils import read_joint_position_deg, resolve_joint_target
 from ..domain.models import RuntimeMode, SystemRuntimeState, TelemetryFreshnessState
 try:
     from geometry_msgs.msg import Pose
@@ -375,62 +373,12 @@ class CommandDispatchMixin:
             }
 
         if action == "move_cartesian_delta":
-            frame = str(parameters.get("frame") or "base_link")
-            if frame not in {"", "base_link"}:
-                raise ValueError(
-                    f"Unsupported MOVE_REL reference frame '{frame}' for supervisor execution."
-                )
-            return {
-                "primitive_type": "MOVE_REL",
-                "delta_x": float(parameters.get("xMm", 0.0)) / 1000.0,
-                "delta_y": float(parameters.get("yMm", 0.0)) / 1000.0,
-                "delta_z": float(parameters.get("zMm", 0.0)) / 1000.0,
-                "reference_frame": "base_link",
-                "velocity_scale": DEFAULT_MOTION_VELOCITY_SCALE,
-                "acceleration_scale": DEFAULT_MOTION_ACCELERATION_SCALE,
-                "planner_id": "PILZ_LIN",
-                "require_approval": False,
-            }
+            return self._build_move_cartesian_delta_payload(parameters)
 
         if action == "move_joint_delta":
-            joint_index, _joint_name = self._resolve_joint_target(parameters)
-            if joint_index is None:
-                raise ValueError("Joint delta command did not resolve to a valid GP4 joint.")
-            target_deg = parameters.get("resolvedTargetDeg")
-            if target_deg is None:
-                target_deg = self._resolve_joint_target_deg(joint_index, parameters)
-            return {
-                "primitive_type": "MOVE_JOINT",
-                "joint_index": joint_index,
-                "joint_angle": float(target_deg) * 3.141592653589793 / 180.0,
-                "velocity_scale": DEFAULT_MOTION_VELOCITY_SCALE,
-                "acceleration_scale": DEFAULT_MOTION_ACCELERATION_SCALE,
-                "planner_id": "PILZ_PTP",
-                "require_approval": False,
-            }
+            return self._build_move_joint_delta_payload(parameters)
 
         raise ValueError(f"Unsupported supervisor action '{action}'.")
-
-    def _resolve_joint_target(
-        self,
-        parameters: dict[str, Any],
-    ) -> tuple[int | None, str | None]:
-        return resolve_joint_target(parameters, DEFAULT_JOINT_NAMES)
-
-    def _resolve_joint_target_deg(self, joint_index: int, parameters: dict[str, Any]) -> float:
-        current_position_deg = parameters.get("currentPositionDeg")
-        if current_position_deg is None:
-            joint_name = DEFAULT_JOINT_NAMES[joint_index]
-            current_position_deg = self._read_joint_position_deg(joint_name)
-        if current_position_deg is None:
-            raise ValueError(
-                f"Fresh joint position for {DEFAULT_JOINT_NAMES[joint_index]} is unavailable."
-            )
-        delta_deg = float(parameters.get("deltaDeg", 0.0))
-        return float(current_position_deg) + delta_deg
-
-    def _read_joint_position_deg(self, joint_name: str) -> float | None:
-        return read_joint_position_deg(joint_name, self.read_joint_positions())
 
     def _validate_motion_request(
         self,

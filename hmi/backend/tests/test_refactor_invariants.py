@@ -47,6 +47,10 @@ class TestPackageImports(unittest.TestCase):
         mod = importlib.import_module("hmi.backend.services.intent_resolution")
         self.assertTrue(hasattr(mod, "IntentResolutionService"))
 
+    def test_jog_service_importable(self) -> None:
+        mod = importlib.import_module("hmi.backend.services.jog_service")
+        self.assertTrue(hasattr(mod, "JogService"))
+
 
 class TestHmiTrustBoundary(unittest.TestCase):
     """Verify HMI safety boundary elements exist."""

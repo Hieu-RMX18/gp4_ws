@@ -16,11 +16,7 @@
 #include <Eigen/Geometry>
 
 #include <builtin_interfaces/msg/time.hpp>
-#include <geometry_msgs/msg/pose.hpp>
 #include <moveit/move_group_interface/move_group_interface.h>
-#include <moveit/robot_state/conversions.h>
-#include <moveit/robot_trajectory/robot_trajectory.h>
-#include <moveit_msgs/msg/robot_trajectory.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 
@@ -31,12 +27,11 @@
 #include <interfaces/srv/io_set.hpp>
 
 #include "motion_core/ik_selector.hpp"
-#include "motion_core/angle_branch_utils.hpp"
 #include "motion_core/execution_orchestrator.hpp"
-#include "motion_core/move_rel_validator.hpp"
 #include "motion_core/orientation_filter.hpp"
 #include "motion_core/planner_router.hpp"
 #include "motion_core/planning_scene_manager.hpp"
+#include "motion_core/primitive_router_dispatch.hpp"
 #include "motion_core/query_handler.hpp"
 #include "motion_core/quality_gate.hpp"
 #include "motion_core/seed_manager.hpp"
@@ -74,6 +69,17 @@ public:
     query_handler_ = std::make_unique<QueryHandler>(
       get_logger(),
       [this](std::string & reason) { return ensure_move_group(reason); },
+      [this](geometry_msgs::msg::PoseStamped & current_stamped, std::string & reason, double timeout_sec) {
+        return read_current_tcp_pose(current_stamped, reason, timeout_sec);
+      });
+    primitive_router_dispatch_ = std::make_unique<PrimitiveRouterDispatch>(
+      get_logger(),
+      [this]() { return move_group_; },
+      planner_router_,
+      orientation_filter_,
+      seed_manager_,
+      ik_selector_,
+      trajectory_post_processor_,
       [this](geometry_msgs::msg::PoseStamped & current_stamped, std::string & reason, double timeout_sec) {
         return read_current_tcp_pose(current_stamped, reason, timeout_sec);
       });
@@ -198,6 +204,7 @@ private:
   // GET_POSE: state query service — completely separate from motion path.
   rclcpp::Service<GetCurrentPose>::SharedPtr get_pose_service_;
   std::unique_ptr<QueryHandler> query_handler_;
+  std::unique_ptr<PrimitiveRouterDispatch> primitive_router_dispatch_;
   // Step 3.6/3.7: service clients for ALARM_RESET and IO_SET (via hw_adapter)
   rclcpp::Client<AlarmReset>::SharedPtr alarm_reset_client_;
   rclcpp::Client<IoSet>::SharedPtr io_set_client_;
@@ -313,12 +320,6 @@ private:
            primitive == "SET_SPEED";
   }
 
-  struct PlannerSelection
-  {
-    std::string pipeline_id;
-    std::string planner_id;
-  };
-
   enum class StageStatus
   {
     kSuccess,
@@ -342,42 +343,6 @@ private:
     bool enforce_start_state_match = true;
   };
 
-  static PlannerSelection resolve_planner_selection(const std::string & planner_id)
-  {
-    std::string normalized = planner_id;
-    normalized.erase(
-      std::remove_if(normalized.begin(), normalized.end(), [](unsigned char c) {
-        return std::isspace(c) != 0 || c == '_' || c == '-';
-      }),
-      normalized.end());
-
-    std::transform(
-      normalized.begin(), normalized.end(), normalized.begin(),
-      [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-
-    if (normalized == "PILZLIN" || normalized == "LIN")
-    {
-      return {"pilz_industrial_motion_planner", "LIN"};
-    }
-
-    if (normalized == "PILZPTP" || normalized == "PTP")
-    {
-      return {"pilz_industrial_motion_planner", "PTP"};
-    }
-
-    if (normalized == "PILZCIRC" || normalized == "CIRC")
-    {
-      return {"pilz_industrial_motion_planner", "CIRC"};
-    }
-
-    if (normalized == "OMPLRRTCONNECT" || normalized == "RRTCONNECT")
-    {
-      return {"ompl", "RRTConnect"};
-    }
-
-    return {"", planner_id};
-  }
-
   static std::string goal_uuid_to_string(const rclcpp_action::GoalUUID & goal_id)
   {
     std::ostringstream stream;
@@ -386,32 +351,6 @@ private:
     {
       stream << std::setw(2) << static_cast<int>(byte);
     }
-    return stream.str();
-  }
-
-  static double max_abs_value(const std::vector<double> & values)
-  {
-    double max_value = 0.0;
-    for (const double value : values)
-    {
-      max_value = std::max(max_value, std::abs(value));
-    }
-    return max_value;
-  }
-
-  static std::string format_joint_vector(const std::vector<double> & joints)
-  {
-    std::ostringstream stream;
-    stream << "[";
-    for (std::size_t index = 0; index < joints.size(); ++index)
-    {
-      if (index > 0U)
-      {
-        stream << ", ";
-      }
-      stream << std::fixed << std::setprecision(4) << joints[index];
-    }
-    stream << "]";
     return stream.str();
   }
 
@@ -556,42 +495,6 @@ private:
     return true;
   }
 
-  void log_joint_branch_selection(
-    const std::string & primitive,
-    const std::uint64_t sequence,
-    const std::vector<std::string> & joint_names,
-    const std::vector<double> & current,
-    const std::vector<double> & requested,
-    const BranchPreservedJointVectorResult & branch_result) const
-  {
-    RCLCPP_INFO(
-      get_logger(),
-      "%s goal_seq=%lu branch-preserved target selection: current=%s requested=%s chosen=%s max_abs_delta=%.4f",
-      primitive.c_str(),
-      static_cast<unsigned long>(sequence),
-      format_joint_vector(current).c_str(),
-      format_joint_vector(requested).c_str(),
-      format_joint_vector(branch_result.chosen_targets).c_str(),
-      max_abs_value(branch_result.deltas_from_current));
-
-    for (std::size_t index = 0; index < branch_result.chosen_targets.size(); ++index)
-    {
-      const std::string joint_name =
-        index < joint_names.size() ? joint_names[index] : ("joint_" + std::to_string(index));
-      RCLCPP_DEBUG(
-        get_logger(),
-        "%s goal_seq=%lu joint=%s current=%.6f requested=%.6f chosen=%.6f delta=%.6f helper=%s",
-        primitive.c_str(),
-        static_cast<unsigned long>(sequence),
-        joint_name.c_str(),
-        current[index],
-        requested[index],
-        branch_result.chosen_targets[index],
-        branch_result.deltas_from_current[index],
-        branch_result.helper_used[index].c_str());
-    }
-  }
-
   std::string interrupt_reason(
     const std::shared_ptr<GoalHandleExecuteMotion> & goal_handle,
     const std::uint64_t sequence,
@@ -683,26 +586,6 @@ private:
     const auto ended_at = std::chrono::steady_clock::now();
     result.execution_time_sec =
       std::chrono::duration_cast<std::chrono::duration<double>>(ended_at - started_at).count();
-  }
-
-  static bool is_pose_goal_required(const std::string & primitive, bool has_joint_target)
-  {
-    if (primitive == "LIN")
-    {
-      return true;
-    }
-
-    if (primitive == "PTP")
-    {
-      return !has_joint_target;
-    }
-
-    return false;
-  }
-
-  static double quaternion_norm_sq(const geometry_msgs::msg::Quaternion & q)
-  {
-    return (q.x * q.x) + (q.y * q.y) + (q.z * q.z) + (q.w * q.w);
   }
 
   bool build_current_robot_state(
@@ -1717,14 +1600,6 @@ private:
     const std::string effective_primitive =
       (primitive == "MOVE_JOINTS") ? "PTP" : primitive;
 
-    const std::string planning_interrupt =
-      interrupt_reason(goal_handle, goal_sequence, "planning_setup");
-    if (!planning_interrupt.empty())
-    {
-      cancel_with_message(goal_handle, started_at, planning_interrupt);
-      return;
-    }
-
     const double velocity_scale =
       (goal->velocity_scale > 0.0) ? goal->velocity_scale : TrajectoryPostProcessor::kDefaultVelocityScaling;
     const double acceleration_scale =
@@ -1755,828 +1630,69 @@ private:
     current_robot_state.copyJointGroupPositions(joint_model_group, current_joint_positions);
     const auto & active_joint_models = joint_model_group->getActiveJointModels();
     const auto & active_joint_names = joint_model_group->getActiveJointModelNames();
-
-    // ── Step 3.8: MOVE_JOINT — single-axis motion via PTP planning ──
-    if (primitive == "MOVE_JOINT")
-    {
-      const int joint_idx = goal->joint_index;
-      const double target_angle = goal->joint_angle;
-
-      if (joint_idx < 0 || static_cast<std::size_t>(joint_idx) >= current_joint_positions.size())
-      {
-        abort_with_message(goal_handle, started_at,
-          "MOVE_JOINT: joint_index " + std::to_string(joint_idx) +
-          " out of range [0, " + std::to_string(current_joint_positions.size() - 1) + "]");
-        return;
-      }
-
-      std::vector<double> requested_joint_positions = current_joint_positions;
-      requested_joint_positions[static_cast<std::size_t>(joint_idx)] = target_angle;
-      const auto branch_result = choose_branch_preserved_joint_vector(
-        active_joint_models,
-        current_joint_positions,
-        requested_joint_positions);
-      if (!branch_result.success)
-      {
-        abort_with_message(goal_handle, started_at,
-          "MOVE_JOINT branch preservation failed: " + branch_result.reason);
-        return;
-      }
-
-      log_joint_branch_selection(
-        "MOVE_JOINT",
-        goal_sequence,
-        active_joint_names,
-        current_joint_positions,
-        requested_joint_positions,
-        branch_result);
-
-      // Delegate to PTP joint-space planning below
-      // Set joint target and fall through to PTP planning path
-      move_group_->setPlanningTime(kPlanningTimeSec);
-      // Use PTP planner for single-joint motion
-      const std::string ptp_planner = planner_router_.route_planner("PTP", false);
-      const PlannerSelection ptp_selection = resolve_planner_selection(
-        ptp_planner.empty() ? "PILZ_PTP" : ptp_planner);
-      RCLCPP_INFO(
-        get_logger(),
-        "MOVE_JOINT goal_seq=%lu planner_selected pipeline=%s planner=%s",
-        static_cast<unsigned long>(goal_sequence),
-        ptp_selection.pipeline_id.empty() ? "<default>" : ptp_selection.pipeline_id.c_str(),
-        ptp_selection.planner_id.c_str());
-      if (!ptp_selection.pipeline_id.empty())
-      {
-        move_group_->setPlanningPipelineId(ptp_selection.pipeline_id);
-      }
-      move_group_->setPlannerId(ptp_selection.planner_id);
-      move_group_->setMaxVelocityScalingFactor(velocity_scale);
-      move_group_->setMaxAccelerationScalingFactor(acceleration_scale);
-      move_group_->setStartState(current_robot_state);
-      move_group_->clearPoseTargets();
-
-      if (!move_group_->setJointValueTarget(branch_result.chosen_targets))
-      {
-        abort_with_message(goal_handle, started_at,
-          "MOVE_JOINT: failed to set joint target for PTP planning");
-        return;
-      }
-
-      moveit::planning_interface::MoveGroupInterface::Plan plan;
-      const auto plan_result = plan_with_interruption(
-        plan,
-        goal_handle,
-        goal_sequence,
-        "MOVE_JOINT planning");
-      if (plan_result.status == StageStatus::kCanceled)
-      {
-        cancel_with_message(goal_handle, started_at, plan_result.reason);
-        return;
-      }
-      if (plan_result.status != StageStatus::kSuccess)
-      {
-        abort_with_message(goal_handle, started_at,
-          "MOVE_JOINT: " + plan_result.reason + " for joint[" +
-          std::to_string(joint_idx) + "] -> " + std::to_string(target_angle));
-        return;
-      }
-
-      // Post-process and dispatch (shared with PTP/HOME path below)
-      publish_feedback(goal_handle, 0.55, "post_processing");
-
-      moveit::core::RobotState reference_state(move_group_->getRobotModel());
-      if (!moveit::core::robotStateMsgToRobotState(plan.start_state_, reference_state, true))
-      {
-        abort_with_message(goal_handle, started_at,
-          "MOVE_JOINT: failed to convert plan start_state");
-        return;
-      }
-
-      robot_trajectory::RobotTrajectory robot_traj(move_group_->getRobotModel(), kPlanningGroup);
-      robot_traj.setRobotTrajectoryMsg(reference_state, plan.trajectory_);
-
-      std::string time_parameterization_note;
-      std::string ruckig_reason;
-      const bool ruckig_ok =
-        trajectory_post_processor_.apply_ruckig_smoothing(robot_traj, velocity_scale, acceleration_scale, ruckig_reason);
-      const bool ruckig_applied = ruckig_ok &&
-        ruckig_reason.find("unavailable") == std::string::npos &&
-        ruckig_reason.find("skipped") == std::string::npos;
-
-      if (ruckig_applied)
-      {
-        time_parameterization_note = "time_parameterization=ruckig";
-      }
-      else
-      {
-        if (robot_traj.getWayPointCount() >= 2U)
-        {
-          std::string totg_reason;
-          if (!trajectory_post_processor_.apply_totg(
-                robot_traj, velocity_scale, acceleration_scale, totg_reason))
-          {
-            std::string failure_detail =
-              ruckig_reason.empty() ? "Ruckig unavailable" : ("Ruckig status: " + ruckig_reason);
-            abort_with_message(
-              goal_handle,
-              started_at,
-              "MOVE_JOINT time parameterization failed; " + failure_detail +
-              "; TOTG fallback failed: " + totg_reason);
-            return;
-          }
-          time_parameterization_note = "time_parameterization=totg_fallback";
-        }
-        else
-        {
-          time_parameterization_note = "time_parameterization=none_single_waypoint";
-        }
-      }
-
-      moveit_msgs::msg::RobotTrajectory postprocessed_msg;
-      robot_traj.getRobotTrajectoryMsg(postprocessed_msg);
-      trajectory_msgs::msg::JointTrajectory output_traj = postprocessed_msg.joint_trajectory;
-      DispatchMetadata dispatch_metadata;
-      dispatch_metadata.command_id = goal_id;
-      dispatch_metadata.primitive = primitive;
-      dispatch_metadata.planner_id = goal->planner_id.empty() ? "PTP" : goal->planner_id;
-      dispatch_metadata.source_joint_state_stamp = source_joint_state_stamp;
-      dispatch_metadata.enforce_start_state_match = true;
-
-      std::size_t dispatched_point_count = 0U;
-      std::size_t dispatched_segment_count = 0U;
-      const auto dispatch_result = apply_budget_quality_and_dispatch(
-        output_traj,
-        primitive,
-        dispatch_metadata,
-        QualityGate::kFractionNotApplicable,
-        goal_handle,
-        goal_sequence,
-        dispatched_point_count,
-        dispatched_segment_count);
-      if (dispatch_result.status == StageStatus::kCanceled)
-      {
-        cancel_with_message(goal_handle, started_at,
-          "MOVE_JOINT dispatch canceled: " + dispatch_result.reason);
-        return;
-      }
-      if (dispatch_result.status != StageStatus::kSuccess)
-      {
-        abort_with_message(goal_handle, started_at,
-          "MOVE_JOINT dispatch failed: " + dispatch_result.reason);
-        return;
-      }
-
-      auto result = std::make_shared<ExecuteMotion::Result>();
-      result->success = true;
-      std::ostringstream msg;
-      msg << "MOVE_JOINT success: joint[" << joint_idx << "]="
-          << target_angle << " rad, points=" << dispatched_point_count
-          << ", segments=" << dispatched_segment_count;
-      if (!time_parameterization_note.empty()) { msg << ", " << time_parameterization_note; }
-      if (!dispatch_result.note.empty()) { msg << ", " << dispatch_result.note; }
-      result->message = msg.str();
-      set_result_timing(started_at, *result);
-      goal_handle->succeed(result);
-      return;
-    }
-
-    std::string planner_id = goal->planner_id;
-    if (planner_id.empty())
-    {
-      planner_id = planner_router_.route_planner(
-        (effective_primitive == "HOME") ? "PTP" :
-        (effective_primitive == "MOVE_REL") ? "LIN" :
-        (effective_primitive == "CIRC") ? "CIRC" : effective_primitive, false);
-    }
-
-    if (planner_id.empty())
-    {
-      abort_with_message(goal_handle, started_at, "unable to resolve planner_id for primitive " + primitive);
-      return;
-    }
-
-    const PlannerSelection planner_selection = resolve_planner_selection(planner_id);
-    RCLCPP_INFO(
-      get_logger(),
-      "execute_motion goal_seq=%lu planner_selected primitive=%s pipeline=%s planner=%s",
-      static_cast<unsigned long>(goal_sequence),
-      effective_primitive.c_str(),
-      planner_selection.pipeline_id.empty() ? "<default>" : planner_selection.pipeline_id.c_str(),
-      planner_selection.planner_id.c_str());
-
-    move_group_->setPlanningTime(kPlanningTimeSec);
-    if (!planner_selection.pipeline_id.empty())
-    {
-      move_group_->setPlanningPipelineId(planner_selection.pipeline_id);
-    }
-    move_group_->setPlannerId(planner_selection.planner_id);
-    move_group_->setMaxVelocityScalingFactor(velocity_scale);
-    move_group_->setMaxAccelerationScalingFactor(acceleration_scale);
-    move_group_->setStartState(current_robot_state);
-    move_group_->clearPoseTargets();
-
     execution_orchestrator_.update_phase(goal_sequence, ExecutionPhase::kPlanning, "planning_request_prepared");
     publish_feedback(goal_handle, 0.2, "planning_request_prepared");
 
-    geometry_msgs::msg::Pose normalized_pose;
-    const bool has_joint_target = !goal->joint_target.empty();
-    bool pose_required = is_pose_goal_required(effective_primitive, has_joint_target);
-    bool move_rel_resolved = false;
-
-    // ── MOVE_REL: resolve relative delta into absolute Cartesian target ──
-    // Validation functions are in move_rel_validator.hpp (single source of truth
-    // for delta limits and workspace bounds — no duplication with safety_rules.yaml
-    // constants; see that header for the cross-reference documentation).
-    if (effective_primitive == "MOVE_REL")
-    {
-      std::string rel_reason;
-
-      if (!validate_move_rel_frame(goal->reference_frame, rel_reason))
+    PrimitiveRouterDispatch::PlanningRequest planning_request(current_robot_state);
+    planning_request.goal = goal;
+    planning_request.primitive = primitive;
+    planning_request.effective_primitive = effective_primitive;
+    planning_request.goal_sequence = goal_sequence;
+    planning_request.velocity_scale = velocity_scale;
+    planning_request.acceleration_scale = acceleration_scale;
+    planning_request.current_joint_positions = current_joint_positions;
+    planning_request.active_joint_models = active_joint_models;
+    planning_request.active_joint_names = active_joint_names;
+    planning_request.plan_with_interruption =
+      [this, goal_handle, goal_sequence](
+      moveit::planning_interface::MoveGroupInterface::Plan & plan,
+      const std::string & stage) -> PrimitiveRouterDispatch::PlanningStageResult
       {
-        abort_with_message(goal_handle, started_at, rel_reason);
-        return;
-      }
-
-      const double dx = goal->delta_x;
-      const double dy = goal->delta_y;
-      const double dz = goal->delta_z;
-
-      if (!validate_move_rel_deltas(dx, dy, dz, rel_reason))
-      {
-        abort_with_message(goal_handle, started_at, rel_reason);
-        return;
-      }
-
-      geometry_msgs::msg::PoseStamped current_stamped;
-      if (!read_current_tcp_pose(current_stamped, rel_reason, 5.0))
-      {
-        abort_with_message(goal_handle, started_at,
-          "MOVE_REL: failed to read current TCP pose: " + rel_reason);
-        return;
-      }
-
-      const auto & current = current_stamped.pose;
-      if (quaternion_norm_sq(current.orientation) <= 1e-12)
-      {
-        abort_with_message(goal_handle, started_at,
-          "MOVE_REL: current pose has invalid orientation; cannot proceed safely");
-        return;
-      }
-
-      normalized_pose = compute_move_rel_target(current, dx, dy, dz);
-
-      if (!validate_move_rel_target_bounds(normalized_pose, rel_reason))
-      {
-        abort_with_message(goal_handle, started_at, rel_reason);
-        return;
-      }
-
-      RCLCPP_INFO(get_logger(),
-        "MOVE_REL resolved: delta=(%.4f, %.4f, %.4f), "
-        "current=(%.4f, %.4f, %.4f), target=(%.4f, %.4f, %.4f)",
-        dx, dy, dz,
-        current.position.x, current.position.y, current.position.z,
-        normalized_pose.position.x, normalized_pose.position.y, normalized_pose.position.z);
-
-      move_rel_resolved = true;
-      pose_required = true;  // Enable shared IK/orientation path below
-    }
-
-    if (pose_required)
-    {
-      if (!move_rel_resolved)
-      {
-        // Original path: extract pose from goal for LIN/PTP
-        normalized_pose = goal->target_pose;
-        if (quaternion_norm_sq(normalized_pose.orientation) <= 1e-12)
+        const auto stage_result = plan_with_interruption(plan, goal_handle, goal_sequence, stage);
+        PrimitiveRouterDispatch::PlanningStageResult converted;
+        switch (stage_result.status)
         {
-          geometry_msgs::msg::PoseStamped current_stamped;
-          std::string current_pose_reason;
-          if (!read_current_tcp_pose(current_stamped, current_pose_reason, 5.0))
-          {
-            abort_with_message(
-              goal_handle,
-              started_at,
-              "orientation unresolved: command omitted orientation and current pose is unavailable: " +
-              current_pose_reason);
-            return;
-          }
-          const auto & current_pose = current_stamped.pose;
-          normalized_pose.orientation = current_pose.orientation;
-          RCLCPP_WARN(
-            get_logger(),
-            "Goal orientation omitted; using current end-effector orientation for deterministic IK.");
+          case StageStatus::kSuccess:
+            converted.status = PrimitiveRouterDispatch::PlanningStatus::kSuccess;
+            break;
+          case StageStatus::kCanceled:
+            converted.status = PrimitiveRouterDispatch::PlanningStatus::kCanceled;
+            break;
+          case StageStatus::kFailure:
+          default:
+            converted.status = PrimitiveRouterDispatch::PlanningStatus::kFailure;
+            break;
         }
-      }
-
-      std::string orientation_reason;
-      if (!orientation_filter_.normalize_and_validate(normalized_pose, orientation_reason))
+        converted.reason = stage_result.reason;
+        return converted;
+      };
+    planning_request.interrupt_reason =
+      [this, goal_handle, goal_sequence](const std::string & stage) -> std::string
       {
-        abort_with_message(goal_handle, started_at, "orientation rejected: " + orientation_reason);
-        return;
-      }
+        return interrupt_reason(goal_handle, goal_sequence, stage);
+      };
 
-      std::vector<double> seed_state;
-      if (!seed_manager_.get_seed_state(effective_primitive, seed_state))
-      {
-        abort_with_message(
-          goal_handle,
-          started_at,
-          "IK seed unavailable: /yaskawa/joint_states missing/stale and fallback seed is disabled or unavailable");
-        return;
-      }
-
-      std::vector<double> ik_solution;
-      std::string ik_reason;
-      if (!ik_selector_.solve_ik(normalized_pose, seed_state, ik_solution, ik_reason))
-      {
-        abort_with_message(goal_handle, started_at, "IK solve failed: " + ik_reason);
-        return;
-      }
-
-      if (effective_primitive == "PTP")
-      {
-        const auto branch_result = choose_branch_preserved_joint_vector(
-          active_joint_models,
-          current_joint_positions,
-          ik_solution);
-        if (!branch_result.success)
-        {
-          abort_with_message(goal_handle, started_at,
-            "failed to branch-preserve IK-derived PTP target: " + branch_result.reason);
-          return;
-        }
-
-        log_joint_branch_selection(
-          "PTP",
-          goal_sequence,
-          active_joint_names,
-          current_joint_positions,
-          ik_solution,
-          branch_result);
-
-        RCLCPP_INFO(
-          get_logger(),
-          "execute_motion goal_seq=%lu IK-derived PTP target current_seed=%s ik_solution=%s",
-          static_cast<unsigned long>(goal_sequence),
-          format_joint_vector(seed_state).c_str(),
-          format_joint_vector(ik_solution).c_str());
-        if (!move_group_->setJointValueTarget(branch_result.chosen_targets))
-        {
-          abort_with_message(goal_handle, started_at, "failed to set IK-derived joint target for PTP");
-          return;
-        }
-      }
-    }
-
-    const std::string before_plan_interrupt =
-      interrupt_reason(goal_handle, goal_sequence, "pre_plan");
-    if (!before_plan_interrupt.empty())
+    const auto planning_result = primitive_router_dispatch_->plan_for_primitive(planning_request);
+    if (planning_result.status == PrimitiveRouterDispatch::PlanningStatus::kCanceled)
     {
-      cancel_with_message(goal_handle, started_at, before_plan_interrupt);
+      const std::string cancel_reason = planning_result.is_move_joint ?
+        ("MOVE_JOINT planning canceled: " + planning_result.reason) :
+        ("planning canceled: " + planning_result.reason);
+      cancel_with_message(goal_handle, started_at, cancel_reason);
       return;
     }
-
-    moveit_msgs::msg::RobotTrajectory planned_trajectory_msg;
-    moveit_msgs::msg::RobotState plan_start_state_msg;
-    bool has_plan_start_state = false;
-    double cartesian_fraction = QualityGate::kFractionNotApplicable;
-
-    // ── CIRC: circular arc via Pilz — waypoints[0]=auxiliary, target_pose=final ──
-    if (effective_primitive == "CIRC")
+    if (planning_result.status != PrimitiveRouterDispatch::PlanningStatus::kSuccess)
     {
-      if (goal->waypoints.empty())
-      {
-        abort_with_message(goal_handle, started_at,
-          "CIRC requires at least 1 auxiliary waypoint");
-        return;
-      }
-
-      // Pilz CIRC requires exactly 2 pose targets: [auxiliary_pose, target_pose]
-      geometry_msgs::msg::Pose aux_pose = goal->waypoints[0];
-      geometry_msgs::msg::Pose final_pose = goal->target_pose;
-
-      if (quaternion_norm_sq(final_pose.orientation) <= 1e-12)
-      {
-        // Reuse current orientation if final pose has no orientation
-        geometry_msgs::msg::PoseStamped current_stamped;
-        std::string current_reason;
-        if (!read_current_tcp_pose(current_stamped, current_reason, 5.0))
-        {
-          abort_with_message(goal_handle, started_at,
-            "CIRC: cannot resolve orientation for final pose: " + current_reason);
-          return;
-        }
-        final_pose.orientation = current_stamped.pose.orientation;
-      }
-
-      if (quaternion_norm_sq(aux_pose.orientation) <= 1e-12)
-      {
-        aux_pose.orientation = final_pose.orientation;
-      }
-
-      // Validate both orientations are (approximately) unit quaternions and
-      // renormalize within a 1% slack. A non-unit quaternion here indicates
-      // either a serialization bug upstream or a malformed pose — MoveIt/Pilz
-      // would silently misinterpret the rotation, so fail closed.
-      auto ensure_unit_quaternion =
-        [&](geometry_msgs::msg::Pose & pose, const char * which) -> bool
-        {
-          const double n2 = quaternion_norm_sq(pose.orientation);
-          if (n2 < 0.98 || n2 > 1.02)
-          {
-            abort_with_message(
-              goal_handle,
-              started_at,
-              std::string("CIRC: ") + which +
-                " orientation is not a unit quaternion (norm^2=" +
-                std::to_string(n2) + ")");
-            return false;
-          }
-          const double n = std::sqrt(n2);
-          pose.orientation.x /= n;
-          pose.orientation.y /= n;
-          pose.orientation.z /= n;
-          pose.orientation.w /= n;
-          return true;
-        };
-      if (!ensure_unit_quaternion(final_pose, "target_pose"))
-      {
-        return;
-      }
-      if (!ensure_unit_quaternion(aux_pose, "auxiliary waypoint"))
-      {
-        return;
-      }
-
-      // Fail-closed planner routing: CIRC must be planned by Pilz CIRC.
-      // A computeCartesianPath fallback here would produce a line, not an
-      // arc — silently wrong. Abort instead if Pilz CIRC was not selected
-      // (e.g. plugin load failure, config drift).
-      if (planner_selection.pipeline_id != "pilz_industrial_motion_planner" ||
-          planner_selection.planner_id != "CIRC")
-      {
-        abort_with_message(
-          goal_handle,
-          started_at,
-          std::string("CIRC: planner routing failed, expected pilz CIRC got pipeline='") +
-            planner_selection.pipeline_id + "' planner='" +
-            planner_selection.planner_id + "'");
-        return;
-      }
-
-      RCLCPP_INFO(get_logger(),
-        "CIRC: planning arc via Pilz CIRC planner");
-
-      std::vector<geometry_msgs::msg::Pose> circ_poses;
-      circ_poses.push_back(aux_pose);
-      circ_poses.push_back(final_pose);
-      move_group_->setPoseTargets(circ_poses);
-
-      moveit::planning_interface::MoveGroupInterface::Plan plan;
-      const auto plan_result = plan_with_interruption(
-        plan,
-        goal_handle,
-        goal_sequence,
-        "CIRC planning");
-      if (plan_result.status == StageStatus::kCanceled)
-      {
-        cancel_with_message(goal_handle, started_at, plan_result.reason);
-        return;
-      }
-      if (plan_result.status != StageStatus::kSuccess)
-      {
-        abort_with_message(goal_handle, started_at,
-          "CIRC: Pilz CIRC planning failed: " + plan_result.reason);
-        return;
-      }
-
-      planned_trajectory_msg = plan.trajectory_;
-      plan_start_state_msg = plan.start_state_;
-      has_plan_start_state = true;
-      cartesian_fraction = 1.0;  // Pilz CIRC is exact; fraction implicit 1.0
-
-      RCLCPP_INFO(get_logger(),
-        "CIRC: planned fraction=%.3f, points=%zu",
-        cartesian_fraction,
-        planned_trajectory_msg.joint_trajectory.points.size());
-    }
-    else if (effective_primitive == "CARTESIAN_PATH")
-    {
-      if (goal->waypoints.empty())
-      {
-        abort_with_message(goal_handle, started_at,
-          "CARTESIAN_PATH requires non-empty waypoints array");
-        return;
-      }
-
-      RCLCPP_INFO(get_logger(),
-        "CARTESIAN_PATH: planning smooth path through %zu waypoints",
-        goal->waypoints.size());
-
-      // Use all waypoints for a single computeCartesianPath call
-      std::vector<geometry_msgs::msg::Pose> cartesian_waypoints;
-      cartesian_waypoints.reserve(goal->waypoints.size());
-      for (const auto & wp : goal->waypoints)
-      {
-        cartesian_waypoints.push_back(wp);
-      }
-
-      cartesian_fraction = move_group_->computeCartesianPath(
-        cartesian_waypoints,
-        kCartesianEefStep,
-        kCartesianJumpThreshold,
-        planned_trajectory_msg,
-        true);
-
-      if (cartesian_fraction < 0.0)
-      {
-        abort_with_message(goal_handle, started_at,
-          "CARTESIAN_PATH: computeCartesianPath failed");
-        return;
-      }
-
-      RCLCPP_INFO(get_logger(),
-        "CARTESIAN_PATH: planned with fraction=%.3f, points=%zu",
-        cartesian_fraction,
-        planned_trajectory_msg.joint_trajectory.points.size());
-    }
-    else if (effective_primitive == "HOME")
-    {
-      if (!move_group_->setNamedTarget("home"))
-      {
-        abort_with_message(
-          goal_handle,
-          started_at,
-          "HOME: named target 'home' unavailable in SRDF");
-        return;
-      }
-
-      move_group_->setPlanningTime(kPlanningTimeSec);
-      const std::string home_planner = planner_router_.route_planner("PTP", false);
-      const PlannerSelection home_selection = resolve_planner_selection(
-        home_planner.empty() ? "PILZ_PTP" : home_planner);
-      if (!home_selection.pipeline_id.empty())
-      {
-        move_group_->setPlanningPipelineId(home_selection.pipeline_id);
-      }
-      move_group_->setPlannerId(home_selection.planner_id);
-      move_group_->setMaxVelocityScalingFactor(velocity_scale);
-      move_group_->setMaxAccelerationScalingFactor(acceleration_scale);
-
-      moveit::planning_interface::MoveGroupInterface::Plan plan;
-      const auto plan_result = plan_with_interruption(
-        plan,
-        goal_handle,
-        goal_sequence,
-        "HOME planning");
-      if (plan_result.status == StageStatus::kCanceled)
-      {
-        cancel_with_message(goal_handle, started_at, plan_result.reason);
-        return;
-      }
-      if (plan_result.status != StageStatus::kSuccess)
-      {
-        abort_with_message(goal_handle, started_at, "planning failed for HOME primitive: " + plan_result.reason);
-        return;
-      }
-
-      planned_trajectory_msg = plan.trajectory_;
-      plan_start_state_msg = plan.start_state_;
-      has_plan_start_state = true;
-    }
-    else if (effective_primitive == "PTP")
-    {
-      if (has_joint_target)
-      {
-        const auto branch_result = choose_branch_preserved_joint_vector(
-          active_joint_models,
-          current_joint_positions,
-          goal->joint_target);
-        if (!branch_result.success)
-        {
-          abort_with_message(goal_handle, started_at,
-            "invalid branch-preserved joint_target for PTP goal: " + branch_result.reason);
-          return;
-        }
-
-        log_joint_branch_selection(
-          "PTP",
-          goal_sequence,
-          active_joint_names,
-          current_joint_positions,
-          goal->joint_target,
-          branch_result);
-
-        if (!move_group_->setJointValueTarget(branch_result.chosen_targets))
-        {
-          abort_with_message(goal_handle, started_at, "invalid joint_target for PTP goal");
-          return;
-        }
-      }
-      else
-      {
-        // pose target path: IK solution was already set via setJointValueTarget
-        // in the shared IK path above (line 1813). Still need to set start state.
-        move_group_->setStartState(current_robot_state);
-        move_group_->clearPoseTargets();
-      }
-
-      // Log full planning context before calling plan()
-      RCLCPP_INFO(get_logger(),
-        "execute_motion goal_seq=%lu PTP planning context: "
-        "planner_id=%s pipeline=%s "
-        "start_state=[%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
-        static_cast<unsigned long>(goal_sequence),
-        move_group_->getPlannerId().c_str(),
-        move_group_->getPlanningPipelineId().c_str(),
-        current_joint_positions[0], current_joint_positions[1], current_joint_positions[2],
-        current_joint_positions[3], current_joint_positions[4], current_joint_positions[5]);
-
-      moveit::planning_interface::MoveGroupInterface::Plan plan;
-      const auto plan_result = plan_with_interruption(
-        plan,
-        goal_handle,
-        goal_sequence,
-        "PTP planning");
-      RCLCPP_INFO(get_logger(),
-        "execute_motion goal_seq=%lu PTP plan() returned status=%d reason='%s'",
-        static_cast<unsigned long>(goal_sequence),
-        static_cast<int>(plan_result.status),
-        plan_result.reason.c_str());
-      if (plan_result.status == StageStatus::kCanceled)
-      {
-        cancel_with_message(goal_handle, started_at, plan_result.reason);
-        return;
-      }
-      if (plan_result.status != StageStatus::kSuccess)
-      {
-        abort_with_message(goal_handle, started_at, "planning failed for PTP primitive: " + plan_result.reason);
-        return;
-      }
-
-      planned_trajectory_msg = plan.trajectory_;
-      plan_start_state_msg = plan.start_state_;
-      has_plan_start_state = true;
-    }
-    else if (effective_primitive == "LIN" || effective_primitive == "MOVE_REL")
-    {
-      // V4 E1: PILZ_LIN is the primary LIN strategy.
-      // MOVE_REL delegates to LIN after resolving the absolute target above.
-      // computeCartesianPath is kept as fallback only.
-      // When planner_selection routes to Pilz LIN, we use MoveGroupInterface::plan()
-      // with setPoseTarget, which triggers Pilz LIN directly.
-      if (planner_selection.pipeline_id == "pilz_industrial_motion_planner" &&
-          planner_selection.planner_id == "LIN")
-      {
-        // Use Pilz LIN natively via MoveGroupInterface
-        move_group_->setPoseTarget(normalized_pose);
-
-        moveit::planning_interface::MoveGroupInterface::Plan plan;
-        const auto plan_result = plan_with_interruption(
-          plan,
-          goal_handle,
-          goal_sequence,
-          effective_primitive + " planning");
-        if (plan_result.status == StageStatus::kCanceled)
-        {
-          cancel_with_message(goal_handle, started_at, plan_result.reason);
-          return;
-        }
-        if (plan_result.status != StageStatus::kSuccess)
-        {
-          // Fallback to computeCartesianPath if Pilz LIN fails
-          RCLCPP_WARN(get_logger(),
-            "Pilz LIN planning failed for goal_seq=%lu (%s), attempting computeCartesianPath fallback.",
-            static_cast<unsigned long>(goal_sequence),
-            plan_result.reason.c_str());
-
-          std::vector<geometry_msgs::msg::Pose> waypoints;
-          waypoints.push_back(normalized_pose);
-
-          cartesian_fraction = move_group_->computeCartesianPath(
-            waypoints,
-            kCartesianEefStepRelaxed,
-            kCartesianJumpThreshold,
-            planned_trajectory_msg,
-            true);
-
-          if (cartesian_fraction < 0.0)
-          {
-            abort_with_message(goal_handle, started_at,
-              "both Pilz LIN and computeCartesianPath failed for LIN primitive");
-            return;
-          }
-        }
-        else
-        {
-          planned_trajectory_msg = plan.trajectory_;
-          plan_start_state_msg = plan.start_state_;
-          has_plan_start_state = true;
-          // Pilz provides native timing; fraction is implicit 1.0
-          cartesian_fraction = 1.0;
-        }
-      }
-      else
-      {
-        // Fallback: computeCartesianPath
-        std::vector<geometry_msgs::msg::Pose> waypoints;
-        waypoints.push_back(normalized_pose);
-
-        cartesian_fraction = move_group_->computeCartesianPath(
-          waypoints,
-          kCartesianEefStepRelaxed,
-          kCartesianJumpThreshold,
-          planned_trajectory_msg,
-          true);
-
-        if (cartesian_fraction < 0.0)
-        {
-          abort_with_message(goal_handle, started_at, "computeCartesianPath returned error for LIN primitive");
-          return;
-        }
-      }
-    }
-
-    if (planned_trajectory_msg.joint_trajectory.points.empty())
-    {
-      abort_with_message(goal_handle, started_at, "planner returned empty joint trajectory");
-      return;
-    }
-
-    const std::string post_plan_interrupt =
-      interrupt_reason(goal_handle, goal_sequence, "post_plan");
-    if (!post_plan_interrupt.empty())
-    {
-      cancel_with_message(goal_handle, started_at, post_plan_interrupt);
+      abort_with_message(goal_handle, started_at, planning_result.reason);
       return;
     }
 
     publish_feedback(goal_handle, 0.55, "post_processing");
-
-    moveit::core::RobotState reference_state(move_group_->getRobotModel());
-    if (has_plan_start_state)
-    {
-      if (!moveit::core::robotStateMsgToRobotState(plan_start_state_msg, reference_state, true))
-      {
-        abort_with_message(goal_handle, started_at, "failed to convert plan start_state for post-processing");
-        return;
-      }
-    }
-    else
-    {
-      reference_state = current_robot_state;
-    }
-
-    robot_trajectory::RobotTrajectory robot_trajectory(move_group_->getRobotModel(), kPlanningGroup);
-    robot_trajectory.setRobotTrajectoryMsg(reference_state, planned_trajectory_msg);
-
-    std::string time_parameterization_note;
-    std::string ruckig_reason;
-      const bool ruckig_ok =
-      trajectory_post_processor_.apply_ruckig_smoothing(robot_trajectory, velocity_scale, acceleration_scale, ruckig_reason);
-    const bool ruckig_applied = ruckig_ok &&
-      ruckig_reason.find("unavailable") == std::string::npos &&
-      ruckig_reason.find("skipped") == std::string::npos;
-
-    if (ruckig_applied)
-    {
-      time_parameterization_note = "time_parameterization=ruckig";
-    }
-    else
-    {
-      if (robot_trajectory.getWayPointCount() >= 2U)
-      {
-        std::string totg_reason;
-        if (!trajectory_post_processor_.apply_totg(
-              robot_trajectory,
-              velocity_scale,
-              acceleration_scale,
-              totg_reason))
-        {
-          std::string failure_detail =
-            ruckig_reason.empty() ? "Ruckig unavailable" : ("Ruckig status: " + ruckig_reason);
-          abort_with_message(
-            goal_handle,
-            started_at,
-            "time parameterization failed; " + failure_detail +
-            "; TOTG fallback failed: " + totg_reason);
-          return;
-        }
-        time_parameterization_note = "time_parameterization=totg_fallback";
-      }
-      else
-      {
-        time_parameterization_note = "time_parameterization=none_single_waypoint";
-      }
-    }
-
-    moveit_msgs::msg::RobotTrajectory postprocessed_msg;
-    robot_trajectory.getRobotTrajectoryMsg(postprocessed_msg);
-    trajectory_msgs::msg::JointTrajectory output_traj = postprocessed_msg.joint_trajectory;
+    trajectory_msgs::msg::JointTrajectory output_traj = planning_result.trajectory;
     DispatchMetadata dispatch_metadata;
     dispatch_metadata.command_id = goal_id;
-    dispatch_metadata.primitive = effective_primitive;
-    dispatch_metadata.planner_id = planner_selection.planner_id;
+    dispatch_metadata.primitive = planning_result.dispatch_primitive;
+    dispatch_metadata.planner_id = planning_result.planner_id;
     dispatch_metadata.source_joint_state_stamp = source_joint_state_stamp;
     dispatch_metadata.enforce_start_state_match = true;
 
@@ -2584,21 +1700,27 @@ private:
     std::size_t dispatched_segment_count = 0U;
     const auto dispatch_result = apply_budget_quality_and_dispatch(
       output_traj,
-      effective_primitive,
+      planning_result.dispatch_primitive,
       dispatch_metadata,
-      cartesian_fraction,
+      planning_result.cartesian_fraction,
       goal_handle,
       goal_sequence,
       dispatched_point_count,
       dispatched_segment_count);
     if (dispatch_result.status == StageStatus::kCanceled)
     {
-      cancel_with_message(goal_handle, started_at, "trajectory dispatch canceled: " + dispatch_result.reason);
+      const std::string cancel_reason = planning_result.is_move_joint ?
+        ("MOVE_JOINT dispatch canceled: " + dispatch_result.reason) :
+        ("trajectory dispatch canceled: " + dispatch_result.reason);
+      cancel_with_message(goal_handle, started_at, cancel_reason);
       return;
     }
     if (dispatch_result.status != StageStatus::kSuccess)
     {
-      abort_with_message(goal_handle, started_at, "trajectory dispatch failed: " + dispatch_result.reason);
+      const std::string abort_reason = planning_result.is_move_joint ?
+        ("MOVE_JOINT dispatch failed: " + dispatch_result.reason) :
+        ("trajectory dispatch failed: " + dispatch_result.reason);
+      abort_with_message(goal_handle, started_at, abort_reason);
       return;
     }
 
@@ -2608,23 +1730,30 @@ private:
     result->success = true;
 
     std::ostringstream message;
-    message << "execution success; primitive=" << primitive
-            << ", planner_id=" << planner_selection.planner_id
-            << ", points=" << dispatched_point_count
-            << ", segments=" << dispatched_segment_count;
-
-    if (cartesian_fraction >= 0.0)
+    if (planning_result.is_move_joint)
     {
-      message << ", cartesian_fraction=" << cartesian_fraction;
+      message << "MOVE_JOINT success: joint[" << planning_result.move_joint_index << "]="
+              << planning_result.move_joint_target_angle << " rad, points=" << dispatched_point_count
+              << ", segments=" << dispatched_segment_count;
     }
-
-    if (!time_parameterization_note.empty())
+    else
     {
-      message << ", " << time_parameterization_note;
+      message << "execution success; primitive=" << primitive
+              << ", planner_id=" << planning_result.planner_id
+              << ", points=" << dispatched_point_count
+              << ", segments=" << dispatched_segment_count;
+      if (planning_result.cartesian_fraction >= 0.0)
+      {
+        message << ", cartesian_fraction=" << planning_result.cartesian_fraction;
+      }
     }
-    if (!ruckig_reason.empty())
+    if (!planning_result.time_parameterization_note.empty())
     {
-      message << ", ruckig_status=" << ruckig_reason;
+      message << ", " << planning_result.time_parameterization_note;
+    }
+    if (!planning_result.ruckig_reason.empty())
+    {
+      message << ", ruckig_status=" << planning_result.ruckig_reason;
     }
     if (!dispatch_result.note.empty())
     {

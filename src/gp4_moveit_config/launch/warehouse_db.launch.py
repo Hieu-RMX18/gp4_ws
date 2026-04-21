@@ -1,3 +1,5 @@
+# DEPRECATED (2026-04-21): Not referenced by gp4_bringup entrypoints.
+# Use gp4_bringup/launch/moveit_only.launch.py for supported operator flow.
 from moveit_configs_utils import MoveItConfigsBuilder
 from moveit_configs_utils.launches import generate_warehouse_db_launch
 

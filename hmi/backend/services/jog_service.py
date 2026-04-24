@@ -270,25 +270,25 @@ class JogService:
         return bool(success), message
 
     def send_jog_command(self, *, joint_index: int, direction: int, mode: str,
-                          velocity_scale: float, step_degrees: float) -> bool:
+                          velocity_scale: float, step_degrees: float) -> tuple[bool, str]:
         """
         Publish a JogCommand message to /web_jog_command.
-        Returns True if published successfully.
+        Returns (success, reason).
         """
         if self._node is None or self._jog_pub is None:
-            return False
+            return False, 'ROS node or publisher unavailable'
 
         if JogCommandMsg is None:
-            return False
+            return False, 'JogCommand message type unavailable'
 
         with self._status_lock:
             status = self._status
         if not status.bridge_active:
-            return False
+            return False, 'bridge not active'
         if not status.robot_ready or not status.servo_active:
-            return False
+            return False, 'robot not ready or servo inactive'
         if status.state not in {JogBridgeState.READY, JogBridgeState.ACTIVE}:
-            return False
+            return False, f'bridge state {status.state.value} not READY/ACTIVE'
 
         msg = JogCommandMsg()
         msg.header.stamp = self._node.get_clock().now().to_msg()
@@ -301,9 +301,9 @@ class JogService:
 
         try:
             self._jog_pub.publish(msg)
-            return True
+            return True, 'published'
         except Exception:
-            return False
+            return False, 'publish exception'
 
     def _create_clients(self) -> None:
         if self._node is None:

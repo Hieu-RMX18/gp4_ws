@@ -130,6 +130,14 @@ class SupervisorExecutionMixin:
         )
         command.execute_at = self._utcnow()
 
+        if self._is_get_pose_command(command):
+            return self._execute_get_pose_query(
+                command=command,
+                session_id=session_id,
+                operator_id=operator_id,
+                runtime=runtime,
+            )
+
         execution_result = self._ros.confirm_command(
             command_id=command.command_id,
             plan_fingerprint=plan_fingerprint,
@@ -266,4 +274,116 @@ class SupervisorExecutionMixin:
             command,
             accepted=accepted,
             reason=execution_result.get("summary") if not accepted else None,
+        )
+
+    @staticmethod
+    def _is_get_pose_command(command: CommandRecord) -> bool:
+        parsed_intent = command.parsed_intent or {}
+        normalized_command = parsed_intent.get("normalizedCommand") or {}
+        primitive = str(normalized_command.get("primitive_type") or parsed_intent.get("action") or "").upper()
+        return primitive == "GET_POSE"
+
+    def _execute_get_pose_query(
+        self,
+        *,
+        command: CommandRecord,
+        session_id: str,
+        operator_id: str,
+        runtime: RuntimeSnapshot,
+    ) -> dict[str, Any]:
+        parsed_intent = command.parsed_intent or {}
+        normalized_command = parsed_intent.get("normalizedCommand") or {}
+        reference_frame = str(normalized_command.get("reference_frame") or "base_link")
+        reader = getattr(self._ros, "get_current_pose", None)
+        pose = reader(reference_frame=reference_frame) if callable(reader) else None
+
+        if pose is None:
+            execution_result = {
+                "accepted": False,
+                "adapter": "workspace_ros_adapter",
+                "status": "failed",
+                "summary": "GET_POSE query failed: /get_current_pose is unavailable or returned no pose.",
+                "dispatchedToRos": False,
+                "queryOnly": True,
+                "referenceFrame": reference_frame,
+            }
+        else:
+            position = pose.get("position", {}) if isinstance(pose, dict) else {}
+            summary = (
+                "GET_POSE result: "
+                f"x={float(position.get('x', 0.0)):.4f}, "
+                f"y={float(position.get('y', 0.0)):.4f}, "
+                f"z={float(position.get('z', 0.0)):.4f} in {reference_frame}."
+            )
+            execution_result = {
+                "accepted": True,
+                "adapter": "workspace_ros_adapter",
+                "status": "succeeded",
+                "summary": summary,
+                "dispatchedToRos": False,
+                "queryOnly": True,
+                "referenceFrame": reference_frame,
+                "pose": pose,
+            }
+
+        command.execution_result = execution_result
+        self._audit.record_runtime_event(
+            system_state=runtime.system_state,
+            session_id=session_id,
+            operator_id=operator_id,
+            command_id=command.command_id,
+            message="pose query response recorded",
+            payload=execution_result,
+        )
+        self._trace(
+            "query.get_pose.response",
+            command_id=command.command_id,
+            correlation_id=command.correlation_id,
+            status=execution_result.get("status"),
+            summary=execution_result.get("summary"),
+        )
+        self._transition_command(
+            command,
+            next_state=CommandLifecycleState.EXECUTING,
+            reason="supervisor queried current pose via dedicated ROS service",
+            runtime_state=runtime.system_state,
+            payload=execution_result,
+            message_text="Step 5/6 QUERYING: current TCP pose requested from /get_current_pose.",
+            message_tag=CommandLifecycleState.EXECUTING.value,
+        )
+
+        if execution_result["status"] == "succeeded":
+            command.final_state = CommandLifecycleState.SUCCEEDED
+            command.reject_reason = None
+            self._transition_command(
+                command,
+                next_state=CommandLifecycleState.SUCCEEDED,
+                reason=execution_result["summary"],
+                runtime_state=runtime.system_state,
+                payload=execution_result,
+                message_text=f"Step 6/6 RESULT: {execution_result['summary']}",
+                message_tag=CommandLifecycleState.SUCCEEDED.value,
+            )
+        else:
+            command.final_state = CommandLifecycleState.FAILED
+            command.reject_reason = execution_result["summary"]
+            self._transition_command(
+                command,
+                next_state=CommandLifecycleState.FAILED,
+                reason=execution_result["summary"],
+                runtime_state=runtime.system_state,
+                payload=execution_result,
+                message_text=f"Step 6/6 RESULT: {execution_result['summary']}",
+                message_tag=CommandLifecycleState.FAILED.value,
+            )
+
+        self._audit.upsert_command(command)
+        self._broadcast_replay_update()
+        accepted = command.final_state == CommandLifecycleState.SUCCEEDED
+        return self._command_response(
+            session_id,
+            operator_id,
+            command,
+            accepted=accepted,
+            reason=execution_result["summary"] if not accepted else None,
         )

@@ -3,9 +3,36 @@ from __future__ import annotations
 from datetime import timedelta
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from hmi.backend.domain.models import ConnectionHealth, SystemRuntimeState
 from hmi.backend.ros.adapter import CONNECTION_FRESHNESS_SEC, WorkspaceRosAdapter
+
+
+class _CompletedFuture:
+    def __init__(self, result):
+        self._result = result
+
+    def done(self) -> bool:
+        return True
+
+    def result(self):
+        return self._result
+
+
+class _FakePoseClient:
+    def __init__(self, response, *, ready: bool = True) -> None:
+        self._response = response
+        self._ready = ready
+        self.requests = []
+
+    def wait_for_service(self, timeout_sec: float) -> bool:
+        _ = timeout_sec
+        return self._ready
+
+    def call_async(self, request):
+        self.requests.append(request)
+        return _CompletedFuture(self._response)
 
 
 class WorkspaceRosAdapterTests(unittest.TestCase):
@@ -277,7 +304,28 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertAlmostEqual(lin_payload["velocity_scale"], 0.05)
         self.assertAlmostEqual(lin_payload["acceleration_scale"], 0.04)
         self.assertEqual(lin_payload["planner_id"], "PILZ_LIN")
-        self.assertTrue(lin_payload["require_approval"])
+        self.assertFalse(lin_payload["require_approval"])
+
+    def test_cartesian_path_uses_last_waypoint_as_target_pose_for_ros_dispatch(self) -> None:
+        adapter = WorkspaceRosAdapter()
+        payload = {
+            "primitive_type": "CARTESIAN_PATH",
+            "reference_frame": "base_link",
+            "waypoints": [
+                {
+                    "position": {"x": 0.30, "y": 0.00, "z": 0.31},
+                    "orientation": {"x": 0.0, "y": 0.707, "z": 0.0, "w": 0.707},
+                },
+                {
+                    "position": {"x": 0.32, "y": 0.00, "z": 0.31},
+                    "orientation": {"x": 0.0, "y": 0.707, "z": 0.0, "w": 0.707},
+                },
+            ],
+        }
+
+        target_pose = adapter._cartesian_path_target_pose(payload)  # pylint: disable=protected-access
+
+        self.assertEqual(target_pose, payload["waypoints"][-1])
 
     def test_hardware_preflight_detects_missing_primary_joint_source(self) -> None:
         adapter = WorkspaceRosAdapter()
@@ -303,6 +351,49 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
             any("joint_states_primary" in reason for reason in preflight["reasons"]),
             msg=preflight,
         )
+
+    def test_get_current_pose_returns_serialized_pose(self) -> None:
+        adapter = WorkspaceRosAdapter()
+        adapter._node = object()  # pylint: disable=protected-access
+        pose = SimpleNamespace(
+            position=SimpleNamespace(x=0.31, y=-0.02, z=0.42),
+            orientation=SimpleNamespace(x=0.0, y=0.707, z=0.0, w=0.707),
+        )
+        adapter._get_pose_client = _FakePoseClient(  # pylint: disable=protected-access
+            SimpleNamespace(success=True, current_pose=pose)
+        )
+
+        fake_service = type(
+            'FakeGetCurrentPose',
+            (),
+            {'Request': type('Request', (), {'__init__': lambda self: setattr(self, 'reference_frame', '')})},
+        )
+        with patch('hmi.backend.ros.adapter.GetCurrentPose', fake_service):
+            payload = adapter.get_current_pose(reference_frame='base_link')
+
+        self.assertEqual(adapter._get_pose_client.requests[0].reference_frame, 'base_link')  # pylint: disable=protected-access
+        self.assertEqual(
+            payload,
+            {
+                'position': {'x': 0.31, 'y': -0.02, 'z': 0.42},
+                'orientation': {'x': 0.0, 'y': 0.707, 'z': 0.0, 'w': 0.707},
+            },
+        )
+
+    def test_get_current_pose_returns_none_when_service_is_unavailable(self) -> None:
+        adapter = WorkspaceRosAdapter()
+        adapter._node = object()  # pylint: disable=protected-access
+        adapter._get_pose_client = _FakePoseClient(None, ready=False)  # pylint: disable=protected-access
+
+        fake_service = type(
+            'FakeGetCurrentPose',
+            (),
+            {'Request': type('Request', (), {'__init__': lambda self: setattr(self, 'reference_frame', '')})},
+        )
+        with patch('hmi.backend.ros.adapter.GetCurrentPose', fake_service):
+            payload = adapter.get_current_pose(reference_frame='base_link')
+
+        self.assertIsNone(payload)
 
 
 if __name__ == '__main__':

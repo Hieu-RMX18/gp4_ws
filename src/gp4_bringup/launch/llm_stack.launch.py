@@ -21,14 +21,13 @@ def generate_launch_description():
         description='Directory used by supervisor audit_logger for rosbag2 and JSONL output.',
     )
     # Commissioning policy:
-    # - default command flow is non-approval (require_approval=false upstream)
-    # - plan_only still forces require_approval=true
-    # - auto_clear_unimplemented_approval is only relevant for explicit
-    #   require_approval=true payloads during sim/fake-hardware workflows.
+    # - executable direct llm_gateway flow dispatches require_approval=false
+    # - plan_only is rejected before /validate_command and /execute_motion
+    # - auto_clear_unimplemented_approval is deprecated/no-op compatibility.
     use_fake_hardware_arg = DeclareLaunchArgument(
         'use_fake_hardware',
         default_value='false',
-        description='When true, enables auto_clear_unimplemented_approval for sim compatibility.',
+        description='Deprecated compatibility switch; no longer changes approval dispatch behavior.',
     )
 
     llm_provider = LaunchConfiguration('llm_provider')
@@ -66,7 +65,7 @@ def generate_launch_description():
         ],
     )
 
-    # auto_clear_unimplemented_approval stays launch-gated to fake/sim mode.
+    # auto_clear_unimplemented_approval is retained only for compatibility.
     auto_clear_value = PythonExpression(
         ["'", use_fake_hardware, "'.lower() == 'true'"]
     )

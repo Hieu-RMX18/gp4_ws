@@ -47,6 +47,13 @@ class AuditService:
                     command_id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
                     operator_id TEXT NOT NULL,
+                    command_kind TEXT NOT NULL DEFAULT 'command',
+                    parent_sequence_id TEXT,
+                    sequence_step_index INTEGER,
+                    sequence_step_count INTEGER,
+                    current_step_index INTEGER,
+                    sequence_diagnostics_json TEXT,
+                    manual_recovery_required INTEGER NOT NULL DEFAULT 0,
                     raw_text TEXT NOT NULL,
                     parsed_intent_json TEXT,
                     validation_result_json TEXT,
@@ -123,6 +130,13 @@ class AuditService:
             self._ensure_column(connection, "commands", "correlation_id", "TEXT")
             self._ensure_column(connection, "commands", "risk_level", "TEXT")
             self._ensure_column(connection, "commands", "execution_result_json", "TEXT")
+            self._ensure_column(connection, "commands", "command_kind", "TEXT NOT NULL DEFAULT 'command'")
+            self._ensure_column(connection, "commands", "parent_sequence_id", "TEXT")
+            self._ensure_column(connection, "commands", "sequence_step_index", "INTEGER")
+            self._ensure_column(connection, "commands", "sequence_step_count", "INTEGER")
+            self._ensure_column(connection, "commands", "current_step_index", "INTEGER")
+            self._ensure_column(connection, "commands", "sequence_diagnostics_json", "TEXT")
+            self._ensure_column(connection, "commands", "manual_recovery_required", "INTEGER NOT NULL DEFAULT 0")
 
     def _ensure_column(
         self,
@@ -150,6 +164,13 @@ class AuditService:
                     command_id,
                     session_id,
                     operator_id,
+                    command_kind,
+                    parent_sequence_id,
+                    sequence_step_index,
+                    sequence_step_count,
+                    current_step_index,
+                    sequence_diagnostics_json,
+                    manual_recovery_required,
                     raw_text,
                     parsed_intent_json,
                     validation_result_json,
@@ -171,10 +192,17 @@ class AuditService:
                     planner_used,
                     created_at,
                     updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(command_id) DO UPDATE SET
                     session_id=excluded.session_id,
                     operator_id=excluded.operator_id,
+                    command_kind=excluded.command_kind,
+                    parent_sequence_id=excluded.parent_sequence_id,
+                    sequence_step_index=excluded.sequence_step_index,
+                    sequence_step_count=excluded.sequence_step_count,
+                    current_step_index=excluded.current_step_index,
+                    sequence_diagnostics_json=excluded.sequence_diagnostics_json,
+                    manual_recovery_required=excluded.manual_recovery_required,
                     raw_text=excluded.raw_text,
                     parsed_intent_json=excluded.parsed_intent_json,
                     validation_result_json=excluded.validation_result_json,
@@ -200,6 +228,13 @@ class AuditService:
                     record.command_id,
                     record.session_id,
                     record.operator_id,
+                    record.command_kind.value,
+                    record.parent_sequence_id,
+                    record.sequence_step_index,
+                    record.sequence_step_count,
+                    record.current_step_index,
+                    _json_blob({"diagnostics": record.sequence_diagnostics} if record.sequence_diagnostics else None),
+                    1 if record.manual_recovery_required else 0,
                     record.raw_text,
                     _json_blob(record.parsed_intent),
                     _json_blob(record.validation_result),
@@ -397,6 +432,9 @@ class AuditService:
         final_state: str | None = None,
         created_from: str | None = None,
         created_to: str | None = None,
+        command_kind: str | None = None,
+        parent_sequence_id: str | None = None,
+        top_level_only: bool = False,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         predicates: list[str] = []
@@ -417,6 +455,17 @@ class AuditService:
         if created_to:
             predicates.append("created_at <= ?")
             values.append(created_to)
+        if command_kind:
+            predicates.append("command_kind = ?")
+            values.append(command_kind)
+        if parent_sequence_id is not None:
+            if parent_sequence_id == "":
+                predicates.append("parent_sequence_id IS NULL")
+            else:
+                predicates.append("parent_sequence_id = ?")
+                values.append(parent_sequence_id)
+        if top_level_only:
+            predicates.append("parent_sequence_id IS NULL")
 
         where_clause = f"WHERE {' AND '.join(predicates)}" if predicates else ""
         values.append(max(1, min(limit, 200)))
@@ -465,3 +514,16 @@ class AuditService:
             "timeline": [dict(row) for row in timeline_rows],
             "runtime_events": [dict(row) for row in runtime_rows],
         }
+
+    def list_sequence_children(self, parent_sequence_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM commands
+                WHERE parent_sequence_id = ?
+                ORDER BY sequence_step_index ASC, created_at ASC
+                """,
+                (parent_sequence_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]

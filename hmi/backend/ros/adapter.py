@@ -39,9 +39,10 @@ try:
     from industrial_msgs.msg import RobotStatus as IndustrialRobotStatus
     from interfaces.action import ExecuteMotion
     from interfaces.msg import RobotReadiness as RobotReadinessMsg
-    from interfaces.srv import ValidateCommand
+    from interfaces.srv import GetCurrentPose, ValidateCommand
     from rclpy.action import ActionClient
     from rclpy.executors import SingleThreadedExecutor
+    from rclpy.qos import qos_profile_sensor_data
     from std_msgs.msg import String
     JointState = _load_joint_state_type()
 except Exception as exc:  # pragma: no cover - depends on sourced ROS environment
@@ -52,14 +53,25 @@ except Exception as exc:  # pragma: no cover - depends on sourced ROS environmen
     IndustrialRobotStatus = None
     ExecuteMotion = None
     RobotReadinessMsg = None
+    GetCurrentPose = None
     ValidateCommand = None
     ActionClient = None
     SingleThreadedExecutor = None
+    qos_profile_sensor_data = None
     JointState = None
     String = None
     _ROS_IMPORT_ERROR = str(exc)
 else:  # pragma: no cover - trivial constant assignment
     _ROS_IMPORT_ERROR = None
+
+try:
+    from motoros2_interfaces.srv import StartTrajMode as StartTrajModeSrv
+except Exception:  # pragma: no cover - optional MotoROS2 package
+    StartTrajModeSrv = None
+try:
+    from std_srvs.srv import Trigger as TriggerSrv
+except Exception:  # pragma: no cover
+    TriggerSrv = None
 
 # Keep supervisor defaults at-or-below current validation limits so
 # sim execution fails closed less often on conservative profiles.
@@ -112,6 +124,7 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
         preferred_joint_state_topic: str = '/yaskawa/joint_states',
         validate_command_service: str = '/validate_command',
         execute_motion_action: str = '/execute_motion',
+        get_current_pose_service: str = '/get_current_pose',
     ) -> None:
         self._node_name = node_name
         self._gateway_status_topic = gateway_status_topic
@@ -124,6 +137,7 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
         self._preferred_joint_state_topic = preferred_joint_state_topic
         self._validate_command_service = validate_command_service
         self._execute_motion_action = execute_motion_action
+        self._get_current_pose_service = get_current_pose_service
 
         self._lock = Lock()
         self._state = _TelemetryState(start_error=_ROS_IMPORT_ERROR)
@@ -135,6 +149,9 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
         self._subscriptions: list[Any] = []
         self._validate_client: Any = None
         self._execute_client: Any = None
+        self._get_pose_client: Any = None
+        self._start_traj_client: Any = None
+        self._stop_traj_client: Any = None
         self._goal_handles: dict[str, Any] = {}
         self._goal_correlation_ids: dict[str, str] = {}
         self._goal_lock = Lock()
@@ -193,6 +210,9 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
             self._goal_correlation_ids.clear()
         self._validate_client = None
         self._execute_client = None
+        self._get_pose_client = None
+        self._start_traj_client = None
+        self._stop_traj_client = None
         self._executor = None
         self._node = None
         self._context = None
@@ -240,6 +260,73 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
             rendered_fields.append(f"{key}={rendered_value}")
         LOGGER.info("[HMI ROS] %s | %s", stage, " | ".join(rendered_fields))
 
+    def get_current_pose(self, *, reference_frame: str = 'base_link') -> dict[str, Any] | None:
+        if self._node is None or GetCurrentPose is None or self._get_pose_client is None:
+            return None
+        if not self._get_pose_client.wait_for_service(timeout_sec=DEFAULT_VALIDATE_TIMEOUT_SEC):
+            return None
+
+        request = GetCurrentPose.Request()
+        request.reference_frame = reference_frame
+        try:
+            response = self._wait_for_future(
+                self._get_pose_client.call_async(request),
+                DEFAULT_VALIDATE_TIMEOUT_SEC,
+            )
+        except Exception:
+            return None
+
+        if response is None or not getattr(response, 'success', False):
+            return None
+
+        pose = response.current_pose
+        return {
+            'position': {
+                'x': float(pose.position.x),
+                'y': float(pose.position.y),
+                'z': float(pose.position.z),
+            },
+            'orientation': {
+                'x': float(pose.orientation.x),
+                'y': float(pose.orientation.y),
+                'z': float(pose.orientation.z),
+                'w': float(pose.orientation.w),
+            },
+        }
+
+    def start_traj_mode(self) -> dict[str, Any]:
+        if self._node is None or StartTrajModeSrv is None or self._start_traj_client is None:
+            return {'accepted': False, 'message': 'start_traj_mode service unavailable'}
+        if not self._start_traj_client.wait_for_service(timeout_sec=2.0):
+            return {'accepted': False, 'message': 'start_traj_mode service not ready'}
+        try:
+            resp = self._wait_for_future(
+                self._start_traj_client.call_async(StartTrajModeSrv.Request()),
+                5.0,
+            )
+        except Exception as exc:
+            return {'accepted': False, 'message': str(exc)}
+        if resp is None:
+            return {'accepted': False, 'message': 'no response'}
+        code = getattr(resp.result_code, 'value', resp.result_code)
+        return {'accepted': code == 1, 'message': resp.message or f'result_code={code}'}
+
+    def stop_motion(self) -> dict[str, Any]:
+        if self._node is None or TriggerSrv is None or self._stop_traj_client is None:
+            return {'accepted': False, 'message': 'stop_traj_mode service unavailable'}
+        if not self._stop_traj_client.wait_for_service(timeout_sec=2.0):
+            return {'accepted': False, 'message': 'stop_traj_mode service not ready'}
+        try:
+            resp = self._wait_for_future(
+                self._stop_traj_client.call_async(TriggerSrv.Request()),
+                5.0,
+            )
+        except Exception as exc:
+            return {'accepted': False, 'message': str(exc)}
+        if resp is None:
+            return {'accepted': False, 'message': 'no response'}
+        return {'accepted': resp.success, 'message': resp.message or ('stopped' if resp.success else 'failed')}
+
     def _create_subscriptions(self) -> None:
         assert self._node is not None
         assert String is not None
@@ -254,7 +341,12 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
             self._node.create_subscription(String, self._llm_command_topic, self._on_llm_command, 10),
             self._node.create_subscription(RobotReadinessMsg, self._readiness_topic, self._on_readiness, 10),
             self._node.create_subscription(DiagnosticStatus, self._supervisor_alert_topic, self._on_supervisor_alert, 10),
-            self._node.create_subscription(IndustrialRobotStatus, self._robot_status_topic, self._on_robot_status, 10),
+            self._node.create_subscription(
+                IndustrialRobotStatus,
+                self._robot_status_topic,
+                self._on_robot_status,
+                qos_profile_sensor_data,
+            ),
         ]
         for topic in self._joint_state_topics:
             self._subscriptions.append(
@@ -278,6 +370,19 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
             ExecuteMotion,
             self._execute_motion_action,
         )
+        if GetCurrentPose is not None:
+            self._get_pose_client = self._node.create_client(
+                GetCurrentPose,
+                self._get_current_pose_service,
+            )
+        if StartTrajModeSrv is not None:
+            self._start_traj_client = self._node.create_client(
+                StartTrajModeSrv, '/yaskawa/start_traj_mode',
+            )
+        if TriggerSrv is not None:
+            self._stop_traj_client = self._node.create_client(
+                TriggerSrv, '/yaskawa/stop_traj_mode',
+            )
 
     def _spin(self) -> None:  # pragma: no cover - requires ROS runtime
         assert self._executor is not None

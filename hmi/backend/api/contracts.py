@@ -165,6 +165,7 @@ class CommandExecutionResultModel(StrictModel):
 
 class CommandViewModel(StrictModel):
     commandId: str
+    commandKind: Literal['command']
     sessionId: str
     operatorId: str
     rawText: str
@@ -202,10 +203,60 @@ class CommandViewModel(StrictModel):
     executeAt: str | None
     executionResult: CommandExecutionResultModel | None = None
     finalState: Literal['SUCCEEDED', 'FAILED', 'REJECTED', 'CANCELLED', 'EXPIRED'] | None = None
+    parentSequenceId: str | None = None
+    sequenceStepIndex: int | None = None
+    sequenceStepCount: int | None = None
+
+
+class SequenceViewModel(StrictModel):
+    sequenceId: str
+    commandKind: Literal['sequence']
+    sessionId: str
+    operatorId: str
+    rawText: str
+    intentSource: Literal['text', 'structured']
+    structuredIntent: dict[str, Any] | None = None
+    lifecycleState: Literal[
+        'RECEIVED',
+        'PARSING',
+        'VALIDATING',
+        'NEEDS_CONFIRMATION',
+        'CONFIRMED',
+        'EXECUTION_REQUESTED',
+        'EXECUTING',
+        'SUCCEEDED',
+        'FAILED',
+        'REJECTED',
+        'CANCELLED',
+        'EXPIRED',
+    ]
+    summaryLabel: str
+    plannerUsed: str | None
+    frameUsed: str | None
+    mode: Literal['sim', 'hardware', 'unknown']
+    riskLevel: Literal['low', 'medium', 'high', 'critical'] | None = None
+    planFingerprint: str | None = None
+    correlationId: str | None = None
+    rejectReason: str | None
+    validationResult: CommandValidationResultModel | None = None
+    planSummary: dict[str, Any] | None = None
+    metrics: PlanMetricsModel | None = None
+    confirmationExpiresAt: str | None = None
+    createdAt: str
+    confirmAt: str | None
+    executeAt: str | None
+    executionResult: CommandExecutionResultModel | None = None
+    finalState: Literal['SUCCEEDED', 'FAILED', 'REJECTED', 'CANCELLED', 'EXPIRED'] | None = None
+    stepCount: int
+    currentStepIndex: int | None = None
+    diagnostics: list[str] = Field(default_factory=list)
+    manualRecoveryRequired: bool = False
+    steps: list[CommandViewModel] = Field(default_factory=list)
 
 
 class ReplayListItemModel(StrictModel):
     commandId: str
+    kind: Literal['command', 'sequence']
     sessionId: str
     operatorId: str
     summaryLabel: str
@@ -217,6 +268,9 @@ class ReplayListItemModel(StrictModel):
     createdAt: str
     executeAt: str | None
     riskLevel: Literal['low', 'medium', 'high', 'critical'] | None = None
+    stepCount: int | None = None
+    currentStepIndex: int | None = None
+    manualRecoveryRequired: bool = False
 
 
 class TimelineEventModel(StrictModel):
@@ -231,7 +285,9 @@ class TimelineEventModel(StrictModel):
 
 
 class ReplayDetailModel(StrictModel):
-    command: CommandViewModel
+    jobType: Literal['command', 'sequence']
+    command: CommandViewModel | None = None
+    sequence: SequenceViewModel | None = None
     timeline: list[TimelineEventModel]
     runtimeEvents: list[TimelineEventModel]
 
@@ -249,6 +305,7 @@ class HmiStateSnapshotModel(StrictModel):
     runtime: RuntimeSnapshotModel
     messages: list[ChatMessageModel]
     activeCommand: CommandViewModel | None
+    activeSequence: SequenceViewModel | None = None
     jointPositions: list[JointPositionModel]
     planMetrics: PlanMetricsModel | None
     replayItems: list[ReplayListItemModel]
@@ -336,10 +393,13 @@ class CommandCancelRequestModel(StrictModel):
 
 class CommandMutationResponseModel(StrictModel):
     accepted: bool
-    commandId: str
+    jobType: Literal['command', 'sequence']
+    commandId: str | None
+    sequenceId: str | None = None
     reason: str | None
     snapshot: HmiStateSnapshotModel | None = None
-    command: CommandViewModel
+    command: CommandViewModel | None = None
+    sequence: SequenceViewModel | None = None
 
 
 class CommandListResponseModel(StrictModel):
@@ -370,6 +430,12 @@ class CommandLifecycleStreamEventModel(StrictModel):
     command: CommandViewModel
     messages: list[ChatMessageModel] = Field(default_factory=list)
     planMetrics: PlanMetricsModel | None = None
+
+
+class SequenceLifecycleStreamEventModel(StrictModel):
+    type: Literal['sequence_lifecycle']
+    sequence: SequenceViewModel
+    messages: list[ChatMessageModel] = Field(default_factory=list)
 
 
 class ReplayUpdatedStreamEventModel(StrictModel):
@@ -408,6 +474,7 @@ HMI_STREAM_EVENT_ADAPTER = TypeAdapter(
     | HeartbeatStreamEventModel
     | LeaseStateStreamEventModel
     | CommandLifecycleStreamEventModel
+    | SequenceLifecycleStreamEventModel
     | ReplayUpdatedStreamEventModel
     | JogBridgeStatusStreamEventModel
 )

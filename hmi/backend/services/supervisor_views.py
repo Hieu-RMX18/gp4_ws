@@ -8,6 +8,7 @@ from uuid import uuid4
 from ..domain.models import (
     BridgeCapabilities,
     ChatMessage,
+    CommandKind,
     CommandLifecycleState,
     CommandRecord,
     LeaseRole,
@@ -139,6 +140,7 @@ class SupervisorViewsMixin:
             return None
         return {
             "commandId": command.command_id,
+            "commandKind": CommandKind.COMMAND.value,
             "sessionId": command.session_id,
             "operatorId": command.operator_id,
             "rawText": command.raw_text,
@@ -165,6 +167,51 @@ class SupervisorViewsMixin:
             "executeAt": command.execute_at.isoformat() if command.execute_at else None,
             "executionResult": command.execution_result,
             "finalState": command.final_state.value if command.final_state else None,
+            "parentSequenceId": command.parent_sequence_id,
+            "sequenceStepIndex": command.sequence_step_index,
+            "sequenceStepCount": command.sequence_step_count,
+        }
+
+    def _serialize_sequence(self, command: CommandRecord | None) -> dict[str, Any] | None:
+        if command is None:
+            return None
+        steps = [
+            self._serialize_command(self._commands.get(child_id))
+            for child_id in command.child_command_ids
+        ]
+        return {
+            "sequenceId": command.command_id,
+            "commandKind": CommandKind.SEQUENCE.value,
+            "sessionId": command.session_id,
+            "operatorId": command.operator_id,
+            "rawText": command.raw_text,
+            "intentSource": command.intent_source,
+            "structuredIntent": command.structured_intent,
+            "lifecycleState": command.lifecycle_state.value,
+            "summaryLabel": command.summary_label,
+            "plannerUsed": command.planner_used,
+            "frameUsed": command.frame_used,
+            "mode": command.mode.value,
+            "riskLevel": command.risk_level.value if command.risk_level else None,
+            "planFingerprint": command.plan_fingerprint,
+            "correlationId": command.correlation_id,
+            "rejectReason": command.reject_reason,
+            "validationResult": command.validation_result,
+            "planSummary": command.plan_summary,
+            "metrics": self._serialize_metrics(command.metrics),
+            "confirmationExpiresAt": (
+                command.confirmation_expires_at.isoformat() if command.confirmation_expires_at else None
+            ),
+            "createdAt": command.created_at.isoformat(),
+            "confirmAt": command.confirm_at.isoformat() if command.confirm_at else None,
+            "executeAt": command.execute_at.isoformat() if command.execute_at else None,
+            "executionResult": command.execution_result,
+            "finalState": command.final_state.value if command.final_state else None,
+            "stepCount": command.sequence_step_count or len(command.child_command_ids),
+            "currentStepIndex": command.current_step_index,
+            "diagnostics": list(command.sequence_diagnostics),
+            "manualRecoveryRequired": command.manual_recovery_required,
+            "steps": [step for step in steps if step is not None],
         }
 
     def _serialize_audited_command(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -175,6 +222,7 @@ class SupervisorViewsMixin:
         execution_result = self._decode_json(row.get("execution_result_json"))
         return {
             "commandId": row["command_id"],
+            "commandKind": CommandKind.COMMAND.value,
             "sessionId": row["session_id"],
             "operatorId": row["operator_id"],
             "rawText": row["raw_text"],
@@ -199,12 +247,55 @@ class SupervisorViewsMixin:
             "executeAt": row.get("execute_at"),
             "executionResult": execution_result,
             "finalState": row.get("final_state"),
+            "parentSequenceId": row.get("parent_sequence_id"),
+            "sequenceStepIndex": row.get("sequence_step_index"),
+            "sequenceStepCount": row.get("sequence_step_count"),
+        }
+
+    def _serialize_audited_sequence(self, row: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any]:
+        validation_result = self._decode_json(row.get("validation_result_json"))
+        structured_intent = self._decode_json(row.get("structured_intent_json"))
+        plan_summary = self._decode_json(row.get("plan_summary_json"))
+        execution_result = self._decode_json(row.get("execution_result_json"))
+        diagnostics_blob = self._decode_json(row.get("sequence_diagnostics_json")) or {}
+        return {
+            "sequenceId": row["command_id"],
+            "commandKind": CommandKind.SEQUENCE.value,
+            "sessionId": row["session_id"],
+            "operatorId": row["operator_id"],
+            "rawText": row["raw_text"],
+            "intentSource": "structured" if structured_intent else "text",
+            "structuredIntent": structured_intent,
+            "lifecycleState": row.get("lifecycle_state") or row.get("final_state") or CommandLifecycleState.RECEIVED.value,
+            "summaryLabel": row.get("summary_label") or row["raw_text"][:80],
+            "plannerUsed": row.get("planner_used"),
+            "frameUsed": row.get("frame_used"),
+            "mode": row["mode"],
+            "riskLevel": row.get("risk_level"),
+            "planFingerprint": row.get("plan_fingerprint"),
+            "correlationId": row.get("correlation_id"),
+            "rejectReason": row.get("reject_reason"),
+            "validationResult": validation_result,
+            "planSummary": plan_summary,
+            "metrics": None,
+            "confirmationExpiresAt": row.get("review_expires_at"),
+            "createdAt": row["created_at"],
+            "confirmAt": row.get("confirm_at"),
+            "executeAt": row.get("execute_at"),
+            "executionResult": execution_result,
+            "finalState": row.get("final_state"),
+            "stepCount": row.get("sequence_step_count") or len(steps),
+            "currentStepIndex": row.get("current_step_index"),
+            "diagnostics": list(diagnostics_blob.get("diagnostics") or []),
+            "manualRecoveryRequired": bool(row.get("manual_recovery_required")),
+            "steps": steps,
         }
 
     def _serialize_replay_item(self, row: dict[str, Any]) -> dict[str, Any]:
         lifecycle_state = row.get("lifecycle_state") or row.get("final_state") or CommandLifecycleState.RECEIVED.value
         return {
             "commandId": row["command_id"],
+            "kind": row.get("command_kind") or CommandKind.COMMAND.value,
             "sessionId": row["session_id"],
             "operatorId": row["operator_id"],
             "summaryLabel": row.get("summary_label") or row["raw_text"][:80],
@@ -216,6 +307,9 @@ class SupervisorViewsMixin:
             "createdAt": row["created_at"],
             "executeAt": row.get("execute_at"),
             "riskLevel": row.get("risk_level"),
+            "stepCount": row.get("sequence_step_count"),
+            "currentStepIndex": row.get("current_step_index"),
+            "manualRecoveryRequired": bool(row.get("manual_recovery_required")),
         }
 
     def _serialize_timeline_row(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -265,9 +359,33 @@ class SupervisorViewsMixin:
         return {
             "accepted": accepted,
             "commandId": command.command_id,
+            "jobType": CommandKind.COMMAND.value,
             "reason": reason,
             "snapshot": self._telemetry.get_snapshot(session_id, operator_id) if self._telemetry else None,
             "command": self._serialize_command(command),
+            "sequenceId": None,
+            "sequence": None,
+        }
+
+    def _sequence_response(
+        self,
+        session_id: str,
+        operator_id: str,
+        sequence: CommandRecord,
+        *,
+        accepted: bool,
+        reason: str | None,
+    ) -> dict[str, Any]:
+        active_command = self._commands.get(self._active_command_id) if self._active_command_id else None
+        return {
+            "accepted": accepted,
+            "commandId": active_command.command_id if active_command else None,
+            "jobType": CommandKind.SEQUENCE.value,
+            "reason": reason,
+            "snapshot": self._telemetry.get_snapshot(session_id, operator_id) if self._telemetry else None,
+            "command": self._serialize_command(active_command),
+            "sequenceId": sequence.command_id,
+            "sequence": self._serialize_sequence(sequence),
         }
 
     def _emit_command_event(
@@ -287,6 +405,22 @@ class SupervisorViewsMixin:
         )
         self._broadcast_replay_update()
 
+    def _emit_sequence_event(
+        self,
+        command: CommandRecord,
+        messages: list[ChatMessage] | None,
+    ) -> None:
+        if self._telemetry is None:
+            return
+        self._telemetry.broadcast_event(
+            lambda _session_id, _operator_id: {
+                "type": "sequence_lifecycle",
+                "sequence": self._serialize_sequence(command),
+                "messages": [message.to_dict() for message in messages] if messages else [],
+            }
+        )
+        self._broadcast_replay_update()
+
     def _broadcast_replay_update(self) -> None:
         if self._telemetry is None:
             return
@@ -295,7 +429,7 @@ class SupervisorViewsMixin:
                 "type": "replay_updated",
                 "replayItems": [
                     self._serialize_replay_item(item)
-                    for item in self._audit.list_commands(limit=25)
+                    for item in self._audit.list_commands(limit=25, top_level_only=True)
                 ],
             }
         )

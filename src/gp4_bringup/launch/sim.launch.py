@@ -1,5 +1,6 @@
 import os
 
+import yaml
 from moveit_configs_utils import MoveItConfigsBuilder
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
@@ -66,8 +67,9 @@ def generate_launch_description():
         }],
     )
 
-    # SIM MODE: clear deferred approval after ValidateCommand so fake/sim
-    # commands can execute end-to-end without changing real-hardware policy.
+    # Compatibility only: direct llm_gateway dispatch now always sends
+    # require_approval=false for executable commands. The parameter is kept
+    # stable for older launch/test tooling.
     llm_gateway_node = Node(
         package='llm_gateway',
         executable='llm_gateway_node',
@@ -102,6 +104,15 @@ def generate_launch_description():
 
     # V4 Phase 1: motion_core is plan-only. It sends validated trajectories
     # to hw_adapter via DispatchTrajectory, not directly to FJT.
+    # Load motion limits from safety_rules.yaml (single source of truth).
+    _safety_yaml_path = os.path.join(
+        get_package_share_directory('safety'), 'config', 'safety_rules.yaml')
+    _safety_rules = {}
+    if os.path.exists(_safety_yaml_path):
+        with open(_safety_yaml_path, 'r') as _f:
+            _safety_rules = yaml.safe_load(_f) or {}
+    _motion_limits = _safety_rules.get('motion_limits', {})
+
     motion_core_node = Node(
         package='motion_core',
         executable='motion_core_node',
@@ -115,6 +126,9 @@ def generate_launch_description():
                 "dispatch_timeout_sec": 30.0,
                 # V4 J9: planning scene collision objects
                 "scene_objects_path": os.path.join(gp4_bringup_share, 'config', 'scene_objects.yaml'),
+                # Motion limits from safety_rules.yaml
+                "max_velocity_scale": _motion_limits.get('max_velocity_scale', 0.06),
+                "max_acceleration_scale": _motion_limits.get('max_acceleration_scale', 0.06),
             },
         ],
         remappings=[

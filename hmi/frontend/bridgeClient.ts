@@ -16,6 +16,7 @@ import type {
   ReplayListQuery,
   ReplayListResponse,
   RuntimeStateResponse,
+  ServoControlResponse,
   TransportState,
 } from '../shared/contracts';
 
@@ -256,6 +257,13 @@ export function createBridgeClient(basePath = '/api/hmi'): GP4BridgeClient {
                 finalState: payload.command.finalState,
                 messageCount: payload.messages?.length ?? 0,
               });
+            } else if (payload.type === 'sequence_lifecycle') {
+              traceClient('info', 'WebSocket event sequence_lifecycle', {
+                sequenceId: payload.sequence.sequenceId,
+                lifecycleState: payload.sequence.lifecycleState,
+                finalState: payload.sequence.finalState,
+                stepCount: payload.sequence.stepCount,
+              });
             } else if (payload.type === 'lease_state') {
               traceClient('info', 'WebSocket event lease_state', {
                 ownsControl: payload.lease.ownsControl,
@@ -334,8 +342,16 @@ export function createBridgeClient(basePath = '/api/hmi'): GP4BridgeClient {
       return postJson(`${basePath}/commands/${encodeURIComponent(commandId)}/confirm`, request);
     },
 
+    confirmSequence(sequenceId: string, request: CommandConfirmRequest): Promise<CommandMutationResponse> {
+      return postJson(`${basePath}/sequences/${encodeURIComponent(sequenceId)}/confirm`, request);
+    },
+
     abortCommand(commandId: string, request: CommandCancelRequest): Promise<CommandMutationResponse> {
       return postJson(`${basePath}/commands/${encodeURIComponent(commandId)}/cancel`, request);
+    },
+
+    abortSequence(sequenceId: string, request: CommandCancelRequest): Promise<CommandMutationResponse> {
+      return postJson(`${basePath}/sequences/${encodeURIComponent(sequenceId)}/cancel`, request);
     },
 
     getRuntimeState(sessionId: string, operatorId: string): Promise<RuntimeStateResponse> {
@@ -373,6 +389,10 @@ export function createBridgeClient(basePath = '/api/hmi'): GP4BridgeClient {
       return getJson(`${basePath}/replay/${encodeURIComponent(commandId)}`);
     },
 
+    getSequence(sequenceId: string) {
+      return getJson(`${basePath}/sequences/${encodeURIComponent(sequenceId)}`);
+    },
+
     async activateJogBridge(): Promise<{ accepted: boolean; message: string }> {
       return postJson(`${basePath}/jog/activate`, {});
     },
@@ -381,14 +401,16 @@ export function createBridgeClient(basePath = '/api/hmi'): GP4BridgeClient {
       return postJson(`${basePath}/jog/deactivate`, {});
     },
 
-    sendJogCommand(cmd: JogCommandRequest): void {
-      fetch(`${basePath}/jog/command`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(cmd),
-      }).catch((err) => {
-        console.error('[JogPendant] Failed to send jog command:', err);
-      });
+    sendJogCommand(cmd: JogCommandRequest): Promise<{ accepted: boolean; message: string }> {
+      return postJson(`${basePath}/jog/command`, cmd);
+    },
+
+    async startServo(): Promise<ServoControlResponse> {
+      return postJson(`${basePath}/servo/start`, {});
+    },
+
+    async stopServo(): Promise<ServoControlResponse> {
+      return postJson(`${basePath}/servo/stop`, {});
     },
   };
 }

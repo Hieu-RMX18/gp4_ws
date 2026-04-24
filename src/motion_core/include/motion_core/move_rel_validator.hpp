@@ -30,7 +30,7 @@ struct MoveRelLimits
   static constexpr double kYMin = -0.16;  // front wall -0.197 + 37mm; above front_wall_guard max
   static constexpr double kYMax =  0.52;  // reach-limited
   static constexpr double kZMin =  0.23;  // table top ~0.20 + 30mm
-  static constexpr double kZMax =  0.52;  // reach-limited (550mm - 30mm)
+  static constexpr double kZMax =  0.56;  // relaxed from 0.52 for commissioning
 
   // Station wall keepout zones — MUST mirror safety_rules.yaml forbidden_zones.
   // front_wall_guard: station front face Y = -0.197m, 30mm inflated zone.

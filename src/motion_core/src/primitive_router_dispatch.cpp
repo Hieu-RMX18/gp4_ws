@@ -10,6 +10,10 @@
 #include <moveit/robot_state/conversions.h>
 #include <moveit/robot_trajectory/robot_trajectory.h>
 
+#include <moveit_msgs/msg/constraints.hpp>
+#include <moveit_msgs/msg/position_constraint.hpp>
+#include <shape_msgs/msg/solid_primitive.hpp>
+
 #include "motion_core/move_rel_validator.hpp"
 
 namespace motion_core
@@ -622,13 +626,51 @@ PrimitiveRouterDispatch::PlanningResult PrimitiveRouterDispatch::plan_for_primit
     }
 
     RCLCPP_INFO(logger_, "CIRC: planning arc via Pilz CIRC planner");
-    std::vector<geometry_msgs::msg::Pose> circ_poses;
-    circ_poses.push_back(aux_pose);
-    circ_poses.push_back(final_pose);
-    move_group->setPoseTargets(circ_poses);
+
+    // Pilz CIRC requires an interim path constraint, NOT setPoseTargets.
+    const std::string ee_link = move_group->getEndEffectorLink();
+    if (ee_link.empty())
+    {
+      result.reason = "CIRC: end effector link is empty; cannot set interim constraint";
+      return result;
+    }
+
+    moveit_msgs::msg::Constraints path_constraints;
+    moveit_msgs::msg::PositionConstraint pc;
+    pc.header.frame_id = "world";
+    pc.link_name = ee_link;
+    pc.weight = 1.0;
+
+    shape_msgs::msg::SolidPrimitive sphere;
+    sphere.type = shape_msgs::msg::SolidPrimitive::SPHERE;
+    sphere.dimensions = { 1e-4 };
+
+    geometry_msgs::msg::Pose sphere_pose;
+    sphere_pose.orientation.w = 1.0;
+    sphere_pose.position = aux_pose.position;
+
+    pc.constraint_region.primitives.push_back(sphere);
+    pc.constraint_region.primitive_poses.push_back(sphere_pose);
+
+    // Non-negotiable PILZ CIRC convention:
+    // Use path_constraints name "interim" (on-arc waypoint), NOT "center".
+    // "center" selects the shorter arc unpredictably; "interim" forces passage
+    // through the explicit on-arc point for deterministic control.
+    path_constraints.name = "interim";
+    path_constraints.position_constraints.push_back(pc);
+    move_group->setPathConstraints(path_constraints);
+
+    if (!move_group->setPoseTarget(final_pose, ee_link))
+    {
+      move_group->clearPathConstraints();
+      result.reason = "CIRC: MoveGroupInterface rejected goal pose target";
+      return result;
+    }
 
     moveit::planning_interface::MoveGroupInterface::Plan plan;
     const auto plan_result = request.plan_with_interruption(plan, "CIRC planning");
+    move_group->clearPathConstraints();
+
     if (plan_result.status == PlanningStatus::kCanceled)
     {
       result.status = PlanningStatus::kCanceled;

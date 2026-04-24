@@ -39,6 +39,11 @@ class CommandRiskLevel(str, Enum):
     CRITICAL = "critical"
 
 
+class CommandKind(str, Enum):
+    COMMAND = "command"
+    SEQUENCE = "sequence"
+
+
 class SystemRuntimeState(str, Enum):
     NORMAL = "NORMAL"
     FAULT = "FAULT"
@@ -271,6 +276,7 @@ class CommandRecord:
     summary_label: str
     mode: RuntimeMode
     created_at: datetime
+    command_kind: CommandKind = CommandKind.COMMAND
     intent_source: str = "text"
     correlation_id: str | None = None
     planner_used: str | None = None
@@ -288,6 +294,13 @@ class CommandRecord:
     execute_at: datetime | None = None
     execution_result: dict[str, Any] | None = None
     final_state: CommandLifecycleState | None = None
+    parent_sequence_id: str | None = None
+    sequence_step_index: int | None = None
+    sequence_step_count: int | None = None
+    current_step_index: int | None = None
+    sequence_diagnostics: list[str] = field(default_factory=list)
+    child_command_ids: list[str] = field(default_factory=list)
+    manual_recovery_required: bool = False
 
 
 @dataclass(slots=True)

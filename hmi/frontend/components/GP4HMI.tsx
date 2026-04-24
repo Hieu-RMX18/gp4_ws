@@ -9,6 +9,7 @@ import type {
   GP4BridgeClient,
   JointPosition,
   MessageOrigin,
+  SequenceView,
   TelemetrySourceStatus,
 } from '../../shared/contracts';
 import { useGP4Bridge } from '../hooks/useGP4Bridge';
@@ -73,12 +74,7 @@ type MessageRole = 'user' | 'robot' | 'system';
 type LogLevel = 'info' | 'ok' | 'warn' | 'err';
 type PipelineStatus = 'done' | 'active' | 'pending' | 'error';
 
-interface PipelineStepView {
-  key: string;
-  label: string;
-  status: PipelineStatus;
-  marker: string;
-}
+const DISPLAY_TIME_ZONE = 'Asia/Ho_Chi_Minh';
 
 interface TopicView {
   key: string;
@@ -196,22 +192,107 @@ function formatMetric(value: number | null, digits = 2, suffix = ''): string {
   return `${value.toFixed(digits)}${suffix}`;
 }
 
+function parseBackendTimestamp(value: string): Date | null {
+  const timeOnlyMatch = /^(\d{2}):(\d{2}):(\d{2})$/.exec(value);
+  if (timeOnlyMatch) {
+    const now = new Date();
+    const parsed = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate(),
+        Number(timeOnlyMatch[1]),
+        Number(timeOnlyMatch[2]),
+        Number(timeOnlyMatch[3]),
+      ),
+    );
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value);
+  const parsed = new Date(hasTimezone ? value : `${value}Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getDateTimeParts(value: Date): Record<string, string> {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: DISPLAY_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+    .formatToParts(value)
+    .reduce<Record<string, string>>((parts, part) => {
+      if (part.type !== 'literal') {
+        parts[part.type] = part.value;
+      }
+      return parts;
+    }, {});
+}
+
 function formatTimestamp(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
+  const parsed = parseBackendTimestamp(value);
+  if (!parsed) {
     return value;
   }
-  return parsed.toLocaleTimeString('en-GB', { hour12: false });
+  const parts = getDateTimeParts(parsed);
+  return `${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
 function formatClock(value: Date): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, '0');
-  const day = String(value.getDate()).padStart(2, '0');
-  const hour = String(value.getHours()).padStart(2, '0');
-  const minute = String(value.getMinutes()).padStart(2, '0');
-  const second = String(value.getSeconds()).padStart(2, '0');
-  return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+  const parts = getDateTimeParts(value);
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} GMT+7`;
+}
+
+function shouldShowMessageInSystemLog(message: ChatMessage): boolean {
+  return !/^Step \d+\/6\b/.test(message.text);
+}
+
+function formatPlanFingerprintLog(job: CommandView | SequenceView | null): string {
+  return job?.planFingerprint
+    ? `Plan fingerprint: ${job.planFingerprint.slice(0, 12)}...`
+    : 'No validated plan fingerprint yet.';
+}
+
+function buildReviewLogEntries(
+  job: CommandView | SequenceView | null,
+  blockingReasons: readonly string[],
+  declineReason: string | null,
+  fallbackTimestamp: string,
+): LogEntryView[] {
+  const time = formatTimestamp(job?.createdAt ?? fallbackTimestamp);
+  const entries: LogEntryView[] = [
+    {
+      id: 'review-plan-fingerprint',
+      time,
+      level: 'info',
+      message: formatPlanFingerprintLog(job),
+    },
+  ];
+
+  if (blockingReasons.length > 0) {
+    entries.push({
+      id: 'review-blocking-reasons',
+      time,
+      level: 'warn',
+      message: `Blocking reasons: ${blockingReasons.join(' ')}`,
+    });
+  }
+
+  if (declineReason) {
+    entries.push({
+      id: 'review-decline-reason',
+      time,
+      level: 'err',
+      message: `Decline reason: ${declineReason}`,
+    });
+  }
+
+  return entries;
 }
 
 function humanizeLabel(value: string): string {
@@ -373,51 +454,6 @@ function toLogLevel(message: ChatMessage): LogLevel {
   return 'info';
 }
 
-function buildPipeline(state: CommandLifecycleState | null | undefined): PipelineStepView[] {
-  const steps: Array<Omit<PipelineStepView, 'marker'>> = [
-    {
-      key: 'parsed',
-      label: 'Parsed',
-      status: state === 'PARSING' ? 'active' : state !== undefined && state !== null && state !== 'RECEIVED' ? 'done' : 'pending',
-    },
-    {
-      key: 'validated',
-      label: 'Validated',
-      status: state === 'VALIDATING' ? 'active' : isInStateSet(state, VALIDATED_OR_BEYOND) ? 'done' : 'pending',
-    },
-    {
-      key: 'confirmation',
-      label: 'Confirmation',
-      status: state === 'NEEDS_CONFIRMATION' ? 'active' : isInStateSet(state, CONFIRMED_OR_BEYOND) ? 'done' : 'pending',
-    },
-    {
-      key: 'dispatch',
-      label: 'Dispatch Requested',
-      status:
-        state === 'EXECUTION_REQUESTED'
-          ? 'active'
-          : isInStateSet(state, EXECUTION_REQUESTED_OR_BEYOND)
-            ? 'done'
-            : 'pending',
-    },
-    {
-      key: 'executing',
-      label: 'Executing',
-      status: state === 'EXECUTING' ? 'active' : isInStateSet(state, EXECUTING_OR_BEYOND) ? 'done' : 'pending',
-    },
-    {
-      key: 'completed',
-      label: 'Completed',
-      status: state === 'SUCCEEDED' ? 'done' : isInStateSet(state, TERMINAL_FAILURE_STATES) ? 'error' : 'pending',
-    },
-  ];
-
-  return steps.map((step, index) => ({
-    ...step,
-    marker: step.status === 'done' ? '✓' : step.status === 'error' ? '!' : String(index + 1),
-  }));
-}
-
 function durationSeconds(command: CommandView | null): number | null {
   if (!command) {
     return null;
@@ -514,11 +550,12 @@ function hardwareGateLabel(unlocked: boolean): string {
 }
 
 function summarizeMutationResponse(response: CommandMutationResponse): string {
-  const stateLabel = humanizeLabel(response.command.lifecycleState);
+  const lifecycleState = response.sequence?.lifecycleState ?? response.command?.lifecycleState;
+  const stateLabel = lifecycleState ? humanizeLabel(lifecycleState) : 'Idle';
   if (response.accepted) {
     return `Accepted · ${stateLabel}`;
   }
-  const reason = resolveDeclineReason(response.reason, response.command);
+  const reason = resolveDeclineReason(response.reason, response.command ?? null);
   return reason ? `Declined · ${reason}` : `Declined · ${stateLabel}`;
 }
 
@@ -709,9 +746,10 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
   const primaryHardwareGateReasonVi = reasonToVietnamese(primaryHardwareGateReason);
 
   const activeCommand = state.activeCommand;
-  const blockingReasons = activeCommand?.validationResult?.blockingReasons ?? [];
-  const confirmationReasons = activeCommand?.validationResult?.confirmationReasons ?? [];
-  const executionSummary = activeCommand?.executionResult?.summary ?? null;
+  const activeSequence = state.activeSequence;
+  const activeReviewJob = activeSequence ?? activeCommand;
+  const blockingReasons =
+    activeSequence?.validationResult?.blockingReasons ?? activeCommand?.validationResult?.blockingReasons ?? [];
   const traceSteps = useMemo(() => buildTraceSteps(activeCommand), [activeCommand]);
   const declineReason = useMemo(
     () => resolveDeclineReason(latestMutationReason, activeCommand),
@@ -744,8 +782,6 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
       jointMap.get(name) ?? { name, positionDeg: null, minDeg: -180, maxDeg: 180 },
     );
   }, [state.jointPositions]);
-
-  const pipeline = useMemo(() => buildPipeline(activeCommand?.lifecycleState), [activeCommand?.lifecycleState]);
 
   const commandCount = useMemo(() => {
     if (state.replayItems.length > 0) {
@@ -787,11 +823,11 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
       },
       {
         key: 'command',
-        label: `Command ${activeCommand?.lifecycleState ? humanizeLabel(activeCommand.lifecycleState) : 'Idle'}`,
-        tone: toneFromLifecycle(activeCommand?.lifecycleState),
+        label: `${activeSequence ? 'Sequence' : 'Command'} ${activeReviewJob?.lifecycleState ? humanizeLabel(activeReviewJob.lifecycleState) : 'Idle'}`,
+        tone: toneFromLifecycle(activeReviewJob?.lifecycleState),
       },
     ];
-  }, [activeCommand?.lifecycleState, connectionMap, state.mode, state.runtime.robotStatus.servoState]);
+  }, [activeReviewJob?.lifecycleState, activeSequence, connectionMap, state.mode, state.runtime.robotStatus.servoState]);
 
   const topicRows = useMemo<TopicView[]>(() => {
     if (state.telemetrySources.length > 0) {
@@ -821,12 +857,23 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
   }, [state.connections, state.telemetrySources]);
 
   const logEntries = useMemo<LogEntryView[]>(() => {
-    const entries = state.messages.slice(-14).map((message) => ({
-      id: message.id,
-      time: formatTimestamp(message.timestamp),
-      level: toLogLevel(message),
-      message: message.text,
-    }));
+    const reviewEntries = buildReviewLogEntries(
+      activeReviewJob,
+      blockingReasons,
+      declineReason,
+      state.generatedAt,
+    );
+    const entries = state.messages
+      .filter(shouldShowMessageInSystemLog)
+      .slice(-11)
+      .map((message) => ({
+        id: message.id,
+        time: formatTimestamp(message.timestamp),
+        level: toLogLevel(message),
+        message: message.text,
+      }));
+
+    entries.unshift(...reviewEntries);
     if (actionFeedback) {
       entries.unshift({
         id: actionFeedback.id,
@@ -848,7 +895,16 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
         message: state.runtime.statusText,
       },
     ];
-  }, [actionFeedback, state.generatedAt, state.messages, state.runtime.blocking, state.runtime.statusText]);
+  }, [
+    actionFeedback,
+    activeReviewJob,
+    blockingReasons,
+    declineReason,
+    state.generatedAt,
+    state.messages,
+    state.runtime.blocking,
+    state.runtime.statusText,
+  ]);
 
   const handleSubmit = async () => {
     const rawText = draft.trim();
@@ -869,14 +925,17 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
       pushActionFeedback('ok', `Submit response · ${summarizeMutationResponse(response)}`, response.reason);
 
       const shouldAutoConfirmSimCommand =
+        response.jobType === 'command' &&
+        response.command !== null &&
         response.command.lifecycleState === 'NEEDS_CONFIRMATION' &&
         response.command.mode === 'sim' &&
         response.command.planFingerprint !== null;
       if (shouldAutoConfirmSimCommand) {
+        const command = response.command as NonNullable<typeof response.command>;
         try {
           const confirmResponse = await confirmCommandById(
-            response.commandId,
-            response.command.planFingerprint as string,
+            response.commandId as string,
+            command.planFingerprint as string,
           );
           const confirmReason = resolveDeclineReason(confirmResponse.reason, confirmResponse.command);
           if (!confirmResponse.accepted) {
@@ -949,15 +1008,15 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
     }
   };
 
-  const canAbortTopbar = canAbortCommands && activeCommand !== null;
+  const canAbortTopbar = canAbortCommands && (activeSequence !== null || activeCommand !== null);
 
   return (
     <div className="hmi-shell">
       <div className="hmi-app">
         <header className="topbar">
           <div className="logo">
-            <div className="logo-icon">GP4</div>
-            GP4 <span>HMI</span>
+            <div className="logo-icon">HMI</div>
+            GP4 <span>Yaskawa</span>
           </div>
           <div className="top-divider" />
           <div className="status-pills">
@@ -970,6 +1029,39 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
           </div>
           <div className="top-right">
             <span className="top-time">{clockText}</span>
+            <div className="top-divider"></div>
+            <button
+              className="servo-btn servo-start"
+              onClick={async () => {
+                try {
+                  const res = await client.startServo();
+                  pushActionFeedback(
+                    res.accepted ? 'ok' : 'err',
+                    `Servo START · ${res.message}`,
+                  );
+                } catch (e: unknown) {
+                  pushActionFeedback('err', `Servo START failed · ${e instanceof Error ? e.message : String(e)}`);
+                }
+              }}
+            >
+              START
+            </button>
+            <button
+              className="servo-btn servo-stop"
+              onClick={async () => {
+                try {
+                  const res = await client.stopServo();
+                  pushActionFeedback(
+                    res.accepted ? 'ok' : 'err',
+                    `Servo HOLD · ${res.message}`,
+                  );
+                } catch (e: unknown) {
+                  pushActionFeedback('err', `Servo HOLD failed · ${e instanceof Error ? e.message : String(e)}`);
+                }
+              }}
+            >
+              HOLD
+            </button>
             <div className="top-divider"></div>
             <button
               className="estop-btn"
@@ -1031,16 +1123,27 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
             </div>
           </section>
 
-          <section className="section">
+          <section className="section command-review-section">
             <div className="section-title">Command Pipeline</div>
-            <div className="pipeline">
-              {pipeline.map((step) => (
-                <div key={step.key} className={`pipe-step ${step.status}`}>
-                  <div className="pipe-num">{step.marker}</div>
-                  <span className="pipe-label">{step.label}</span>
-                </div>
-              ))}
-            </div>
+            {traceSteps.length > 0 ? (
+              <div className="trace-list">
+                {traceSteps.map((step) => (
+                  <div key={step.key} className={`trace-step ${step.status}`}>
+                    <div className="trace-head">
+                      <span className="trace-label">{step.label}</span>
+                      <span className={`trace-state ${step.status}`}>{step.status.toUpperCase()}</span>
+                    </div>
+                    <div className="trace-summary">{step.summary}</div>
+                    {step.details ? (
+                      <details className="trace-json">
+                        <summary>View JSON</summary>
+                        <pre>{prettyJson(step.details)}</pre>
+                      </details>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </section>
 
           <section className="section section-grow">
@@ -1128,7 +1231,8 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
             {state.messages.map((message) => {
               const role = toMessageRole(message.origin);
               const needsConfirmation =
-                message.tag === 'NEEDS_CONFIRMATION' && activeCommand?.commandId === message.commandId;
+                message.tag === 'NEEDS_CONFIRMATION' &&
+                (activeCommand?.commandId === message.commandId || activeSequence?.sequenceId === message.commandId);
 
               return (
                 <div key={message.id} className={`msg ${role}`}>
@@ -1144,7 +1248,7 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
                       <div className="confirm-btns">
                         <button
                           className="btn-confirm yes"
-                          disabled={!canConfirmCommands || !activeCommand?.planFingerprint}
+                          disabled={!canConfirmCommands || !activeReviewJob?.planFingerprint}
                           onClick={() => {
                             void handleConfirmClick();
                           }}
@@ -1258,57 +1362,6 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
                 </div>
               ))}
             </div>
-          </section>
-
-          <section className="section">
-            <div className="section-title">Command Review</div>
-            <div className="summary-chip">{activeCommand?.summaryLabel ?? 'No active command review'}</div>
-            <div
-              className={`result-chip ${
-                activeCommand?.lifecycleState === 'SUCCEEDED'
-                  ? 'success'
-                  : activeCommand?.lifecycleState === 'FAILED' ||
-                      activeCommand?.lifecycleState === 'REJECTED' ||
-                      activeCommand?.lifecycleState === 'CANCELLED' ||
-                      activeCommand?.lifecycleState === 'EXPIRED'
-                    ? 'fail'
-                    : 'pending'
-              }`}
-            >
-              {activeCommand?.lifecycleState ? humanizeLabel(activeCommand.lifecycleState) : 'Idle'}
-            </div>
-            <div className="lease-caption">
-              {activeCommand?.planFingerprint
-                ? `Plan fingerprint: ${activeCommand.planFingerprint.slice(0, 12)}...`
-                : 'No validated plan fingerprint yet.'}
-            </div>
-            {confirmationReasons.length > 0 ? (
-              <div className="lease-caption">Confirm reasons: {confirmationReasons.join(' ')}</div>
-            ) : null}
-            {blockingReasons.length > 0 ? (
-              <div className="lease-caption">Blocking reasons: {blockingReasons.join(' ')}</div>
-            ) : null}
-            {declineReason ? <div className="lease-caption lease-caption-error">Decline reason: {declineReason}</div> : null}
-            {executionSummary ? <div className="lease-caption">{executionSummary}</div> : null}
-            {traceSteps.length > 0 ? (
-              <div className="trace-list">
-                {traceSteps.map((step) => (
-                  <div key={step.key} className={`trace-step ${step.status}`}>
-                    <div className="trace-head">
-                      <span className="trace-label">{step.label}</span>
-                      <span className={`trace-state ${step.status}`}>{step.status.toUpperCase()}</span>
-                    </div>
-                    <div className="trace-summary">{step.summary}</div>
-                    {step.details ? (
-                      <details className="trace-json">
-                        <summary>View JSON</summary>
-                        <pre>{prettyJson(step.details)}</pre>
-                      </details>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            ) : null}
           </section>
 
           <section className="section">

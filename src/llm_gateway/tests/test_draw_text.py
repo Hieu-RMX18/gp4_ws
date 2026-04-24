@@ -119,13 +119,13 @@ def test_draw_text_alignment_and_spacing_fields_are_supported():
     assert result.metadata["summary"]["draw_stroke_count"] >= 1
 
 
-def test_draw_text_plan_only_marks_all_commands_for_confirmation():
+def test_draw_text_plan_only_marks_commands_without_requiring_approval():
     router = _router(runtime_mode="sim")
 
     result = router.route(_draw_text_payload(execution_mode="plan_only"))
 
     for command in result.commands:
-        assert command["require_approval"] is True
+        assert command["require_approval"] is False
         assert command["plan_only"] is True
 
 

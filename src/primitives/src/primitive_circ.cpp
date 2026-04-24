@@ -384,12 +384,19 @@ PrimitiveResult PrimitiveCirc::execute(const CIRCGoal & goal, MoveGroupInterface
 
 PrimitiveResult PrimitiveCirc::execute(const ExecuteMotionGoal & goal, MoveGroupInterface & mgi)
 {
-  (void)goal;
-  (void)mgi;
+  if (goal.waypoints.empty())
+  {
+    return make_failure(
+      PrimitiveFailReason::UNKNOWN,
+      "CIRC requires at least 1 auxiliary waypoint in waypoints[]");
+  }
 
-  return make_failure(
-    PrimitiveFailReason::UNKNOWN,
-    "ExecuteMotion goal for CIRC lacks auxiliary_point; use typed CIRCGoal API");
+  CIRCGoal circ_goal;
+  circ_goal.auxiliary_point = goal.waypoints[0];
+  circ_goal.goal_pose = goal.target_pose;
+  circ_goal.velocity_scale = goal.velocity_scale;
+  circ_goal.acceleration_scale = goal.acceleration_scale;
+  return execute(circ_goal, mgi);
 }
 
 PrimitiveResult PrimitiveCirc::execute(const CIRCGoal & goal, CircExecutionBackend & backend)

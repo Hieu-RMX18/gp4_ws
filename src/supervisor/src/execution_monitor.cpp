@@ -445,19 +445,27 @@ void ExecutionMonitor::finalize_goal(
 
 void ExecutionMonitor::publish_heartbeat()
 {
-  ExecutionMonitorSnapshot local_snapshot;
+  uint8_t heartbeat_level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+  std::string heartbeat_message = "idle";
   {
     std::lock_guard<std::mutex> lock(snapshot_mutex_);
-    if (snapshot_.last_alert_message.empty())
+    if (state_ == ExecutionMonitorState::kIdle)
+    {
+      snapshot_.last_alert_level = diagnostic_msgs::msg::DiagnosticStatus::OK;
+      snapshot_.last_alert_message = "idle";
+    }
+    else if (snapshot_.last_alert_message.empty())
     {
       snapshot_.last_alert_message = "idle";
     }
-    local_snapshot = snapshot_;
+
+    heartbeat_level = snapshot_.last_alert_level;
+    heartbeat_message = snapshot_.last_alert_message;
   }
 
   publish_alert(
-    local_snapshot.last_alert_level,
-    local_snapshot.last_alert_message,
+    heartbeat_level,
+    heartbeat_message,
     "heartbeat");
 }
 

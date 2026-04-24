@@ -13,7 +13,7 @@ workspace_bounds:
   y_min: -0.16   # station front wall -0.197m + 37mm; kept above front_wall_guard max
   y_max:  0.52   # reach-limited  (back wall at +0.806m, beyond reach)
   z_min:  0.23   # table-top estimated 0.20m + 30mm margin
-  z_max:  0.52   # conservative cap; keeps motions in validated commissioning envelope
+  z_max:  0.56   # relaxed from 0.52 for commissioning; current TCP z~0.53 when START
 
 # Backward-compatible keys still used by safety.command_validator.
 joint_limits_override:
@@ -58,7 +58,7 @@ forbidden_zones:
     size_z: 0.20
 
 require_human_approval:
-  # Advisory only for now (current code path does not enforce this key directly).
-  # Keep below hardware motion max so operator review policy remains conservative.
+  # Advisory HMI/supervisor review policy only; ExecuteMotion.require_approval
+  # is a deprecated compatibility field and is not enforced by motion_core.
   velocity_scale_threshold: 0.05
   distance_from_home_threshold: 0.30

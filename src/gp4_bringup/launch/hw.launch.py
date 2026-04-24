@@ -224,6 +224,15 @@ def generate_launch_description():
 
     # V4 Phase 1: motion_core MUST be launched on real hardware path too.
     # Same /execute_motion contract as simulation.
+    # Load motion limits from safety_rules.yaml (single source of truth).
+    _safety_yaml_path = os.path.join(
+        get_package_share_directory('safety'), 'config', 'safety_rules.yaml')
+    _safety_rules = {}
+    if os.path.exists(_safety_yaml_path):
+        with open(_safety_yaml_path, 'r') as _f:
+            _safety_rules = yaml.safe_load(_f) or {}
+    _motion_limits = _safety_rules.get('motion_limits', {})
+
     motion_core_node = Node(
         package='motion_core',
         executable='motion_core_node',
@@ -237,6 +246,9 @@ def generate_launch_description():
                 "dispatch_timeout_sec": 60.0,
                 "scene_objects_path": os.path.join(gp4_bringup_share, 'config', 'scene_objects.yaml'),
                 "require_planning_scene": True,
+                # Motion limits from safety_rules.yaml
+                "max_velocity_scale": _motion_limits.get('max_velocity_scale', 0.06),
+                "max_acceleration_scale": _motion_limits.get('max_acceleration_scale', 0.06),
             },
         ],
     )

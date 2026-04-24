@@ -205,6 +205,7 @@ class TelemetryBridgeService:
             "lease": self._serialize_lease_view(session_id, operator_id),
             "messages": [],
             "activeCommand": None,
+            "activeSequence": None,
             "planMetrics": None,
             "replayItems": [],
         }

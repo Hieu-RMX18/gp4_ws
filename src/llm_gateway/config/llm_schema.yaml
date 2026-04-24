@@ -164,6 +164,17 @@ properties:
     type: number
   delta_z:
     type: number
+  linear_unit:
+    type: string
+    enum:
+      - m
+      - cm
+      - mm
+  angular_unit:
+    type: string
+    enum:
+      - rad
+      - deg
   reference_frame:
     type: string
     enum:

@@ -186,6 +186,7 @@ export interface CommandExecutionResult {
 
 export interface CommandView {
   commandId: string;
+  commandKind: 'command';
   sessionId: string;
   operatorId: string;
   rawText: string;
@@ -210,10 +211,47 @@ export interface CommandView {
   executeAt: string | null;
   executionResult?: CommandExecutionResult | null;
   finalState: TerminalCommandLifecycleState | null;
+  parentSequenceId?: string | null;
+  sequenceStepIndex?: number | null;
+  sequenceStepCount?: number | null;
+}
+
+export interface SequenceView {
+  sequenceId: string;
+  commandKind: 'sequence';
+  sessionId: string;
+  operatorId: string;
+  rawText: string;
+  intentSource: 'text' | 'structured';
+  structuredIntent?: Record<string, unknown> | null;
+  lifecycleState: CommandLifecycleState;
+  summaryLabel: string;
+  plannerUsed: string | null;
+  frameUsed: string | null;
+  mode: RuntimeMode;
+  riskLevel: CommandRiskLevel | null;
+  planFingerprint: string | null;
+  correlationId: string | null;
+  rejectReason: string | null;
+  validationResult?: CommandValidationResult | null;
+  planSummary?: Record<string, unknown> | null;
+  metrics?: PlanMetrics | null;
+  confirmationExpiresAt: string | null;
+  createdAt: string;
+  confirmAt: string | null;
+  executeAt: string | null;
+  executionResult?: CommandExecutionResult | null;
+  finalState: TerminalCommandLifecycleState | null;
+  stepCount: number;
+  currentStepIndex?: number | null;
+  diagnostics: string[];
+  manualRecoveryRequired: boolean;
+  steps: CommandView[];
 }
 
 export interface ReplayListItem {
   commandId: string;
+  kind: 'command' | 'sequence';
   sessionId: string;
   operatorId: string;
   summaryLabel: string;
@@ -225,6 +263,9 @@ export interface ReplayListItem {
   createdAt: string;
   executeAt: string | null;
   riskLevel: CommandRiskLevel | null;
+  stepCount?: number | null;
+  currentStepIndex?: number | null;
+  manualRecoveryRequired: boolean;
 }
 
 export interface TimelineEvent {
@@ -239,7 +280,9 @@ export interface TimelineEvent {
 }
 
 export interface ReplayDetail {
-  command: CommandView;
+  jobType: 'command' | 'sequence';
+  command: CommandView | null;
+  sequence: SequenceView | null;
   timeline: TimelineEvent[];
   runtimeEvents: TimelineEvent[];
 }
@@ -257,6 +300,7 @@ export interface HmiStateSnapshot {
   runtime: RuntimeSnapshot;
   messages: ChatMessage[];
   activeCommand: CommandView | null;
+  activeSequence: SequenceView | null;
   jointPositions: JointPosition[];
   planMetrics: PlanMetrics | null;
   replayItems: ReplayListItem[];
@@ -338,10 +382,13 @@ export interface LeaseMutationResponse {
 
 export interface CommandMutationResponse {
   accepted: boolean;
-  commandId: string;
+  jobType: 'command' | 'sequence';
+  commandId: string | null;
+  sequenceId?: string | null;
   reason: string | null;
   snapshot?: HmiStateSnapshot | null;
-  command: CommandView;
+  command: CommandView | null;
+  sequence?: SequenceView | null;
 }
 
 export interface ReplayListQuery {
@@ -362,6 +409,7 @@ export type HmiStreamEvent =
   | { type: 'heartbeat'; schemaVersion: string; generatedAt: string; transportState: TransportState; telemetryState: TelemetryState }
   | { type: 'lease_state'; lease: LeaseView; capabilities: BridgeCapabilities }
   | { type: 'command_lifecycle'; command: CommandView; messages?: ChatMessage[]; planMetrics?: PlanMetrics | null }
+  | { type: 'sequence_lifecycle'; sequence: SequenceView; messages?: ChatMessage[] }
   | { type: 'replay_updated'; replayItems: ReplayListItem[] }
   | { type: 'connection_state'; transportState: TransportState; connections?: BridgeConnection[] }
   | { type: 'jog_bridge_status'; jogBridgeStatus: JogBridgeStatusSnapshot };
@@ -410,6 +458,11 @@ export interface JogBridgeCapabilities {
   isExclusiveMode: boolean;  // true when jog bridge is active (blocks FJT path)
 }
 
+export interface ServoControlResponse {
+  accepted: boolean;
+  message: string;
+}
+
 export interface GP4BridgeClient {
   connect(params: {
     sessionId: string;
@@ -422,14 +475,20 @@ export interface GP4BridgeClient {
   releaseLease(request: LeaseReleaseRequest): Promise<LeaseMutationResponse>;
   submitCommand(request: CommandIntentRequest): Promise<CommandMutationResponse>;
   confirmCommand(commandId: string, request: CommandConfirmRequest): Promise<CommandMutationResponse>;
+  confirmSequence(sequenceId: string, request: CommandConfirmRequest): Promise<CommandMutationResponse>;
   abortCommand(commandId: string, request: CommandCancelRequest): Promise<CommandMutationResponse>;
+  abortSequence(sequenceId: string, request: CommandCancelRequest): Promise<CommandMutationResponse>;
   getRuntimeState(sessionId: string, operatorId: string): Promise<RuntimeStateResponse>;
   getConnectionState(): Promise<ConnectionStateResponse>;
   getLeaseState(sessionId: string, operatorId: string): Promise<LeaseStateResponse>;
   listReplay(query?: ReplayListQuery): Promise<ReplayListResponse>;
   getReplayDetail(commandId: string): Promise<ReplayDetail>;
+  getSequence(sequenceId: string): Promise<SequenceView>;
   // Jog pendant
   activateJogBridge(): Promise<{ accepted: boolean; message: string }>;
   deactivateJogBridge(): Promise<{ accepted: boolean; message: string }>;
-  sendJogCommand(cmd: JogCommandRequest): void;  // fire-and-forget via REST
+  sendJogCommand(cmd: JogCommandRequest): Promise<{ accepted: boolean; message: string }>;
+  // Servo control
+  startServo(): Promise<ServoControlResponse>;
+  stopServo(): Promise<ServoControlResponse>;
 }

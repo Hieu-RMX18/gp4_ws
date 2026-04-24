@@ -283,7 +283,14 @@ class IntentRouter(DrawRouterMixin):
 
     def _optional_motion_fields(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         command: Dict[str, Any] = {}
-        for field in ("velocity_scale", "acceleration_scale", "planner_id", "require_approval"):
+        for field in (
+            "velocity_scale",
+            "acceleration_scale",
+            "planner_id",
+            "require_approval",
+            "linear_unit",
+            "angular_unit",
+        ):
             if field in payload:
                 command[field] = payload[field]
         return command

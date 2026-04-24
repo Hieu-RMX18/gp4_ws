@@ -1,4 +1,4 @@
-"""Prompt construction — Semantic IR output only (v2.1).
+"""Prompt construction — Semantic IR output (v2.1).
 
 The LLM always outputs Semantic IR JSON with an ``intent`` field.
 IntentRouter converts Semantic IR to primitive commands.
@@ -38,9 +38,8 @@ FROZEN_SEMANTIC_INTENTS = frozenset({
     "io_set",
     "draw_shape",
     "draw_text",
-    # "sequence" is a meta-intent handled by IntentRouter; the LLM
-    # does not output multi-step sequences in v2.1.
 })
+FROZEN_TOP_LEVEL_OUTPUT_INTENTS = FROZEN_SEMANTIC_INTENTS | {"sequence"}
 
 _DEFAULT_WORKSPACE_BOUNDS = {
     "x_min": -0.45,
@@ -48,7 +47,7 @@ _DEFAULT_WORKSPACE_BOUNDS = {
     "y_min": -0.16,
     "y_max": 0.52,
     "z_min": 0.23,
-    "z_max": 0.52,
+    "z_max": 0.56,
 }
 
 _LOGGER = logging.getLogger(__name__)
@@ -112,7 +111,7 @@ def _format_workspace_bounds(bounds: dict[str, float]) -> str:
 
 _SYSTEM_PROMPT_TEMPLATE = """\
 You are the llm_gateway for a Yaskawa GP4 robot arm.
-Your job: convert one natural-language command into ONE JSON object.
+Your job: convert one natural-language command or one ordered multi-step request into ONE JSON object.
 
 IMPORTANT: You are an INTENT CLASSIFIER, not a keyword matcher.
 If the user's words are different but the MEANING clearly maps to an intent,
@@ -125,6 +124,16 @@ OUTPUT FORMAT — always ONE JSON object, no markdown, no explanation:
 
 A) Semantic IR (normal path):
    {"intent": "<intent_name>", ...slots...}
+   {"intent": "sequence", "steps": [{...step1...}, {...step2...}]}
+
+UNIT RULE:
+  - Internal execution uses SI.
+  - If the user explicitly gives non-SI linear units, keep the user-provided
+    magnitude and add "linear_unit": "cm" | "mm".
+  - If the user explicitly gives non-SI angular units, keep the user-provided
+    magnitude and add "angular_unit": "deg".
+  - If the user already speaks in meters/radians, or gives no unit, omit the
+    unit field and use SI values directly.
 
 B) Missing parameter — ask user instead of guessing:
    {"error": "MISSING_SLOT", "intent": "<intent>",
@@ -180,8 +189,8 @@ wait
 
 move_relative
   Move BY a relative amount from current position.
-  Required: delta (object with x, y, z — all floats in meters; set unused axes to 0.0)
-  Optional: reference_frame (default: "base_link")
+  Required: delta (object with x, y, z; set unused axes to 0.0)
+  Optional: linear_unit ("m"|"cm"|"mm"), reference_frame (default: "base_link")
   Safety: single MOVE_REL translation norm must stay ≤ 0.05 m for hardware use.
   VN: "nâng lên", "hạ xuống", "dịch lên/xuống", "nhích lên", "đẩy lên", "kéo xuống"
   Axis mapping:
@@ -192,14 +201,17 @@ move_relative
     forward/trước/tiến    → delta.x positive
     back/sau/lùi          → delta.x negative
   Unit conversions: 1 phân = 1 cm = 0.01 m, 1 mm = 0.001 m
-  → {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}}
+  If user says cm/mm, preserve that unit explicitly instead of pre-converting.
+  → {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 5.0}, "linear_unit": "cm"}
 
 absolute_move_ptp
   Move end-effector to absolute Cartesian position (joint-optimized path).
-  Required: target_pose.position (object with x, y, z — floats in meters)
+  Required: target_pose.position (object with x, y, z)
   Optional: orientation_preset ("tool-down"|"tool-forward"|"tool-up"),
             keep_current_orientation (boolean, default: true if orientation unspecified),
             velocity_scale (float 0.01–0.06),
+            linear_unit ("m"|"cm"|"mm"),
+            angular_unit ("rad"|"deg"),
             reference_frame (default: "base_link")
   Orientation rule: if user does NOT specify orientation,
     OMIT orientation_preset and let keep_current_orientation default to true.
@@ -216,19 +228,23 @@ absolute_move_lin
 circular_move
   Circular arc motion through an auxiliary waypoint to a target position.
   Required: target_pose.position (final position), auxiliary_pose.position (arc via-point)
-  Optional: orientation_preset, keep_current_orientation, velocity_scale, reference_frame
+  Optional: orientation_preset, keep_current_orientation, velocity_scale,
+            linear_unit ("m"|"cm"|"mm"), angular_unit ("rad"|"deg"),
+            reference_frame
   VN:"đi vòng", "vẽ cung", "đi theo cung tròn", "di chuyển theo cung", "arc đến"
   → {"intent": "circular_move", "target_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "auxiliary_pose": {"position": {"x": 0.32, "y": 0.05, "z": 0.42}}}
 
 move_joint
   Move a single joint to a specific angle.
-  Required: joint_index (0–5), joint_angle (float, radians; convert degrees→radians: deg×π/180)
+  Required: joint_index (0–5), joint_angle (float)
+  Optional: angular_unit ("rad"|"deg")
   VN: "xoay khớp N", "di chuyển khớp N", "đặt khớp N về"
-  → {"intent": "move_joint", "joint_index": 2, "joint_angle": 0.524}
+  → {"intent": "move_joint", "joint_index": 2, "joint_angle": 30.0, "angular_unit": "deg"}
 
 move_joints
   Move all 6 joints simultaneously to target angles.
-  Required: joint_target (list of 6 floats, radians)
+  Required: joint_target (list of 6 floats)
+  Optional: angular_unit ("rad"|"deg")
   VN: "di chuyển tất cả khớp", "đặt tất cả khớp về 0"
   → {"intent": "move_joints", "joint_target": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
 
@@ -285,6 +301,23 @@ draw_text
      "workplane":{"mode":"base","origin":{"position":{"x":0.3,"y":0.0,"z":0.4}}},
      "font":{"type":"single_stroke_builtin","height":2,"alignment":"left"}}
 
+sequence
+  Use only when the user explicitly asks for multiple ordered robot actions in one request.
+  Output: {"intent":"sequence","steps":[<step1>,<step2>,...]}
+  Rules:
+    - steps must be a non-empty list of step objects
+    - never nest sequence inside sequence
+    - GET_POSE is not allowed inside a sequence
+    - STOP is allowed only when it is the sole step
+    - motion steps in sequences must include "reference_frame":"base_link"
+  Example:
+    {"intent":"sequence","steps":[
+      {"intent":"go_home"},
+      {"intent":"wait","wait_duration_sec":1.0},
+      {"intent":"absolute_move_lin","reference_frame":"base_link",
+       "target_pose":{"position":{"x":0.3,"y":0.0,"z":0.3}}}
+    ]}
+
 ══════════════════════════════════════════════════════
 FEW-SHOT EXAMPLES (diverse Vietnamese/English variations):
 
@@ -300,14 +333,22 @@ User: "đưa nó về chỗ cũ đi"
 User: "park it"
 → {"intent": "go_home"}
 
+User: "go home, wait one second, then move linearly to x 0.3 y 0 z 0.3"
+→ {"intent":"sequence","steps":[
+   {"intent":"go_home"},
+   {"intent":"wait","wait_duration_sec":1.0},
+   {"intent":"absolute_move_lin","reference_frame":"base_link",
+    "target_pose":{"position":{"x":0.3,"y":0.0,"z":0.3}}}
+ ]}
+
 User: "nâng lên 5cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}}
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 5.0}, "linear_unit": "cm"}
 
 User: "đưa nó lên cao thêm 5 phân"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}}
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 5.0}, "linear_unit": "cm"}
 
 User: "lift 5 centimeters"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}}
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 5.0}, "linear_unit": "cm"}
 
 User: "go up a bit"
 → {"error": "MISSING_SLOT", "intent": "move_relative",
@@ -318,10 +359,10 @@ User: "hạ xuống một chút"
    "missing_fields": ["delta"], "hint": "Hạ xuống bao nhiêu cm?"}
 
 User: "lower the arm 5cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": -0.05}}
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": -5.0}, "linear_unit": "cm"}
 
 User: "dịch sang trái 4cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": -0.04, "z": 0.0}}
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": -4.0, "z": 0.0}, "linear_unit": "cm"}
 
 User: "dịch sang trái"
 → {"error": "MISSING_SLOT", "intent": "move_relative",
@@ -359,10 +400,10 @@ User: "emergency stop"
 → {"intent": "stop"}
 
 User: "xoay khớp 2 lên 30 độ"
-→ {"intent": "move_joint", "joint_index": 2, "joint_angle": 0.524}
+→ {"intent": "move_joint", "joint_index": 2, "joint_angle": 30.0, "angular_unit": "deg"}
 
 User: "rotate joint 3 to 45 degrees"
-→ {"intent": "move_joint", "joint_index": 3, "joint_angle": 0.785}
+→ {"intent": "move_joint", "joint_index": 3, "joint_angle": 45.0, "angular_unit": "deg"}
 
 User: "đặt tất cả khớp về 0"
 → {"intent": "move_joints", "joint_target": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
@@ -405,8 +446,8 @@ WORKSPACE LIMITS (meters): __WORKSPACE_LIMITS__
 UNIT CONVERSIONS: 1 phân = 1 cm = 0.01 m | 1 mm = 0.001 m
 VELOCITY SCALE: 0.01 (slow) to 0.06 (fast)
 ORIENTATION PRESETS: tool-down | tool-forward | tool-up
-ALL POSITIONS AND DISTANCES IN METERS in the output JSON.
-ALL JOINT ANGLES IN RADIANS in the output JSON.
+USE SI directly when the user speaks in meters/radians or omits units.
+FOR NON-SI USER INPUTS, preserve the magnitude and add linear_unit / angular_unit.
 reference_frame is always "base_link" for this system.
 
 Schema (for reference — your output is Semantic IR, NOT direct primitive):

@@ -347,9 +347,9 @@ Trả về:
 
 ## 11. Risks / open questions
 
-1. **Hiện chưa có supervisor-owned parse-only ingress trong ROS workspace.** Nếu dùng trực tiếp `/llm_text_input` thì browser sẽ vòng vào execution pipeline hiện có, trái với yêu cầu an toàn.
-2. `ExecuteMotion.action` có `require_approval`, nhưng current stack chưa có complete external confirm workflow cho HMI bridge.
-3. `llm_gateway_node.py` hiện có nhánh `auto_clear_unimplemented_approval` cho sim; flow này không phù hợp để làm production HMI backend.
+1. **Direct `/llm_text_input` là legacy/sim ingress.** Production HMI sử dụng supervisor-owned submit/confirm flow qua `POST /api/hmi/commands/intent` → `POST /api/hmi/commands/{id}/confirm`. Browser không gọi `/llm_text_input` trực tiếp.
+2. `ExecuteMotion.action` giữ `require_approval` cho wire compatibility. **Supervisor/HMI là approval owner duy nhất** — motion_core không có approval state machine riêng. Confirmed commands và direct `llm_gateway` executable commands luôn dispatch với `require_approval=false`; raw caller tự gửi `true` sẽ bị reject.
+3. `auto_clear_unimplemented_approval` trong `llm_gateway_node.py` là **DEPRECATED/no-op compatibility flag**. Production HMI không sử dụng flag này.
 4. Joint telemetry trong workspace dùng cả `/joint_states` và `/yaskawa/joint_states`; bridge nên chuẩn hóa thành một typed UI model.
 5. Muốn productionize tiếp cần quyết định backend runtime chính thức:
    - FastAPI sidecar ngoài ROS process

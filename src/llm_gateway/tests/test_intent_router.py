@@ -204,6 +204,22 @@ def test_move_relative():
     assert cmd["reference_frame"] == "base_link"
 
 
+def test_move_relative_preserves_explicit_linear_unit():
+    router = _router()
+
+    result = router.route({
+        "intent": "move_relative",
+        "delta": {"x": 0.0, "y": 0.0, "z": 5.0},
+        "linear_unit": "cm",
+        "reference_frame": "base_link",
+    })
+
+    cmd = result.commands[0]
+    assert cmd["primitive_type"] == "MOVE_REL"
+    assert cmd["delta_z"] == 5.0
+    assert cmd["linear_unit"] == "cm"
+
+
 def test_move_relative_missing_delta_raises():
     router = _router()
 
@@ -447,7 +463,7 @@ def test_sequence_non_dict_step_raises():
 
 
 def test_optional_motion_fields_forwarded():
-    """velocity_scale, acceleration_scale, planner_id, require_approval pass through."""
+    """Motion metadata, including explicit unit hints, passes through."""
     router = _router()
 
     result = router.route({
@@ -456,6 +472,8 @@ def test_optional_motion_fields_forwarded():
         "acceleration_scale": 0.1,
         "planner_id": "PILZ_PTP",
         "require_approval": True,
+        "linear_unit": "mm",
+        "angular_unit": "deg",
     })
 
     cmd = result.commands[0]
@@ -463,6 +481,8 @@ def test_optional_motion_fields_forwarded():
     assert cmd["acceleration_scale"] == 0.1
     assert cmd["planner_id"] == "PILZ_PTP"
     assert cmd["require_approval"] is True
+    assert cmd["linear_unit"] == "mm"
+    assert cmd["angular_unit"] == "deg"
 
 
 # ── Semantic intent naming consistency ───────────────────────────────────────

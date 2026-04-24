@@ -46,6 +46,22 @@ class JogServiceContractTests(unittest.TestCase):
         self.assertFalse(DEFAULT_JOG_STATUS.robot_ready)
         self.assertFalse(DEFAULT_JOG_STATUS.servo_active)
 
+    def test_activate_bridge_fails_closed_when_ros_node_is_unavailable(self) -> None:
+        service = JogService()
+
+        accepted, message = service.activate_bridge()
+
+        self.assertFalse(accepted)
+        self.assertIn('ROS node unavailable', message)
+
+    def test_deactivate_bridge_fails_closed_when_ros_node_is_unavailable(self) -> None:
+        service = JogService()
+
+        accepted, message = service.deactivate_bridge()
+
+        self.assertFalse(accepted)
+        self.assertIn('ROS node unavailable', message)
+
 
 if __name__ == "__main__":
     unittest.main()

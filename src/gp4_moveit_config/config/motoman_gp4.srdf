@@ -31,14 +31,14 @@
         <joint name="joint_5_b" value="-2.0"/>
         <joint name="joint_6_t" value="0"/>
     </group_state>
-    <!-- READY stays below the crossbar lane and above the table keepout. -->
+    <!-- READY captured from real GP4 on 2026-04-24 (operator-defined commissioning pose). -->
     <group_state name="ready" group="gp4_arm">
-        <joint name="joint_1_s" value="0.1"/>
-        <joint name="joint_2_l" value="0.45"/>
-        <joint name="joint_3_u" value="-0.2"/>
-        <joint name="joint_4_r" value="0"/>
-        <joint name="joint_5_b" value="-1.7"/>
-        <joint name="joint_6_t" value="0"/>
+        <joint name="joint_1_s" value="1.938101818035138"/>
+        <joint name="joint_2_l" value="0.0903533622099061"/>
+        <joint name="joint_3_u" value="-0.15852595742235326"/>
+        <joint name="joint_4_r" value="0.0"/>
+        <joint name="joint_5_b" value="-1.1752774274713826"/>
+        <joint name="joint_6_t" value="0.05333592949720888"/>
     </group_state>
     <!-- poseA captured from teach pendant / joint_states on 2026-04-12. -->
     <group_state name="poseA" group="gp4_arm">

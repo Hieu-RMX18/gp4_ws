@@ -70,10 +70,16 @@ public:
     dispatch_client_ = rclcpp_action::create_client<DispatchTrajectory>(
       this,
       dispatch_action_name_);
+    // Motion limits loaded from ROS params; launch config sources safety_rules.yaml.
+    // Hardcoded defaults are fail-safe only.
+    max_velocity_scale_ = declare_parameter<double>(
+      "max_velocity_scale", kFailsafeMaxVelocityScale);
+    max_acceleration_scale_ = declare_parameter<double>(
+      "max_acceleration_scale", kFailsafeMaxAccelerationScale);
     action_support_ = std::make_unique<ExecuteMotionActionSupport>(
       get_logger(),
-      kMaxVelocityScale,
-      kMaxAccelerationScale);
+      max_velocity_scale_,
+      max_acceleration_scale_);
     dispatch_executor_ = std::make_unique<DispatchTrajectoryExecutor>(
       get_logger(),
       dispatch_client_,
@@ -219,8 +225,11 @@ public:
   }
 
 private:
-  static constexpr double kMaxVelocityScale = 0.06;
-  static constexpr double kMaxAccelerationScale = 0.06;
+  // Fail-safe defaults — active policy comes from ROS params set by launch config.
+  static constexpr double kFailsafeMaxVelocityScale = 0.06;
+  static constexpr double kFailsafeMaxAccelerationScale = 0.06;
+  double max_velocity_scale_;
+  double max_acceleration_scale_;
   static constexpr double kPlanningTimeSec = 5.0;
   static constexpr const char * kPlanningGroup = "gp4_arm";
   // Production point-budget policy.
@@ -571,10 +580,7 @@ private:
     {
       abort_with_message(
           goal_handle, started_at,
-          "[DEFERRED] require_approval=true: human-in-the-loop approval gate "
-          "is architecturally reserved but not implemented in Phase 4. "
-          "Set require_approval=false or auto_clear_unimplemented_approval=true "
-          "in the gateway launch config to use the current execution path.");
+          ExecuteMotionActionSupport::approval_rejected_message());
       return;
     }
 

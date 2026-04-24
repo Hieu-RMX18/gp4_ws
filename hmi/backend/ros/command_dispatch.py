@@ -326,7 +326,11 @@ class CommandDispatchMixin:
     def _build_command_payload(self, parsed_intent: dict[str, Any]) -> dict[str, Any]:
         normalized_command = parsed_intent.get("normalizedCommand")
         if isinstance(normalized_command, dict) and normalized_command.get("primitive_type"):
-            return dict(normalized_command)
+            command_payload = dict(normalized_command)
+            # HMI/supervisor owns human confirmation. Once a command crosses this
+            # execution boundary, require_approval must already be satisfied.
+            command_payload["require_approval"] = False
+            return command_payload
 
         action = str(parsed_intent.get("action") or "").strip()
         parameters = dict(parsed_intent.get("parameters") or {})
@@ -353,6 +357,7 @@ class CommandDispatchMixin:
         }:
             payload = {"primitive_type": primitive_action}
             payload.update(parameters)
+            payload["require_approval"] = False
             return payload
 
         if action == "move_home":
@@ -413,8 +418,9 @@ class CommandDispatchMixin:
         request.command_json = json.dumps(command_payload, ensure_ascii=True, separators=(",", ":"))
         request.primitive_type = str(command_payload["primitive_type"])
         request.velocity_scale = float(command_payload.get("velocity_scale", 0.0))
-        if "target_pose" in command_payload and Pose is not None:
-            pose = self._dict_to_pose(command_payload["target_pose"])
+        target_pose_payload = self._cartesian_path_target_pose(command_payload)
+        if target_pose_payload is not None and Pose is not None:
+            pose = self._dict_to_pose(target_pose_payload)
             request.target_pose = pose
 
         try:
@@ -711,8 +717,9 @@ class CommandDispatchMixin:
         goal.io_value = int(command_payload.get("io_value", 0))
         goal.joint_target = [float(value) for value in command_payload.get("joint_target", [])]
 
-        if "target_pose" in command_payload and Pose is not None:
-            goal.target_pose = self._dict_to_pose(command_payload["target_pose"])
+        target_pose_payload = self._cartesian_path_target_pose(command_payload)
+        if target_pose_payload is not None and Pose is not None:
+            goal.target_pose = self._dict_to_pose(target_pose_payload)
         if "waypoints" in command_payload and Pose is not None:
             goal.waypoints = [
                 self._dict_to_pose(waypoint)
@@ -720,6 +727,20 @@ class CommandDispatchMixin:
             ]
 
         return goal
+
+    def _cartesian_path_target_pose(self, command_payload: dict[str, Any]) -> dict[str, Any] | None:
+        target_pose = command_payload.get("target_pose")
+        if isinstance(target_pose, dict):
+            return target_pose
+        if str(command_payload.get("primitive_type") or "").upper() != "CARTESIAN_PATH":
+            return None
+        waypoints = command_payload.get("waypoints")
+        if not isinstance(waypoints, list) or not waypoints:
+            return None
+        final_waypoint = waypoints[-1]
+        if not isinstance(final_waypoint, dict):
+            return None
+        return final_waypoint
 
     def _dict_to_pose(self, payload: dict[str, Any]) -> Any:
         pose = Pose()

@@ -4,6 +4,7 @@ import unittest
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any
 
 from hmi.backend.domain.models import (
     BridgeConnection,
@@ -57,6 +58,7 @@ class FakeSupervisorAdapter:
         self.submit_calls: list[dict] = []
         self.confirm_calls: list[dict] = []
         self.abort_calls: list[dict] = []
+        self.get_pose_calls: list[dict] = []
         self._runtime = RuntimeSnapshot(
             system_state=SystemRuntimeState.NORMAL,
             blocking=False,
@@ -160,6 +162,10 @@ class FakeSupervisorAdapter:
             'sourceStatuses': [],
             'runtimeState': 'NORMAL',
         }
+        self._current_pose: dict[str, Any] | None = {
+            'position': {'x': 0.30, 'y': 0.00, 'z': 0.30},
+            'orientation': {'x': 0.0, 'y': 1.0, 'z': 0.0, 'w': 0.0},
+        }
 
     def start(self) -> None:
         self.started = True
@@ -202,6 +208,12 @@ class FakeSupervisorAdapter:
     def abort_command(self, **kwargs):
         self.abort_calls.append(kwargs)
         return True, 'cancelled before ROS dispatch'
+
+    def get_current_pose(self, *, reference_frame: str = 'base_link') -> dict[str, Any] | None:
+        self.get_pose_calls.append({'reference_frame': reference_frame})
+        if self._current_pose is None:
+            return None
+        return deepcopy(self._current_pose)
 
     def set_runtime(self, system_state: SystemRuntimeState, *, mode: RuntimeMode = RuntimeMode.SIM) -> None:
         self._runtime = RuntimeSnapshot(
@@ -249,6 +261,9 @@ class FakeSupervisorAdapter:
             'sourceStatuses': [],
             'runtimeState': self._runtime.system_state.value,
         }
+
+    def set_current_pose(self, pose: dict[str, Any] | None) -> None:
+        self._current_pose = deepcopy(pose)
 
 
 class SupervisorServiceTests(unittest.TestCase):
@@ -351,6 +366,21 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertEqual(normalized_command['primitive_type'], 'MOVE_JOINT')
         self.assertEqual(normalized_command['joint_index'], 1)
         self.assertAlmostEqual(normalized_command['joint_angle'], 5.0 * 3.141592653589793 / 180.0)
+
+    def test_signed_joint_text_intent_maps_to_relative_joint_target(self) -> None:
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='move joint 2 +5 deg',
+            mode='sim',
+        )
+        self.assertTrue(response['accepted'])
+        normalized_command = response['command']['parsedIntent']['normalizedCommand']
+        self.assertEqual(normalized_command['primitive_type'], 'MOVE_JOINT')
+        self.assertEqual(normalized_command['joint_index'], 1)
+        self.assertAlmostEqual(normalized_command['joint_angle'], 10.0 * 3.141592653589793 / 180.0)
 
     def test_confirmation_required_command_stops_before_execution_boundary(self) -> None:
         lease_token = self._acquire_lease()
@@ -534,6 +564,38 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertEqual(len(self.adapter.confirm_calls), 1)
         self.assertEqual(confirm_response['command']['lifecycleState'], 'SUCCEEDED')
         self.assertEqual(confirm_response['command']['finalState'], 'SUCCEEDED')
+
+    def test_get_pose_uses_query_service_without_motion_execution(self) -> None:
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='get pose',
+            mode='sim',
+        )
+
+        confirm_response = self.supervisor.confirm_command(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            command_id=response['commandId'],
+            plan_fingerprint=response['command']['planFingerprint'],
+        )
+
+        self.assertTrue(confirm_response['accepted'])
+        self.assertEqual(confirm_response['command']['lifecycleState'], 'SUCCEEDED')
+        self.assertEqual(confirm_response['command']['finalState'], 'SUCCEEDED')
+        self.assertEqual(self.adapter.confirm_calls, [])
+        self.assertEqual(self.adapter.get_pose_calls, [{'reference_frame': 'base_link'}])
+        self.assertTrue(confirm_response['command']['executionResult']['queryOnly'])
+        self.assertEqual(
+            confirm_response['command']['executionResult']['pose'],
+            {
+                'position': {'x': 0.30, 'y': 0.00, 'z': 0.30},
+                'orientation': {'x': 0.0, 'y': 1.0, 'z': 0.0, 'w': 0.0},
+            },
+        )
 
     def test_rejected_command_event_carries_terminal_fields(self) -> None:
         lease_token = self._acquire_lease()
@@ -832,6 +894,172 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertIn('[HMI CMD] parse.rejected', output)
         self.assertIn('[HMI CMD] terminal.rejected', output)
         self.assertIn('reason=intent is ambiguous or unsupported', output)
+
+    def test_text_sequence_creates_parent_and_child_steps(self) -> None:
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='home, wait 1 s, then move up 1 cm',
+            mode='sim',
+        )
+        self.assertTrue(response['accepted'])
+        self.assertEqual(response['jobType'], 'sequence')
+        self.assertIsNotNone(response['sequence'])
+        self.assertEqual(response['sequence']['stepCount'], 3)
+        self.assertEqual(response['sequence']['lifecycleState'], 'NEEDS_CONFIRMATION')
+        self.assertEqual(
+            [step['parsedIntent']['action'] for step in response['sequence']['steps']],
+            ['HOME', 'WAIT', 'MOVE_REL'],
+        )
+        self.assertIsNotNone(response['snapshot']['activeSequence'])
+        self.assertEqual(response['snapshot']['activeSequence']['sequenceId'], response['sequenceId'])
+
+    def test_sequence_confirm_executes_child_steps_in_order(self) -> None:
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='home, wait 1 s, then move up 1 cm',
+            mode='sim',
+        )
+        confirm_response = self.supervisor.confirm_sequence(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            sequence_id=response['sequenceId'],
+            plan_fingerprint=response['sequence']['planFingerprint'],
+        )
+        self.assertTrue(confirm_response['accepted'])
+        self.assertEqual(confirm_response['jobType'], 'sequence')
+        self.assertEqual(confirm_response['sequence']['finalState'], 'SUCCEEDED')
+        self.assertEqual(confirm_response['sequence']['currentStepIndex'], 2)
+        self.assertEqual(len(self.adapter.confirm_calls), 3)
+        self.assertEqual(
+            [call['parsed_intent']['action'] for call in self.adapter.confirm_calls],
+            ['HOME', 'WAIT', 'MOVE_REL'],
+        )
+
+    def test_sequence_blocks_new_submission_until_terminal(self) -> None:
+        lease_token = self._acquire_lease()
+        self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='home, wait 1 s, then move up 1 cm',
+            mode='sim',
+        )
+        with self.assertRaises(ConflictError):
+            self.supervisor.submit_intent(
+                session_id=self.session_id,
+                operator_id=self.operator_id,
+                lease_token=lease_token,
+                raw_text='stop',
+                mode='sim',
+            )
+
+    def test_structured_draw_shape_enters_sequence_path_and_preserves_macro_summary(self) -> None:
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            structured_intent={
+                'intent': 'draw_shape',
+                'shape_type': 'circle',
+                'units': 'mm',
+                'frame_id': 'base_link',
+                'params': {'radius': 20},
+            },
+            mode='sim',
+        )
+
+        self.assertTrue(response['accepted'], msg=response)
+        self.assertEqual(response['jobType'], 'sequence')
+        self.assertEqual(response['sequence']['planSummary']['macroName'], 'draw_shape')
+        self.assertEqual(response['sequence']['planSummary']['shapeType'], 'circle')
+        self.assertIn('Draw circle', response['sequence']['summaryLabel'])
+        self.assertGreater(response['sequence']['stepCount'], 1)
+        for step in response['sequence']['steps']:
+            normalized = step['parsedIntent']['normalizedCommand']
+            self.assertNotIn('plan_only', normalized)
+            self.assertNotIn('chunk_index', normalized)
+            self.assertNotIn('stroke_index', normalized)
+
+    def test_text_draw_request_uses_current_pose_default_tool_workplane(self) -> None:
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='write GP4',
+            mode='sim',
+        )
+
+        self.assertTrue(response['accepted'], msg=response)
+        self.assertEqual(response['jobType'], 'sequence')
+        self.assertEqual(response['sequence']['planSummary']['macroName'], 'draw_text')
+        self.assertEqual(response['sequence']['planSummary']['text'], 'GP4')
+        self.assertIn('Draw text', response['sequence']['summaryLabel'])
+        hydrated_origin = response['sequence']['structuredIntent']['workplane']['origin']
+        self.assertAlmostEqual(hydrated_origin['position']['x'], 0.30)
+        self.assertAlmostEqual(hydrated_origin['position']['y'], 0.00)
+        self.assertAlmostEqual(hydrated_origin['position']['z'], 0.30)
+
+    def test_vietnamese_draw_text_routes_to_sequence(self) -> None:
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='vẽ chữ gp4',
+            mode='sim',
+        )
+
+        self.assertTrue(response['accepted'], msg=response)
+        self.assertEqual(response['jobType'], 'sequence')
+        self.assertEqual(response['sequence']['planSummary']['macroName'], 'draw_text')
+        self.assertEqual(response['sequence']['planSummary']['text'], 'GP4')
+
+    def test_draw_plan_only_is_rejected_as_sequence(self) -> None:
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            structured_intent={
+                'intent': 'draw_text',
+                'text': 'GP4',
+                'units': 'mm',
+                'frame_id': 'base_link',
+                'execution_mode': 'plan_only',
+                'font': {'type': 'single_stroke_builtin', 'height': 20},
+            },
+            mode='sim',
+        )
+
+        self.assertFalse(response['accepted'])
+        self.assertEqual(response['jobType'], 'sequence')
+        self.assertEqual(response['sequence']['finalState'], 'REJECTED')
+        self.assertIn('plan_only', response['reason'])
+
+    def test_draw_rejects_when_current_pose_is_unavailable(self) -> None:
+        self.adapter.set_current_pose(None)
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='write GP4',
+            mode='sim',
+        )
+
+        self.assertFalse(response['accepted'])
+        self.assertEqual(response['jobType'], 'sequence')
+        self.assertEqual(response['sequence']['finalState'], 'REJECTED')
+        self.assertIn('/get_current_pose', response['reason'])
 
 if __name__ == '__main__':
     unittest.main()

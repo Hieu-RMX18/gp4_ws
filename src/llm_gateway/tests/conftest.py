@@ -24,9 +24,15 @@ Skip policy:
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 
 import pytest
+
+
+SAFETY_SOURCE_ROOT = Path(__file__).resolve().parents[2] / "safety"
+if SAFETY_SOURCE_ROOT.exists() and str(SAFETY_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SAFETY_SOURCE_ROOT))
 
 
 @pytest.fixture(scope="session")

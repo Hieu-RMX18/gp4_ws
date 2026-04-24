@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 import math
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from geometry_msgs.msg import Pose, Quaternion
+
+_LOGGER = logging.getLogger(__name__)
+
+# Explicit unit vocabulary accepted at the LLM/raw-command boundary.
+_VALID_LINEAR_UNITS = {"m", "cm", "mm"}
+_VALID_ANGULAR_UNITS = {"rad", "deg"}
+
+# DEPRECATED: legacy implicit unit guessing. Set True ONLY for backward-compat
+# testing or migration. Production must use explicit unit fields.
+_COMPAT_UNIT_HEURISTIC = False
 
 
 def _to_float(value: Any, field: str) -> float:
@@ -15,13 +26,37 @@ def _to_float(value: Any, field: str) -> float:
         raise ValueError(f"{field} must be numeric.") from exc
 
 
+def _convert_linear(value: float, unit: Optional[str], field: str) -> float:
+    """Convert a linear value to meters using an explicit unit hint."""
+    if unit is None:
+        return value  # already SI (meters)
+    if unit == "m":
+        return value
+    if unit == "cm":
+        return value / 100.0
+    if unit == "mm":
+        return value / 1000.0
+    raise ValueError(f"{field}: unsupported linear_unit '{unit}'. Use one of {sorted(_VALID_LINEAR_UNITS)}.")
+
+
+def _convert_angular(value: float, unit: Optional[str], field: str) -> float:
+    """Convert an angular value to radians using an explicit unit hint."""
+    if unit is None:
+        return value  # already SI (radians)
+    if unit == "rad":
+        return value
+    if unit == "deg":
+        return math.radians(value)
+    raise ValueError(f"{field}: unsupported angular_unit '{unit}'. Use one of {sorted(_VALID_ANGULAR_UNITS)}.")
+
+
 def _is_likely_mm(position_xyz: List[float]) -> bool:
-    # If any component is larger than 10 units, treat as millimeters.
+    # DEPRECATED: implicit heuristic. Only used when _COMPAT_UNIT_HEURISTIC is True.
     return any(abs(value) > 10.0 for value in position_xyz)
 
 
 def _is_likely_degrees(angles: List[float]) -> bool:
-    # If any angle magnitude exceeds 2*pi, treat all as degrees.
+    # DEPRECATED: implicit heuristic. Only used when _COMPAT_UNIT_HEURISTIC is True.
     return any(abs(value) > (2.0 * math.pi) for value in angles)
 
 
@@ -36,9 +71,14 @@ def _wrap_to_pi(angle_rad: float) -> float:
     return wrapped
 
 
-def _normalize_single_joint_angle(raw_value: Any, field: str) -> float:
+def _normalize_single_joint_angle(
+    raw_value: Any, field: str, angular_unit: Optional[str] = None,
+) -> float:
     angle = _to_float(raw_value, field)
-    if _is_likely_degrees([angle]):
+    if angular_unit is not None:
+        angle = _convert_angular(angle, angular_unit, field)
+    elif _COMPAT_UNIT_HEURISTIC and _is_likely_degrees([angle]):
+        _LOGGER.warning("DEPRECATED heuristic: treating %s=%.4f as degrees.", field, angle)
         angle = math.radians(angle)
     return _wrap_to_pi(angle)
 
@@ -58,7 +98,9 @@ def _rpy_to_quaternion(roll_rad: float, pitch_rad: float, yaw_rad: float) -> Qua
     )
 
 
-def _normalize_orientation(raw_orientation: Dict[str, Any]) -> Quaternion:
+def _normalize_orientation(
+    raw_orientation: Dict[str, Any], angular_unit: Optional[str] = None,
+) -> Quaternion:
     if not isinstance(raw_orientation, dict):
         raise ValueError("target_pose.orientation must be an object.")
 
@@ -77,7 +119,12 @@ def _normalize_orientation(raw_orientation: Dict[str, Any]) -> Quaternion:
         pitch = _to_float(raw_orientation.get("pitch"), "target_pose.orientation.pitch")
         yaw = _to_float(raw_orientation.get("yaw"), "target_pose.orientation.yaw")
 
-        if _is_likely_degrees([roll, pitch, yaw]):
+        if angular_unit is not None:
+            roll = _convert_angular(roll, angular_unit, "orientation.roll")
+            pitch = _convert_angular(pitch, angular_unit, "orientation.pitch")
+            yaw = _convert_angular(yaw, angular_unit, "orientation.yaw")
+        elif _COMPAT_UNIT_HEURISTIC and _is_likely_degrees([roll, pitch, yaw]):
+            _LOGGER.warning("DEPRECATED heuristic: treating RPY as degrees.")
             roll = math.radians(roll)
             pitch = math.radians(pitch)
             yaw = math.radians(yaw)
@@ -87,8 +134,17 @@ def _normalize_orientation(raw_orientation: Dict[str, Any]) -> Quaternion:
     raise ValueError("target_pose.orientation must provide x/y/z/w or roll/pitch/yaw.")
 
 
-def normalize_pose(raw_pose: Dict[str, Any]) -> Pose:
-    """Convert position/orientation into geometry_msgs/Pose with unit detection."""
+def normalize_pose(
+    raw_pose: Dict[str, Any],
+    linear_unit: Optional[str] = None,
+    angular_unit: Optional[str] = None,
+) -> Pose:
+    """Convert position/orientation into geometry_msgs/Pose.
+
+    When linear_unit/angular_unit are provided, explicit conversion is used.
+    When absent, values are assumed SI (meters/radians).
+    Legacy heuristic only activates if _COMPAT_UNIT_HEURISTIC is True.
+    """
     if not isinstance(raw_pose, dict):
         raise ValueError("target_pose must be an object.")
 
@@ -113,7 +169,12 @@ def normalize_pose(raw_pose: Dict[str, Any]) -> Pose:
     y = _to_float(position.get("y"), "target_pose.position.y")
     z = _to_float(position.get("z"), "target_pose.position.z")
 
-    if _is_likely_mm([x, y, z]):
+    if linear_unit is not None:
+        x = _convert_linear(x, linear_unit, "target_pose.position.x")
+        y = _convert_linear(y, linear_unit, "target_pose.position.y")
+        z = _convert_linear(z, linear_unit, "target_pose.position.z")
+    elif _COMPAT_UNIT_HEURISTIC and _is_likely_mm([x, y, z]):
+        _LOGGER.warning("DEPRECATED heuristic: treating position as mm.")
         x /= 1000.0
         y /= 1000.0
         z /= 1000.0
@@ -122,17 +183,27 @@ def normalize_pose(raw_pose: Dict[str, Any]) -> Pose:
     pose.position.x = x
     pose.position.y = y
     pose.position.z = z
-    pose.orientation = _normalize_orientation(orientation)
+    pose.orientation = _normalize_orientation(orientation, angular_unit)
     return pose
 
 
-def normalize_joints(raw_joints: List[Any]) -> List[float]:
-    """Normalize joint list to radians in (-pi, pi]."""
+def normalize_joints(
+    raw_joints: List[Any], angular_unit: Optional[str] = None,
+) -> List[float]:
+    """Normalize joint list to radians in (-pi, pi].
+
+    When angular_unit is provided, explicit conversion is used.
+    When absent, values are assumed radians (SI).
+    Legacy heuristic only activates if _COMPAT_UNIT_HEURISTIC is True.
+    """
     if not isinstance(raw_joints, list):
         raise ValueError("joint_target must be a list.")
 
     joints = [_to_float(value, f"joint_target[{index}]") for index, value in enumerate(raw_joints)]
-    if _is_likely_degrees(joints):
+    if angular_unit is not None:
+        joints = [_convert_angular(v, angular_unit, f"joint_target[{i}]") for i, v in enumerate(joints)]
+    elif _COMPAT_UNIT_HEURISTIC and _is_likely_degrees(joints):
+        _LOGGER.warning("DEPRECATED heuristic: treating joint_target as degrees.")
         joints = [math.radians(value) for value in joints]
     return [_wrap_to_pi(value) for value in joints]
 
@@ -177,6 +248,19 @@ class Normalizer:
         if "plan_only" in normalized:
             normalized["plan_only"] = bool(normalized["plan_only"])
 
+        # Extract explicit unit hints from command boundary early. These are
+        # consumed here and NOT propagated downstream (internal is SI-only).
+        linear_unit = normalized.pop("linear_unit", None)
+        angular_unit = normalized.pop("angular_unit", None)
+        if linear_unit is not None and linear_unit not in _VALID_LINEAR_UNITS:
+            raise ValueError(
+                f"Unsupported linear_unit '{linear_unit}'. "
+                f"Use one of {sorted(_VALID_LINEAR_UNITS)}.")
+        if angular_unit is not None and angular_unit not in _VALID_ANGULAR_UNITS:
+            raise ValueError(
+                f"Unsupported angular_unit '{angular_unit}'. "
+                f"Use one of {sorted(_VALID_ANGULAR_UNITS)}.")
+
         if primitive_type == "WAIT" and "wait_duration_sec" in normalized:
             normalized["wait_duration_sec"] = float(normalized["wait_duration_sec"])
         if primitive_type == "IO_SET":
@@ -189,47 +273,51 @@ class Normalizer:
                 normalized["joint_index"] = int(normalized["joint_index"])
             if "joint_angle" in normalized:
                 normalized["joint_angle"] = _normalize_single_joint_angle(
-                    normalized["joint_angle"], "joint_angle"
+                    normalized["joint_angle"], "joint_angle",
+                    angular_unit=angular_unit,
                 )
 
         # Non-motion primitives bypass planner and velocity defaults.
         if primitive_type in {"ALARM_RESET", "STOP", "WAIT", "IO_SET", "GET_POSE"}:
             normalized.setdefault("reference_frame", "base_link")
-            if normalized.get("plan_only"):
-                normalized["require_approval"] = True
             return normalized
 
         if "target_pose" in normalized:
-            normalized["target_pose_msg"] = normalize_pose(normalized["target_pose"])
+            normalized["target_pose_msg"] = normalize_pose(
+                normalized["target_pose"], linear_unit, angular_unit)
         if "joint_target" in normalized:
-            normalized["joint_target"] = normalize_joints(normalized["joint_target"])
+            normalized["joint_target"] = normalize_joints(
+                normalized["joint_target"], angular_unit)
 
         # CARTESIAN_PATH: normalize each waypoint dict to Pose msg
         if primitive_type == "CARTESIAN_PATH" and "waypoints" in normalized:
             waypoints_msg = []
             for wp in normalized["waypoints"]:
-                waypoints_msg.append(normalize_pose(wp))
+                waypoints_msg.append(normalize_pose(wp, linear_unit, angular_unit))
             normalized["waypoints_msg"] = waypoints_msg
 
         # CIRC: normalize target_pose and auxiliary waypoint (exactly 1 required)
         if primitive_type == "CIRC":
             if "target_pose" not in normalized:
                 raise ValueError("CIRC requires target_pose.")
-            normalized["target_pose_msg"] = normalize_pose(normalized["target_pose"])
+            normalized["target_pose_msg"] = normalize_pose(
+                normalized["target_pose"], linear_unit, angular_unit)
             if "waypoints" not in normalized:
                 raise ValueError("CIRC requires waypoints.")
             if not isinstance(normalized["waypoints"], list):
                 raise ValueError("CIRC waypoints must be a list.")
             if len(normalized["waypoints"]) != 1:
                 raise ValueError("CIRC requires exactly 1 auxiliary waypoint.")
-            waypoints_msg = [normalize_pose(normalized["waypoints"][0])]
+            waypoints_msg = [normalize_pose(normalized["waypoints"][0], linear_unit, angular_unit)]
             normalized["waypoints_msg"] = waypoints_msg
 
-        # MOVE_REL: passthrough delta fields as-is (meters, no unit detection)
+        # MOVE_REL: explicit linear_unit applies to delta fields when present.
         if normalized["primitive_type"] == "MOVE_REL":
             for field in ("delta_x", "delta_y", "delta_z"):
                 if field in normalized:
-                    normalized[field] = float(normalized[field])
+                    normalized[field] = _to_float(normalized[field], field)
+                    if linear_unit is not None:
+                        normalized[field] = _convert_linear(normalized[field], linear_unit, field)
             normalized.setdefault("reference_frame", "base_link")
 
         normalized.setdefault("velocity_scale", self.default_velocity_scale)
@@ -238,9 +326,7 @@ class Normalizer:
             "planner_id",
             self._PLANNER_DEFAULTS.get(primitive_type, "OMPL_RRTConnect"),
         )
-        # Commissioning default is non-approval execution until a real
-        # human-in-the-loop approval workflow is implemented end-to-end.
+        # Human approval is owned by HMI/supervisor confirm flow, not by
+        # motion_core. Default to False so direct gateway dispatch works.
         normalized.setdefault("require_approval", False)
-        if normalized.get("plan_only"):
-            normalized["require_approval"] = True
         return normalized

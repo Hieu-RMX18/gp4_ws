@@ -409,8 +409,6 @@ class DrawRouterMixin:
 
         explicit_approval = payload.get("require_approval")
         require_approval = False if explicit_approval is None else bool(explicit_approval)
-        if execution_mode == "plan_only":
-            require_approval = True
 
         return {
             "execution_mode": execution_mode,

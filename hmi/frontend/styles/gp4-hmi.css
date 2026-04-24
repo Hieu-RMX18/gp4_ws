@@ -88,6 +88,8 @@ textarea {
 }
 
 .hmi-shell {
+  flex: 1;
+  min-height: 0;
   height: 100%;
 }
 
@@ -258,6 +260,33 @@ textarea {
   cursor: not-allowed;
 }
 
+.servo-btn {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: var(--border-radius-sm);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  color: #ffffff;
+}
+
+.servo-start {
+  background: #1d9e75;
+  border: 0.5px solid var(--color-border-success);
+}
+
+.servo-stop {
+  background: #e24b4a;
+  border: 0.5px solid var(--color-border-danger);
+}
+
+.servo-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* panels */
 .left-panel,
 .right-panel {
@@ -273,6 +302,9 @@ textarea {
 
 .right-panel {
   border-left: 0.5px solid var(--color-border-tertiary);
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 .center-panel {
@@ -391,92 +423,6 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* pipeline */
-.pipeline {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.pipe-step {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  border-radius: var(--border-radius-sm);
-  border: 0.5px solid transparent;
-}
-
-.pipe-step.done {
-  background: var(--color-background-success);
-  border-color: var(--color-border-success);
-}
-
-.pipe-step.active {
-  background: var(--color-background-info);
-  border-color: var(--color-border-info);
-}
-
-.pipe-step.pending {
-  background: transparent;
-  border-color: var(--color-border-tertiary);
-}
-
-.pipe-step.error {
-  background: var(--color-background-danger);
-  border-color: var(--color-border-danger);
-}
-
-.pipe-num {
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 9px;
-  font-family: var(--font-mono);
-  flex-shrink: 0;
-}
-
-.pipe-step.done .pipe-num {
-  color: #ffffff;
-  background: #1d9e75;
-}
-
-.pipe-step.active .pipe-num {
-  color: #ffffff;
-  background: #185fa5;
-}
-
-.pipe-step.pending .pipe-num {
-  color: var(--color-text-tertiary);
-  background: var(--color-background-tertiary);
-}
-
-.pipe-step.error .pipe-num {
-  color: #ffffff;
-  background: #e24b4a;
-}
-
-.pipe-label {
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--color-text-secondary);
-}
-
-.pipe-step.done .pipe-label {
-  color: var(--color-text-success);
-}
-
-.pipe-step.active .pipe-label {
-  color: var(--color-text-info);
-}
-
-.pipe-step.error .pipe-label {
-  color: var(--color-text-danger);
 }
 
 /* quick commands */
@@ -1083,42 +1029,6 @@ button:disabled {
   cursor: pointer;
 }
 
-.summary-chip {
-  display: block;
-  margin-bottom: 8px;
-  padding: 6px 8px;
-  border: 0.5px solid var(--color-border-tertiary);
-  border-radius: var(--border-radius-sm);
-  background: var(--color-background-primary);
-  color: var(--color-text-primary);
-  font-size: 11px;
-  font-family: var(--font-mono);
-}
-
-.result-chip {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: var(--border-radius-xl);
-  font-size: 10px;
-  font-family: var(--font-mono);
-  margin-bottom: 4px;
-}
-
-.result-chip.success {
-  color: var(--color-text-success);
-  background: var(--color-background-success);
-}
-
-.result-chip.fail {
-  color: var(--color-text-danger);
-  background: var(--color-background-danger);
-}
-
-.result-chip.pending {
-  color: var(--color-text-warning);
-  background: var(--color-background-warning);
-}
-
 .lease-actions {
   margin-bottom: 8px;
 }
@@ -1139,6 +1049,13 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.command-review-section .trace-list {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-width: thin;
 }
 
 .trace-step {
@@ -1343,6 +1260,7 @@ button:disabled {
 .app-root {
   display: flex;
   flex-direction: column;
+  height: 100vh;
   min-height: 100vh;
   background: var(--color-background-secondary);
 }
@@ -1627,6 +1545,66 @@ button:disabled {
   display: flex;
   gap: 6px;
   flex: 1;
+}
+
+/* ── Teach Pendant Layout (Yaskawa-style S/L/U | R/B/T) ─────────────── */
+.jog-tp-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.jog-tp-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.jog-tp-col-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+.jog-tp-axis {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.jog-tp-axis-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0 4px;
+}
+
+.jog-tp-axis-label {
+  font-size: 16px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  color: var(--color-text-primary);
+}
+
+.jog-tp-axis-val {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+}
+
+.jog-tp-btn-left {
+  border-radius: 16px 4px 4px 16px;
+  padding: 12px 4px;
+  font-size: 14px;
+}
+
+.jog-tp-btn-right {
+  border-radius: 4px 16px 16px 4px;
+  padding: 12px 4px;
+  font-size: 14px;
 }
 
 /* ── Jog Buttons ─────────────────────────────────────────────────────── */

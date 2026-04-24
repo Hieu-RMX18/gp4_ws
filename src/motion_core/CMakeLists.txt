@@ -195,6 +195,18 @@ if(BUILD_TESTING)
     )
   endif()
 
+  ament_add_gtest(test_execute_motion_action_support
+    test/test_execute_motion_action_support.cpp
+  )
+  if(TARGET test_execute_motion_action_support)
+    target_link_libraries(test_execute_motion_action_support
+      ${PROJECT_NAME}_components
+    )
+    target_include_directories(test_execute_motion_action_support PRIVATE
+      include
+    )
+  endif()
+
   ament_add_gtest(test_seed_manager
     test/test_seed_manager.cpp
   )

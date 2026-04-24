@@ -113,7 +113,7 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
     node.destroy_node()
 
 
-def test_gateway_preserves_require_approval_when_auto_clear_disabled(openai_payload):
+def test_gateway_clears_require_approval_when_auto_clear_disabled(openai_payload):
     node = LLMGatewayNode()
     debug_messages = []
     node._llm_client.generate_response = MagicMock(return_value=openai_payload)
@@ -150,10 +150,41 @@ def test_gateway_preserves_require_approval_when_auto_clear_disabled(openai_payl
     node.process_intent("di chuyển về home")
 
     goal = node._execute_client.send_goal_async.call_args.args[0]
-    assert goal.require_approval is True
+    assert goal.require_approval is False
     # Full flow now completes: find 'validated' message specifically
     validated_msg = next(m for m in debug_messages if m["status"] == "validated")
-    assert validated_msg["validated_command"]["require_approval"] is True
+    assert validated_msg["validated_command"]["require_approval"] is False
+
+    node.destroy_node()
+
+
+def test_gateway_rejects_plan_only_before_validate_or_execute():
+    node = LLMGatewayNode()
+    debug_messages = []
+    node._llm_debug_publisher.publish = MagicMock(
+        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+    )
+    node._validate_client.wait_for_service = MagicMock(return_value=True)
+    node._validate_client.call_async = MagicMock()
+    node._execute_client.send_goal_async = MagicMock()
+
+    node.process_raw_command(
+        json.dumps(
+            {
+                "primitive_type": "HOME",
+                "velocity_scale": 0.06,
+                "acceleration_scale": 0.06,
+                "planner_id": "PILZ_PTP",
+                "plan_only": True,
+            }
+        )
+    )
+
+    node._validate_client.wait_for_service.assert_not_called()
+    node._validate_client.call_async.assert_not_called()
+    node._execute_client.send_goal_async.assert_not_called()
+    assert debug_messages[-1]["stage"] == "plan_only_not_executable"
+    assert "plan_only" in debug_messages[-1]["reason"]
 
     node.destroy_node()
 

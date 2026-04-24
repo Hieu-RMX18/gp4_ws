@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="gp4_on_station">
+  <xacro:include filename="$(find motoman_gp4_support)/urdf/gp4_macro.xacro" />
+
+  <link name="world" />
+
+  <link name="station_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="-1.5708 0 1.5708" />
+      <geometry>
+        <mesh filename="package://gp4_station/meshes/station3.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+      <material name="station_grey">
+        <color rgba="0.35 0.35 0.35 1.0" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="-1.5708 0 1.5708" />
+      <geometry>
+        <mesh filename="package://gp4_station/meshes/station3.stl" scale="0.001 0.001 0.001" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="world_to_station" type="fixed">
+    <parent link="world" />
+    <child link="station_link" />
+    <origin xyz="0 0 0.8" rpy="1.5708 1.5708 1" />
+  </joint>
+
+  <joint name="station_to_robot" type="fixed">
+    <parent link="station_link" />
+    <child link="base_link" />
+    <origin xyz="0 0 0" rpy="1.5708 0 -1.5708" />
+  </joint>
+
+  <xacro:motoman_gp4 prefix="" />
+</robot>

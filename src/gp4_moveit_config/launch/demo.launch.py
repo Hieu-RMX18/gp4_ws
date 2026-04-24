@@ -1,102 +1,44 @@
 import os
+
+from ament_index_python.packages import get_package_share_directory
+
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, RegisterEventHandler, TimerAction
-from launch.event_handlers import OnProcessExit
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from moveit_configs_utils import MoveItConfigsBuilder
+
 
 def generate_launch_description():
-    # Load MoveIt Config (urdf, srdf, kinematics, etc.)
-    moveit_config = MoveItConfigsBuilder("motoman_gp4", package_name="gp4_moveit_config").to_moveit_configs()
-
-    # Create MoveGroup Node
-    move_group_node = Node(
-        package="moveit_ros_move_group",
-        executable="move_group",
-        output="screen",
-        parameters=[moveit_config.to_dict()]
+    gp4_bringup_share = get_package_share_directory('gp4_bringup')
+    use_rviz_arg = DeclareLaunchArgument(
+        'use_rviz',
+        default_value='true',
+        description='Start RViz for MoveIt visualization in demo bringup.',
     )
+    use_rviz = LaunchConfiguration('use_rviz')
 
-    # Create RViz Node that EXPLICITLY receives the robot_description_semantic
-    rviz_node = Node(
-        package="rviz2",
-        executable="rviz2",
-        name="rviz2",
-        output="log",
-        arguments=["-d", str(moveit_config.package_path / "config/moveit.rviz")],
-        parameters=[
-            moveit_config.robot_description,
-            moveit_config.robot_description_semantic,
-            moveit_config.robot_description_kinematics,
-            moveit_config.planning_pipelines,
-        ],
-    )
-
-    # Static TF
     static_tf = Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name="static_transform_publisher",
-        output="log",
-        arguments=["0", "0", "0", "0", "0", "0", "world", "base_link"],
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='static_transform_publisher',
+        output='log',
+        arguments=['0', '0', '0', '0', '0', '0', 'world', 'base_link'],
     )
 
-    # Robot State Publisher
-    robot_state_publisher = Node(
-        package="robot_state_publisher",
-        executable="robot_state_publisher",
-        name="robot_state_publisher",
-        output="log",
-        parameters=[moveit_config.robot_description],
+    moveit_only = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(gp4_bringup_share, 'launch', 'moveit_only.launch.py')
+        ),
+        launch_arguments={
+            'use_fake_hardware': 'true',
+            'use_rviz': use_rviz,
+        }.items(),
     )
 
-    # ROS 2 Control Node MUST be named "controller_manager" for spawner stability in Humble
-    ros2_control_node = Node(
-        package="controller_manager",
-        executable="ros2_control_node",
-        name="controller_manager",
-        parameters=[
-            moveit_config.robot_description,
-            str(moveit_config.package_path / "config/ros2_controllers.yaml"),
-        ],
-        output="screen",
-    )
-
-    # Joint State Broadcaster Spawner
-    joint_state_broadcaster_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=["joint_state_broadcaster", "--controller-manager", "/controller_manager"],
-        output="screen",
-    )
-
-    # GP4 Arm Controller Spawner
-    arm_controller_spawner = Node(
-        package="controller_manager",
-        executable="spawner",
-        arguments=["gp4_arm_controller", "--controller-manager", "/controller_manager"],
-        output="screen",
-    )
-
-    # Prevent Race Conditions: Spawn JSB after ros2_control starts, then Arm Controller after JSB
-    delay_jsb = TimerAction(
-        period=1.5,
-        actions=[joint_state_broadcaster_spawner]
-    )
-
-    delay_arm = TimerAction(
-        period=3.0,
-        actions=[arm_controller_spawner]
-    )
-
-    return LaunchDescription(
-        [
-            static_tf,
-            robot_state_publisher,
-            ros2_control_node,
-            delay_jsb,
-            delay_arm,
-            move_group_node,
-            rviz_node,
-        ]
-    )
+    return LaunchDescription([
+        SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'),
+        use_rviz_arg,
+        static_tf,
+        moveit_only,
+    ])

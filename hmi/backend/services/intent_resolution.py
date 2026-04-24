@@ -5,7 +5,8 @@ import math
 from pathlib import Path
 import re
 import sys
-from typing import Any
+import unicodedata
+from typing import Any, Callable
 
 from ..domain.constants import GP4_JOINT_NAMES as JOINT_NAMES
 
@@ -15,10 +16,22 @@ if _LLM_GATEWAY_SOURCE.exists():
     if llm_gateway_source not in sys.path:
         sys.path.append(llm_gateway_source)
 
+_SAFETY_SOURCE = Path(__file__).resolve().parents[3] / "src" / "safety"
+if _SAFETY_SOURCE.exists():
+    safety_source = str(_SAFETY_SOURCE)
+    if safety_source not in sys.path:
+        sys.path.append(safety_source)
+
 try:  # pragma: no cover - fallback logic is covered
     from llm_gateway.intent_router import IntentRouter
 except Exception:  # pragma: no cover - depends on optional source path
     IntentRouter = None  # type: ignore[assignment]
+
+try:  # pragma: no cover - fallback logic is covered
+    from llm_gateway.sequence_validator import SequenceValidationError, SequenceValidator
+except Exception:  # pragma: no cover - depends on optional source path
+    SequenceValidationError = ValueError  # type: ignore[assignment]
+    SequenceValidator = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - fallback logic is covered
     from llm_gateway.parser import parse_llm_output
@@ -27,6 +40,9 @@ except Exception:  # pragma: no cover - depends on optional source path
 
 
 UNIT_TO_METERS = {"mm": 0.001, "cm": 0.01, "m": 1.0}
+DEFAULT_DRAW_TEXT_HEIGHT = 20.0
+DEFAULT_DRAW_TEXT_UNITS = "mm"
+ROUTED_DRAW_METADATA_FIELDS = {"plan_only", "chunk_index", "stroke_index"}
 SUPPORTED_PRIMITIVES = {
     "HOME",
     "PTP",
@@ -161,6 +177,8 @@ _CARTESIAN_DIRECTIONS = {
     "backward": (-1.0, 0.0, 0.0),
 }
 
+_DRAW_TEXT_PREFIX_PATTERN = re.compile(r"^(?:write|ve\s+chu|vẽ\s+chữ|viet|viết)\s+(.+)$", re.IGNORECASE)
+
 
 class IntentResolutionError(ValueError):
     def __init__(
@@ -257,6 +275,139 @@ class IntentResolutionService:
         self._max_velocity_scale = float(max_velocity_scale)
         self._max_acceleration_scale = float(max_acceleration_scale)
 
+    def prepare_sequence_submission(
+        self,
+        *,
+        raw_text: str,
+        structured_intent: dict[str, Any] | None,
+        runtime_mode: str,
+        current_joints: list[Any],
+        current_pose_loader: Callable[[], dict[str, Any] | None] | None = None,
+    ) -> dict[str, Any] | None:
+        intent_name = ""
+        candidate_payload: dict[str, Any] | None = None
+        force_sequence = False
+
+        if structured_intent is not None:
+            intent_name = str(structured_intent.get("intent") or "").strip().lower()
+            if intent_name:
+                candidate_payload = dict(structured_intent)
+                force_sequence = intent_name in {"sequence", "draw_shape", "draw_text"}
+        elif raw_text:
+            parsed_draw = self._parse_draw_text_to_semantic(raw_text)
+            if parsed_draw is not None:
+                candidate_payload = parsed_draw
+                intent_name = str(parsed_draw.get("intent") or "").strip().lower()
+                force_sequence = True
+
+        if candidate_payload is None:
+            return None
+
+        route_metadata = self._sequence_candidate_metadata(candidate_payload)
+        diagnostics: list[str] = []
+        working_payload = dict(candidate_payload)
+        if intent_name in {"draw_shape", "draw_text"}:
+            try:
+                working_payload = self._hydrate_draw_workplane(
+                    working_payload,
+                    current_pose_loader=current_pose_loader,
+                )
+            except IntentResolutionError as exc:
+                return {
+                    "parsed_steps": None,
+                    "diagnostics": diagnostics,
+                    "parse_error": exc.operator_message(),
+                    "route_metadata": route_metadata,
+                    "structured_intent": working_payload,
+                }
+
+        if IntentRouter is None:
+            if force_sequence:
+                return {
+                    "parsed_steps": None,
+                    "diagnostics": diagnostics,
+                    "parse_error": (
+                        "semantic intent routing is unavailable because llm_gateway.intent_router is not importable."
+                    ),
+                    "route_metadata": route_metadata,
+                    "structured_intent": working_payload,
+                }
+            return None
+
+        try:
+            routed = IntentRouter(runtime_mode=runtime_mode).route(working_payload)
+        except ValueError as exc:
+            if not force_sequence:
+                return None
+            return {
+                "parsed_steps": None,
+                "diagnostics": diagnostics,
+                "parse_error": str(exc),
+                "route_metadata": route_metadata,
+                "structured_intent": working_payload,
+            }
+
+        route_metadata.update(dict(routed.metadata))
+        is_sequence = routed.route_type == "sequence" or len(routed.commands) > 1
+        if not is_sequence:
+            return None
+
+        if routed.metadata.get("macro_name") in {"draw_shape", "draw_text"}:
+            for command in routed.commands:
+                if bool(command.get("plan_only")):
+                    return {
+                        "parsed_steps": None,
+                        "diagnostics": diagnostics,
+                        "parse_error": (
+                            "draw execution_mode=plan_only is not supported by the HMI; "
+                            "resubmit with execution_mode='execute'."
+                        ),
+                        "route_metadata": route_metadata,
+                        "structured_intent": working_payload,
+                    }
+
+        if SequenceValidator is None:
+            return {
+                "parsed_steps": None,
+                "diagnostics": diagnostics,
+                "parse_error": (
+                    "sequence routing is unavailable because llm_gateway sequence helpers are not importable."
+                ),
+                "route_metadata": route_metadata,
+                "structured_intent": working_payload,
+            }
+
+        try:
+            validation = SequenceValidator().validate(routed.commands)
+            diagnostics.extend(validation.diagnostics)
+            parsed_steps = [
+                self.resolve(
+                    raw_text="",
+                    structured_intent=command,
+                    runtime_mode=runtime_mode,
+                    current_joints=current_joints,
+                    allow_routed_draw_metadata=bool(routed.metadata.get("macro_name") in {"draw_shape", "draw_text"}),
+                )
+                for command in routed.commands
+            ]
+        except (IntentResolutionError, SequenceValidationError, ValueError) as exc:
+            message = exc.operator_message() if isinstance(exc, IntentResolutionError) else str(exc)
+            return {
+                "parsed_steps": None,
+                "diagnostics": diagnostics,
+                "parse_error": message,
+                "route_metadata": route_metadata,
+                "structured_intent": working_payload,
+            }
+
+        return {
+            "parsed_steps": parsed_steps,
+            "diagnostics": diagnostics,
+            "parse_error": None,
+            "route_metadata": route_metadata,
+            "structured_intent": working_payload,
+        }
+
     def resolve(
         self,
         *,
@@ -264,6 +415,7 @@ class IntentResolutionService:
         structured_intent: dict[str, Any] | None,
         runtime_mode: str,
         current_joints: list[Any],
+        allow_routed_draw_metadata: bool = False,
     ) -> dict[str, Any]:
         mode = str(runtime_mode or "unknown").strip().lower() or "unknown"
         if structured_intent is not None:
@@ -282,6 +434,7 @@ class IntentResolutionService:
         normalized_command, normalization_notes = self._normalize_command(
             command=initial_command,
             runtime_mode=mode,
+            allow_routed_draw_metadata=allow_routed_draw_metadata,
         )
         primitive_type = str(normalized_command["primitive_type"])
         parameters = {
@@ -411,6 +564,162 @@ class IntentResolutionService:
 
         raise IntentResolutionError(f"unsupported structured action: {payload.get('action')!r}")
 
+    def _sequence_candidate_metadata(self, payload: dict[str, Any]) -> dict[str, Any]:
+        intent = str(payload.get("intent") or "").strip().lower()
+        metadata: dict[str, Any] = {"intent": intent}
+        if intent == "draw_shape":
+            metadata["macro_name"] = "draw_shape"
+            metadata["shape_type"] = str(payload.get("shape_type", payload.get("shape", ""))).strip().lower()
+        if intent == "draw_text":
+            metadata["macro_name"] = "draw_text"
+            metadata["text"] = str(payload.get("text") or "").strip().upper()
+        return metadata
+
+    def _hydrate_draw_workplane(
+        self,
+        payload: dict[str, Any],
+        *,
+        current_pose_loader: Callable[[], dict[str, Any] | None] | None,
+    ) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            return payload
+        intent = str(payload.get("intent", "")).strip().lower()
+        if intent not in {"draw_shape", "draw_text"}:
+            return payload
+
+        working_payload = dict(payload)
+        workplane = working_payload.get("workplane")
+        if workplane is None:
+            workplane = {"mode": "tool"}
+            working_payload["workplane"] = workplane
+        if not isinstance(workplane, dict):
+            return working_payload
+
+        mode = str(workplane.get("mode", "base")).strip().lower()
+        if mode != "tool":
+            return working_payload
+        if isinstance(workplane.get("origin"), dict):
+            return working_payload
+        if isinstance(working_payload.get("start_pose"), dict):
+            return working_payload
+
+        current_pose = current_pose_loader() if callable(current_pose_loader) else None
+        if current_pose is None:
+            raise IntentResolutionError(
+                "missing_workplane: tool mode requires current pose, but /get_current_pose is unavailable"
+            )
+
+        hydrated_workplane = dict(workplane)
+        hydrated_workplane["origin"] = current_pose
+        working_payload["workplane"] = hydrated_workplane
+        return working_payload
+
+    def _parse_draw_text_to_semantic(self, raw_text: str) -> dict[str, Any] | None:
+        stripped_text = " ".join(raw_text.strip().split())
+        if not stripped_text:
+            return None
+        folded = self._fold_text(stripped_text)
+
+        if folded.startswith("draw circle") or folded.startswith("ve hinh tron"):
+            payload = {
+                "intent": "draw_shape",
+                "shape_type": "circle",
+                "frame_id": "base_link",
+                "workplane": {"mode": "tool"},
+                "params": {},
+            }
+            match = re.fullmatch(
+                r"(?:draw\s+circle|ve\s+hinh\s+tron)(?:\s+(?:radius|ban\s+kinh))?\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)",
+                folded,
+            )
+            if match:
+                payload["units"] = match.group(2)
+                payload["params"] = {"radius": float(match.group(1))}
+            return payload
+
+        if folded.startswith("draw rectangle") or folded.startswith("ve hinh chu nhat"):
+            payload = {
+                "intent": "draw_shape",
+                "shape_type": "rectangle",
+                "frame_id": "base_link",
+                "workplane": {"mode": "tool"},
+                "params": {},
+            }
+            match = re.fullmatch(
+                r"(?:draw\s+rectangle|ve\s+hinh\s+chu\s+nhat)\s+([+-]?\d+(?:\.\d+)?)\s*(?:x|by)\s*([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)",
+                folded,
+            )
+            if match:
+                payload["units"] = match.group(3)
+                payload["params"] = {
+                    "width": float(match.group(1)),
+                    "height": float(match.group(2)),
+                }
+            return payload
+
+        if folded.startswith("draw polygon") or folded.startswith("ve da giac"):
+            payload = {
+                "intent": "draw_shape",
+                "shape_type": "polygon",
+                "frame_id": "base_link",
+                "workplane": {"mode": "tool"},
+                "params": {},
+            }
+            match = re.fullmatch(
+                (
+                    r"(?:draw\s+polygon|ve\s+da\s+giac)\s+(\d+)\s*(?:sides?|canh)"
+                    r"(?:\s+(?:radius|ban\s+kinh)\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)"
+                    r"|\s+(?:side|canh)\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m))"
+                ),
+                folded,
+            )
+            if match:
+                payload["params"] = {"n_sides": int(match.group(1))}
+                if match.group(2) is not None:
+                    payload["units"] = match.group(3)
+                    payload["params"]["radius"] = float(match.group(2))
+                elif match.group(4) is not None:
+                    payload["units"] = match.group(5)
+                    payload["params"]["side"] = float(match.group(4))
+            return payload
+
+        prefix_match = _DRAW_TEXT_PREFIX_PATTERN.fullmatch(stripped_text)
+        if prefix_match is None:
+            return None
+
+        content = prefix_match.group(1).strip()
+        if not content:
+            return None
+
+        height_match = re.fullmatch(r"(.+?)\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)\s+tall", content, re.IGNORECASE)
+        if height_match is None:
+            height_match = re.fullmatch(r"(.+?)\s+cao\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)", content, re.IGNORECASE)
+
+        if height_match is not None:
+            text = height_match.group(1).strip()
+            height = float(height_match.group(2))
+            units = str(height_match.group(3)).lower()
+        else:
+            text = content
+            height = DEFAULT_DRAW_TEXT_HEIGHT
+            units = DEFAULT_DRAW_TEXT_UNITS
+
+        return {
+            "intent": "draw_text",
+            "text": text,
+            "units": units,
+            "frame_id": "base_link",
+            "workplane": {"mode": "tool"},
+            "font": {
+                "type": "single_stroke_builtin",
+                "height": height,
+            },
+        }
+
+    def _fold_text(self, value: str) -> str:
+        normalized = unicodedata.normalize("NFKD", value)
+        return "".join(character for character in normalized if not unicodedata.combining(character)).lower()
+
     def _text_to_command(self, *, raw_text: str, current_joints: list[Any]) -> dict[str, Any]:
         normalized = " ".join(raw_text.strip().split()).lower()
         if not normalized:
@@ -480,8 +789,17 @@ class IntentResolutionService:
         )
         if joint_match:
             joint_one_based = int(joint_match.group(1))
-            target_deg = float(joint_match.group(2))
+            angle_text = joint_match.group(2)
+            target_deg = float(angle_text)
             joint_index = joint_one_based - 1
+            if angle_text.startswith(("+", "-")):
+                current_deg = self._read_joint_deg(current_joints=current_joints, joint_index=joint_index)
+                if current_deg is None:
+                    raise IntentResolutionError(
+                        f"fresh joint position for {JOINT_NAMES[joint_index]} is unavailable.",
+                        missing_slots=["fresh_joint_position"],
+                    )
+                target_deg = current_deg + target_deg
             return {
                 "primitive_type": "MOVE_JOINT",
                 "joint_index": joint_index,
@@ -511,7 +829,14 @@ class IntentResolutionService:
         *,
         command: dict[str, Any],
         runtime_mode: str,
+        allow_routed_draw_metadata: bool = False,
     ) -> tuple[dict[str, Any], list[str]]:
+        if allow_routed_draw_metadata:
+            command = {
+                key: value
+                for key, value in command.items()
+                if key not in ROUTED_DRAW_METADATA_FIELDS
+            }
         primitive = str(command.get("primitive_type") or "").strip().upper()
         if not primitive:
             raise IntentResolutionError("missing primitive_type", missing_slots=["primitive_type"])

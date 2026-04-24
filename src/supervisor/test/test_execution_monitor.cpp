@@ -371,6 +371,42 @@ TEST_F(ExecutionMonitorFixture, ConsecutiveFailuresPublishWarnAlert)
   EXPECT_EQ(snapshot.last_alert_level, diagnostic_msgs::msg::DiagnosticStatus::WARN);
 }
 
+TEST_F(ExecutionMonitorFixture, FailedExecutionHeartbeatReturnsToOkIdle)
+{
+  const auto goal_id = make_uuid(0x28U);
+
+  publish_goal_request(goal_id, 0.5);
+  publish_goal_response(true);
+  publish_status(goal_id, action_msgs::msg::GoalStatus::STATUS_EXECUTING);
+  publish_status(goal_id, action_msgs::msg::GoalStatus::STATUS_ABORTED);
+
+  ASSERT_TRUE(wait_for_alert_message(
+      "execute_motion failed",
+      diagnostic_msgs::msg::DiagnosticStatus::ERROR));
+
+  const auto alerts_after_failure = alerts_copy().size();
+  ASSERT_TRUE(wait_for_condition(
+      executor_,
+      [this, alerts_after_failure]() {
+        const auto alerts = alerts_copy();
+        for (std::size_t index = alerts_after_failure; index < alerts.size(); ++index)
+        {
+          if (alerts[index].level == diagnostic_msgs::msg::DiagnosticStatus::OK &&
+            alerts[index].message == "idle")
+          {
+            return true;
+          }
+        }
+        return false;
+      },
+      std::chrono::seconds(5)));
+
+  const auto snapshot = monitor_->snapshot();
+  EXPECT_EQ(snapshot.current_state, "IDLE");
+  EXPECT_FALSE(snapshot.last_result_success);
+  EXPECT_EQ(snapshot.consecutive_failure_count, 1U);
+}
+
 TEST_F(ExecutionMonitorFixture, IgnoresTerminalHistoryWhenCountingActiveGoals)
 {
   const auto stale_goal_id = make_uuid(0x30U);

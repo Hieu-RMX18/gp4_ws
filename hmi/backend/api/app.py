@@ -26,6 +26,7 @@ from .contracts import (
     LeaseStateResponseModel,
     ReplayDetailModel,
     RuntimeStateResponseModel,
+    SequenceViewModel,
 )
 from ..ros.adapter import WorkspaceRosAdapter
 from ..services.audit_service import AuditService
@@ -85,6 +86,7 @@ def create_app(
         app.state.telemetry_service = service
         app.state.supervisor_service = supervisor
         app.state.jog_pendant_service = jog_svc
+        app.state.ros_adapter = supervisor._ros
         try:
             yield
         finally:
@@ -204,6 +206,30 @@ def create_app(
             reason=request.reason,
         )
 
+    @app.get('/api/hmi/sequences/{sequence_id}', response_model=SequenceViewModel)
+    def get_sequence(sequence_id: str) -> dict:
+        return app.state.supervisor_service.get_sequence(sequence_id)
+
+    @app.post('/api/hmi/sequences/{sequence_id}/confirm', response_model=CommandMutationResponseModel)
+    def confirm_sequence(sequence_id: str, request: CommandConfirmRequestModel) -> dict:
+        return app.state.supervisor_service.confirm_sequence(
+            session_id=request.sessionId,
+            operator_id=request.operatorId,
+            lease_token=request.leaseToken,
+            sequence_id=sequence_id,
+            plan_fingerprint=request.planFingerprint,
+        )
+
+    @app.post('/api/hmi/sequences/{sequence_id}/cancel', response_model=CommandMutationResponseModel)
+    def cancel_sequence(sequence_id: str, request: CommandCancelRequestModel) -> dict:
+        return app.state.supervisor_service.cancel_sequence(
+            session_id=request.sessionId,
+            operator_id=request.operatorId,
+            lease_token=request.leaseToken,
+            sequence_id=sequence_id,
+            reason=request.reason,
+        )
+
     @app.get('/api/hmi/replay', response_model=CommandListResponseModel)
     def list_replay(
         session_id: str | None = Query(None),
@@ -228,6 +254,22 @@ def create_app(
 
     # ── Jog Pendant Endpoints ───────────────────────────────────────────────
 
+    # ── Servo Control Endpoints ────────────────────────────────────────────
+
+    @app.post('/api/hmi/servo/start')
+    def servo_start() -> dict:
+        adapter = app.state.ros_adapter
+        if adapter is None:
+            return {'accepted': False, 'message': 'ROS adapter not available'}
+        return adapter.start_traj_mode()
+
+    @app.post('/api/hmi/servo/stop')
+    def servo_stop() -> dict:
+        adapter = app.state.ros_adapter
+        if adapter is None:
+            return {'accepted': False, 'message': 'ROS adapter not available'}
+        return adapter.stop_motion()
+
     @app.post('/api/hmi/jog/activate')
     def jog_activate() -> dict:
         svc = app.state.jog_pendant_service
@@ -243,14 +285,14 @@ def create_app(
     @app.post('/api/hmi/jog/command')
     def jog_command(request: JogCommandRequestModel) -> dict:
         svc = app.state.jog_pendant_service
-        ok = svc.send_jog_command(
+        ok, reason = svc.send_jog_command(
             joint_index=request.jointIndex,
             direction=request.direction,
             mode=request.mode,
             velocity_scale=request.velocityScale,
             step_degrees=request.stepDegrees,
         )
-        return {'accepted': ok, 'message': 'published' if ok else 'failed'}
+        return {'accepted': ok, 'message': reason}
 
     @app.websocket('/api/hmi/stream')
     async def stream_state(

@@ -1,5 +1,6 @@
 import json
 
+from .policy_loader import _FAILSAFE_MOTION_LIMITS
 
 _VELOCITY_BYPASS_PRIMITIVES = {
     "ALARM_RESET",
@@ -9,7 +10,8 @@ _VELOCITY_BYPASS_PRIMITIVES = {
     "GET_POSE",
 }
 
-_DEFAULT_MAX_SCALE = 0.06
+# Fail-safe only — active policy is loaded from safety_rules.yaml via constructor.
+_DEFAULT_MAX_SCALE = _FAILSAFE_MOTION_LIMITS["max_velocity_scale"]
 
 
 class CommandValidator:

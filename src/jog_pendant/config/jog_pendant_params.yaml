@@ -75,3 +75,6 @@ servo_bridge_node:
 
     # Service call timeouts
     activation_timeout_ms: 5000
+
+    # MoveIt Servo start service (called by bridge during activation)
+    start_servo_service: /servo_node/servo_node/start_servo

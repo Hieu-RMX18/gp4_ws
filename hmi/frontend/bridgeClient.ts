@@ -99,18 +99,15 @@ async function postJson<TResponse>(url: string, body: unknown): Promise<TRespons
   });
   traceClient('info', `HTTP POST response ${url}`, { status: response.status, ok: response.ok });
   if (!response.ok) {
-    let detail = `Request failed with ${response.status}`;
+    const text = await response.text();
+    let detail = text || `Request failed with ${response.status}`;
     try {
-      const payload = (await response.json()) as { detail?: string };
+      const payload = JSON.parse(text) as { detail?: string };
       if (payload.detail) {
         detail = payload.detail;
       }
       traceClient('error', `HTTP POST failed ${url}`, { status: response.status, detail: payload.detail ?? payload });
     } catch {
-      const text = await response.text();
-      if (text) {
-        detail = text;
-      }
       traceClient('error', `HTTP POST failed ${url}`, { status: response.status, detail: text });
     }
     throw new Error(detail);

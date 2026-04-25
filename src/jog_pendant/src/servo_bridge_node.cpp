@@ -13,31 +13,37 @@
 // limitations under the License.
 
 /**
- * servo_bridge_node.cpp — Experimental Servo-to-MotoROS2 point-queue bridge.
+ * servo_bridge_node.cpp -- Experimental Servo-to-MotoROS2 point-queue bridge.
  *
  * Purpose:
- *   Bridges MoveIt Servo joint trajectory output → MotoROS2 point-queue mode
+ *   Bridges MoveIt Servo joint trajectory output -> MotoROS2 point-queue mode
  *   via /yaskawa/queue_traj_point, so the HMI jog pendant can drive the GP4
  *   in real time.
  *
  * Execution path:
- *   MoveIt Servo (joint jogging) → servo_bridge_node → /yaskawa/queue_traj_point
- *                                             ↓
- *                                    MotoROS2 → YRC1000micro → GP4
+ *   MoveIt Servo (joint jogging) -> servo_bridge_node -> /yaskawa/queue_traj_point
+ *                                             |
+ *                                             v
+ *                                    MotoROS2 -> YRC1000micro -> GP4
  *
  * NOT a replacement for the FJT mainline path. Strictly exclusive with FJT mode.
  *
  * State machine:
- *   IDLE → STARTING → READY → ACTIVE → HALTING → HALTED → IDLE
- *                  ↘ REJECTED_NOT_READY / REJECTED_FJT_ACTIVE / ERROR
+ *   IDLE -> STARTING -> ACTIVE -> HALTED
+ *                    \> REJECTED_NOT_READY / REJECTED_FJT_ACTIVE / ERROR
+ *
+ * Activation flow (self-contained):
+ *   1. handle_activate sets state=STARTING, returns success=true immediately
+ *   2. If servo not active: call start_servo async -> poll servo_active_ (100ms, 5s timeout)
+ *   3. On servo_active: call start_point_queue_mode async
+ *   4. On PQM success: set state=ACTIVE
  *
  * HARD CONSTRAINTS (fail-closed):
  *   - Robot must be ready before activation
- *   - Servo status must be healthy before activation
  *   - No FJT trajectory mode must be active (confirmed via result_code)
  *   - Joint limits must be validated before each point
  *   - Rate limiting: max 15 Hz forwarding
- *   - No stop service for point-queue mode: deactivation = "soft stop by input withdrawal"
+ *   - No stop service for point-queue mode: deactivation = soft stop by input withdrawal
  */
 
 #include <atomic>
@@ -48,7 +54,6 @@
 #include <optional>
 #include <ratio>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -89,7 +94,7 @@ constexpr double MIN_FORWARD_INTERVAL_SEC = 1.0 / MAX_FORWARD_HZ;
 
 constexpr double JOINT_LIMIT_MARGIN_RAD = 0.05;
 
-// Joint limits from joint_limits.yaml (rad/s) — conservative for experimental
+// Joint limits (rad) -- conservative for experimental jogging
 const std::vector<std::pair<std::string, std::pair<double, double>>> GP4_JOINT_LIMITS = {
   {"joint_1_s", {-2.9671, 2.9671}},
   {"joint_2_l", {-1.9199, 2.2689}},
@@ -171,10 +176,10 @@ public:
     rejection_reason_(""),
     sim_mode_(false)
   {
-    // ── Clock for stamping ──────────────────────────────────────────────
+    // -- Clock for stamping
     clock_ = this->get_clock();
 
-    // ── Declare parameters ───────────────────────────────────────────────
+    // -- Declare parameters
     declare_parameter("robot_status_topic", "/yaskawa/robot_status");
     declare_parameter("joint_states_topic", "/yaskawa/joint_states");
     declare_parameter("servo_status_topic", "/servo_node/status");
@@ -192,6 +197,7 @@ public:
     declare_parameter("busy_retry_max", 3);
     declare_parameter("busy_retry_interval_ms", 50);
     declare_parameter("activation_timeout_ms", 5000);
+    declare_parameter("start_servo_service", "/servo_node/servo_node/start_servo");
     declare_parameter("sim_mode", false);
 
     robot_status_topic_ = get_parameter("robot_status_topic").as_string();
@@ -209,6 +215,7 @@ public:
     busy_retry_max_ = get_parameter("busy_retry_max").as_int();
     busy_retry_interval_ms_ = get_parameter("busy_retry_interval_ms").as_int();
     activation_timeout_ms_ = get_parameter("activation_timeout_ms").as_int();
+    start_servo_service_ = get_parameter("start_servo_service").as_string();
     sim_mode_ = get_parameter("sim_mode").as_bool();
 
     RCLCPP_INFO(
@@ -221,15 +228,19 @@ public:
       start_point_queue_service_.c_str(), queue_traj_point_service_.c_str(),
       forward_rate_hz_);
 
-    // ── Subscriptions ─────────────────────────────────────────────────
+    // -- Subscriptions
+    // MotoROS2 publishes with BEST_EFFORT reliability (UDP transport).
+    // Using default RELIABLE QoS causes silent message drop -- use SensorDataQoS.
+    const auto sensor_qos = rclcpp::SensorDataQoS{};
+
     robot_status_sub_ = create_subscription<industrial_msgs::msg::RobotStatus>(
-      robot_status_topic_, 10,
+      robot_status_topic_, sensor_qos,
       [this](const industrial_msgs::msg::RobotStatus::SharedPtr msg) {
         this->on_robot_status(msg);
       });
 
     joint_states_sub_ = create_subscription<sensor_msgs::msg::JointState>(
-      joint_states_topic_, 10,
+      joint_states_topic_, sensor_qos,
       [this](const sensor_msgs::msg::JointState::SharedPtr msg) {
         this->on_joint_states(msg);
       });
@@ -248,10 +259,10 @@ public:
         this->on_servo_trajectory(msg);
       });
 
-    // ── Publishers ───────────────────────────────────────────────────
+    // -- Publishers
     status_pub_ = create_publisher<interfaces::msg::ServoBridgeStatus>(status_pub_topic_, 10);
 
-    // ── Services ─────────────────────────────────────────────────────
+    // -- Services
     using std_srvs::srv::Trigger;
 
     activate_srv_ = create_service<Trigger>(
@@ -272,13 +283,14 @@ public:
         this->handle_deactivate(req, resp);
       });
 
-    // ── Service clients ──────────────────────────────────────────────
+    // -- Service clients
     start_pqm_client_ = create_client<motoros2_interfaces::srv::StartPointQueueMode>(
       start_point_queue_service_);
     queue_traj_client_ = create_client<motoros2_interfaces::srv::QueueTrajPoint>(
       queue_traj_point_service_);
+    start_servo_client_ = create_client<std_srvs::srv::Trigger>(start_servo_service_);
 
-    // ── Status publishing timer ──────────────────────────────────────
+    // -- Status publishing timer
     status_timer_ = create_wall_timer(
       std::chrono::milliseconds(500),
       [this]() {this->publish_status();});
@@ -289,33 +301,33 @@ public:
   }
 
 private:
-  // ══════════════════════════════════════════════════════════════════════
+  // ======================================================================
   // State management
-  // ══════════════════════════════════════════════════════════════════════
+  // ======================================================================
 
   void set_state(BridgeState new_state, const std::string & error_msg = "")
   {
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(state_mutex_);
     state_ = new_state;
     if (!error_msg.empty()) {
       last_error_ = error_msg;
     }
     RCLCPP_INFO(
-      get_logger(), "bridge state: %s → %s",
-      bridge_state_str(state_), bridge_state_str(new_state));
+      get_logger(), "bridge state -> %s",
+      bridge_state_str(new_state));
   }
 
   BridgeState current_state() const
   {
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(state_mutex_);
     return state_;
   }
 
   rclcpp::Time now() const {return clock_->now();}
 
-  // ══════════════════════════════════════════════════════════════════════
+  // ======================================================================
   // Activation / Deactivation
-  // ══════════════════════════════════════════════════════════════════════
+  // ======================================================================
 
   using Trigger = std_srvs::srv::Trigger;
 
@@ -323,118 +335,48 @@ private:
     const std::shared_ptr<Trigger::Request> & /*request*/,
     const std::shared_ptr<Trigger::Response> & response)
   {
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(state_mutex_);
 
-    if (state_ != BridgeState::IDLE && state_ != BridgeState::HALTED) {
+    if (state_ == BridgeState::ACTIVE || state_ == BridgeState::STARTING) {
       response->success = false;
-      response->message = "bridge can only be activated from IDLE or HALTED state";
-      rejection_reason_ = response->message;
+      response->message = "bridge already " + std::string(bridge_state_str(state_));
       RCLCPP_WARN(get_logger(), "activation rejected: %s", response->message.c_str());
       return;
     }
 
-    // Fail-closed: robot must be ready
     if (!robot_ready_) {
       response->success = false;
       response->message =
         "activation rejected: robot not ready (check drives, e-stop, error state)";
       rejection_reason_ = response->message;
       set_state(BridgeState::REJECTED_NOT_READY, response->message);
-      RCLCPP_WARN(get_logger(), "activation rejected: %s", response->message.c_str());
+      RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
       return;
     }
 
-    // Fail-closed: servo must be active
-    if (!servo_active_) {
-      response->success = false;
-      response->message = "activation rejected: MoveIt Servo status is not active";
-      rejection_reason_ = response->message;
-      set_state(BridgeState::REJECTED_NOT_READY, response->message);
-      RCLCPP_WARN(get_logger(), "activation rejected: %s", response->message.c_str());
-      return;
+    set_state(BridgeState::STARTING);
+    rejection_reason_.clear();
+    response->success = true;
+    response->message = "activation in progress";
+
+    if (servo_active_) {
+      begin_start_point_queue_mode();
+    } else {
+      begin_start_servo();
     }
-
-    // Call start_point_queue_mode
-    if (!start_pqm_client_->wait_for_service(
-        std::chrono::milliseconds(activation_timeout_ms_)))
-    {
-      response->success = false;
-      response->message = start_point_queue_service_ + " is not available";
-      rejection_reason_ = response->message;
-      set_state(BridgeState::ERROR, response->message);
-      RCLCPP_ERROR(get_logger(), "activation failed: %s", response->message.c_str());
-      return;
-    }
-
-    auto request = std::make_shared<motoros2_interfaces::srv::StartPointQueueMode::Request>();
-    auto future = start_pqm_client_->async_send_request(request);
-
-    rclcpp::spin_until_future_complete(
-      get_node_base_interface(), future,
-      std::chrono::milliseconds(activation_timeout_ms_));
-
-    if (future.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
-      response->success = false;
-      response->message = "start_point_queue_mode timed out";
-      rejection_reason_ = response->message;
-      set_state(BridgeState::ERROR, response->message);
-      RCLCPP_ERROR(get_logger(), "activation failed: %s", response->message.c_str());
-      return;
-    }
-
-    auto result = future.get();
-    if (!result) {
-      response->success = false;
-      response->message = "start_point_queue_mode returned null response";
-      rejection_reason_ = response->message;
-      set_state(BridgeState::ERROR, response->message);
-      RCLCPP_ERROR(get_logger(), "activation failed: %s", response->message.c_str());
-      return;
-    }
-
-    const uint16_t code = result->result_code.value;
-    const std::string & msg = result->message;
-
-    if (code == MOTION_READY) {
-      response->success = true;
-      response->message = "point-queue mode activated";
-      rejection_reason_.clear();
-      set_state(BridgeState::READY);
-      bridge_active_ = false;
-      RCLCPP_INFO(get_logger(), "start_point_queue_mode: READY — %s", msg.c_str());
-
-      // Transition to ACTIVE immediately so forwarding can begin
-      set_state(BridgeState::ACTIVE);
-      bridge_active_ = true;
-      points_queued_ = 0;
-      effective_hz_ = 0.0;
-      last_forward_time_ = now();
-      return;
-    }
-
-    if (code == MOTION_NOT_READY_OTHER_TRAJ_MODE) {
-      response->success = false;
-      response->message = "activation rejected: FJT trajectory mode is active. "
-        "Deactivate FJT before using point-queue mode.";
-      rejection_reason_ = response->message;
-      set_state(BridgeState::REJECTED_FJT_ACTIVE, response->message);
-      RCLCPP_WARN(get_logger(), "start_point_queue_mode: FJT ACTIVE — %s", msg.c_str());
-      return;
-    }
-
-    response->success = false;
-    response->message = "start_point_queue_mode failed with code " + std::to_string(code) +
-      ": " + msg;
-    rejection_reason_ = response->message;
-    set_state(BridgeState::REJECTED_NOT_READY, response->message);
-    RCLCPP_WARN(get_logger(), "start_point_queue_mode: code=%d — %s", code, msg.c_str());
   }
 
   void handle_deactivate(
     const std::shared_ptr<Trigger::Request> & /*request*/,
     const std::shared_ptr<Trigger::Response> & response)
   {
-    std::lock_guard<std::mutex> lock(state_mutex_);
+    std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+
+    // Cancel any in-progress servo activation poll
+    if (servo_poll_timer_) {
+      servo_poll_timer_->cancel();
+      servo_poll_timer_.reset();
+    }
 
     if (state_ == BridgeState::IDLE) {
       response->success = true;
@@ -443,7 +385,7 @@ private:
       return;
     }
 
-    // Deactivation = "soft stop by input withdrawal"
+    // Deactivation = soft stop by input withdrawal
     // No hard stop service for point-queue mode.
     bridge_active_ = false;
     points_queued_ = 0;
@@ -453,7 +395,7 @@ private:
     response->success = true;
     response->message = "bridge deactivated. "
       "Note: no hard stop service exists for point-queue mode. "
-      "Motion stops by input withdrawal (watchdog ≤200ms on jog_input_node). "
+      "Motion stops by input withdrawal (watchdog <=200ms on jog_input_node). "
       "Operator must verify robot has stopped.";
     rejection_reason_.clear();
     last_error_.clear();
@@ -463,9 +405,120 @@ private:
       response->message.c_str());
   }
 
-  // ══════════════════════════════════════════════════════════════════════
+  // ======================================================================
+  // Activation helpers -- called from handle_activate, fully async
+  // ======================================================================
+
+  void begin_start_servo()
+  {
+    if (!start_servo_client_->service_is_ready()) {
+      std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+      rejection_reason_ = "start_servo service (" + start_servo_service_ + ") not available";
+      set_state(BridgeState::REJECTED_NOT_READY, rejection_reason_);
+      RCLCPP_WARN(get_logger(), "%s", rejection_reason_.c_str());
+      return;
+    }
+
+    RCLCPP_INFO(get_logger(), "calling start_servo at %s", start_servo_service_.c_str());
+    auto request = std::make_shared<Trigger::Request>();
+    start_servo_client_->async_send_request(request,
+      [this](rclcpp::Client<Trigger>::SharedFuture future) {
+        auto result = future.get();
+        if (!result || !result->success) {
+          std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+          std::string msg = result ? result->message : "null response";
+          rejection_reason_ = "start_servo failed: " + msg;
+          set_state(BridgeState::REJECTED_NOT_READY, rejection_reason_);
+          RCLCPP_WARN(get_logger(), "%s", rejection_reason_.c_str());
+          return;
+        }
+        RCLCPP_INFO(get_logger(), "start_servo succeeded, polling for servo_active...");
+        begin_servo_active_poll();
+      });
+  }
+
+  void begin_servo_active_poll()
+  {
+    servo_poll_count_ = 0;
+    const int max_polls = activation_timeout_ms_ / 100;
+    servo_poll_timer_ = create_wall_timer(
+      std::chrono::milliseconds(100),
+      [this, max_polls]() {
+        if (servo_active_.load()) {
+          servo_poll_timer_->cancel();
+          servo_poll_timer_.reset();
+          RCLCPP_INFO(get_logger(), "servo_active confirmed after %d polls", servo_poll_count_);
+          begin_start_point_queue_mode();
+          return;
+        }
+        servo_poll_count_++;
+        if (servo_poll_count_ >= max_polls) {
+          servo_poll_timer_->cancel();
+          servo_poll_timer_.reset();
+          std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+          rejection_reason_ = "timed out waiting for servo_active after start_servo (" +
+            std::to_string(activation_timeout_ms_) + "ms)";
+          set_state(BridgeState::REJECTED_NOT_READY, rejection_reason_);
+          RCLCPP_WARN(get_logger(), "%s", rejection_reason_.c_str());
+        }
+      });
+  }
+
+  void begin_start_point_queue_mode()
+  {
+    if (!start_pqm_client_->service_is_ready()) {
+      std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+      rejection_reason_ = start_point_queue_service_ + " is not available";
+      set_state(BridgeState::ERROR, rejection_reason_);
+      RCLCPP_ERROR(get_logger(), "activation failed: %s", rejection_reason_.c_str());
+      return;
+    }
+
+    auto request = std::make_shared<motoros2_interfaces::srv::StartPointQueueMode::Request>();
+    start_pqm_client_->async_send_request(request,
+      [this](
+        rclcpp::Client<motoros2_interfaces::srv::StartPointQueueMode>::SharedFuture future)
+      {
+        auto result = future.get();
+        if (!result) {
+          std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+          set_state(BridgeState::ERROR, "start_point_queue_mode returned null response");
+          return;
+        }
+
+        const uint16_t code = result->result_code.value;
+        const std::string & msg = result->message;
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+
+        if (code == MOTION_READY) {
+          rejection_reason_.clear();
+          RCLCPP_INFO(get_logger(), "start_point_queue_mode: READY -- %s", msg.c_str());
+          set_state(BridgeState::ACTIVE);
+          bridge_active_ = true;
+          points_queued_ = 0;
+          effective_hz_ = 0.0;
+          last_forward_time_ = now();
+          return;
+        }
+
+        if (code == MOTION_NOT_READY_OTHER_TRAJ_MODE) {
+          rejection_reason_ = "FJT trajectory mode is active. "
+            "Deactivate FJT before using point-queue mode.";
+          set_state(BridgeState::REJECTED_FJT_ACTIVE, rejection_reason_);
+          RCLCPP_WARN(get_logger(), "start_point_queue_mode: FJT ACTIVE -- %s", msg.c_str());
+          return;
+        }
+
+        rejection_reason_ = "start_point_queue_mode failed with code " +
+          std::to_string(code) + ": " + msg;
+        set_state(BridgeState::REJECTED_NOT_READY, rejection_reason_);
+        RCLCPP_WARN(get_logger(), "start_point_queue_mode: code=%d -- %s", code, msg.c_str());
+      });
+  }
+
+  // ======================================================================
   // Subscriptions
-  // ══════════════════════════════════════════════════════════════════════
+  // ======================================================================
 
   void on_robot_status(const industrial_msgs::msg::RobotStatus::SharedPtr & msg)
   {
@@ -550,15 +603,14 @@ private:
       return;
     }
 
-    // Forward with BUSY retry
-    forward_point_with_retry(msg->joint_names, point);
+    forward_point_async(msg->joint_names, point);
     last_forward_time_ = now_ts;
     update_effective_hz(elapsed);
   }
 
-  // ══════════════════════════════════════════════════════════════════════
+  // ======================================================================
   // Point forwarding
-  // ══════════════════════════════════════════════════════════════════════
+  // ======================================================================
 
   bool validate_point(
     const std::vector<std::string> & joint_names,
@@ -607,86 +659,55 @@ private:
     return true;
   }
 
-  void forward_point_with_retry(
+  void forward_point_async(
     const std::vector<std::string> & joint_names,
     const trajectory_msgs::msg::JointTrajectoryPoint & point)
   {
     if (!validate_point(joint_names, point)) {
-      set_state(BridgeState::ERROR, "joint_names/limits validation failed for queued point");
+      set_state(BridgeState::ERROR, "joint validation failed for queued point");
       bridge_active_ = false;
       return;
     }
 
-    int retries = 0;
-    while (retries <= busy_retry_max_) {
-      auto response = forward_point_once(joint_names, point);
-      if (!response) {
-        set_state(BridgeState::ERROR, "queue_traj_point service call failed");
-        bridge_active_ = false;
-        return;
-      }
-
-      const uint16_t result_code = response->result_code.value;
-
-      if (result_code == QUEUE_SUCCESS) {
-        points_queued_.fetch_add(1, std::memory_order_relaxed);
-        return;
-      }
-
-      if (result_code == QUEUE_BUSY) {
-        retries++;
-        if (retries > busy_retry_max_) {
-          RCLCPP_WARN(get_logger(), "queue_traj_point BUSY after %d retries", busy_retry_max_);
-          set_state(BridgeState::BUSY_RETRY);
-          return;
-        }
-        RCLCPP_WARN(
-          get_logger(), "queue_traj_point BUSY (retry %d/%d)",
-          retries, busy_retry_max_);
-        set_state(BridgeState::BUSY_RETRY);
-        std::this_thread::sleep_for(std::chrono::milliseconds(busy_retry_interval_ms_));
-        continue;
-      }
-
-      RCLCPP_WARN(
-        get_logger(), "queue_traj_point failed: code=%d msg=%s",
-        result_code, response->message.c_str());
-      set_state(BridgeState::ERROR, "queue_traj_point failed: " + response->message);
-      bridge_active_ = false;
-      return;
-    }
-  }
-
-  motoros2_interfaces::srv::QueueTrajPoint::Response::SharedPtr
-  forward_point_once(
-    const std::vector<std::string> & joint_names,
-    const trajectory_msgs::msg::JointTrajectoryPoint & point)
-  {
-    if (!queue_traj_client_->wait_for_service(std::chrono::milliseconds(1000))) {
+    if (!queue_traj_client_->service_is_ready()) {
       RCLCPP_WARN_THROTTLE(
-        get_logger(), *clock_, 1000,
-        "queue_traj_point service unavailable");
-      return nullptr;
+        get_logger(), *clock_, 1000, "queue_traj_point service unavailable");
+      return;
     }
 
     auto request = std::make_shared<motoros2_interfaces::srv::QueueTrajPoint::Request>();
     request->joint_names = joint_names;
     request->point = point;
 
-    auto future = queue_traj_client_->async_send_request(request);
+    queue_traj_client_->async_send_request(request,
+      [this](rclcpp::Client<motoros2_interfaces::srv::QueueTrajPoint>::SharedFuture future) {
+        auto response = future.get();
+        if (!response) {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *clock_, 1000, "queue_traj_point returned null");
+          return;
+        }
 
-    auto result = rclcpp::spin_until_future_complete(
-      get_node_base_interface(), future,
-      std::chrono::milliseconds(500));
+        const uint16_t code = response->result_code.value;
 
-    if (result != rclcpp::FutureReturnCode::SUCCESS) {
-      RCLCPP_WARN_THROTTLE(
-        get_logger(), *clock_, 1000,
-        "queue_traj_point call failed (future state=%d)", static_cast<int>(result));
-      return nullptr;
-    }
+        if (code == QUEUE_SUCCESS) {
+          points_queued_.fetch_add(1, std::memory_order_relaxed);
+          return;
+        }
 
-    return future.get();
+        if (code == QUEUE_BUSY) {
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *clock_, 500,
+            "queue_traj_point BUSY, will retry on next trajectory");
+          return;
+        }
+
+        RCLCPP_WARN(
+          get_logger(), "queue_traj_point failed: code=%d msg=%s",
+          code, response->message.c_str());
+        set_state(BridgeState::ERROR, "queue_traj_point failed: " + response->message);
+        bridge_active_ = false;
+      });
   }
 
   void update_effective_hz(double elapsed_since_last)
@@ -699,9 +720,9 @@ private:
     }
   }
 
-  // ══════════════════════════════════════════════════════════════════════
+  // ======================================================================
   // Status publishing
-  // ══════════════════════════════════════════════════════════════════════
+  // ======================================================================
 
   void publish_status()
   {
@@ -714,7 +735,7 @@ private:
     std::string error_copy;
     std::string rejection_copy;
     {
-      std::lock_guard<std::mutex> lock(state_mutex_);
+      std::lock_guard<std::recursive_mutex> lock(state_mutex_);
       error_copy = last_error_;
       rejection_copy = rejection_reason_;
     }
@@ -737,13 +758,13 @@ private:
     status_pub_->publish(status_msg);
   }
 
-  // ══════════════════════════════════════════════════════════════════════
+  // ======================================================================
   // Members
-  // ══════════════════════════════════════════════════════════════════════
+  // ======================================================================
 
   rclcpp::Clock::SharedPtr clock_;
 
-  mutable std::mutex state_mutex_;
+  mutable std::recursive_mutex state_mutex_;
   BridgeState state_;
 
   std::atomic<bool> robot_ready_;
@@ -774,6 +795,7 @@ private:
   int32_t busy_retry_max_;
   int32_t busy_retry_interval_ms_;
   int32_t activation_timeout_ms_;
+  std::string start_servo_service_;
   bool sim_mode_;
 
   // Joint state cache
@@ -799,9 +821,12 @@ private:
   // Service clients
   rclcpp::Client<motoros2_interfaces::srv::StartPointQueueMode>::SharedPtr start_pqm_client_;
   rclcpp::Client<motoros2_interfaces::srv::QueueTrajPoint>::SharedPtr queue_traj_client_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr start_servo_client_;
 
-  // Timer
+  // Timers
   rclcpp::TimerBase::SharedPtr status_timer_;
+  rclcpp::TimerBase::SharedPtr servo_poll_timer_;
+  int32_t servo_poll_count_{0};
 };
 
 }  // namespace jog_pendant

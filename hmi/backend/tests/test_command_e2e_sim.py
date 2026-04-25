@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import socket
 import subprocess
 import time
@@ -49,7 +50,7 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
         self._api_process: subprocess.Popen[str] | None = None
         self._sim_log_handle = None
         self._api_log_handle = None
-        self._api_restarted_once = False
+        self._api_restart_count = 0
 
     async def asyncTearDown(self) -> None:
         self._stop_process(self._api_process)
@@ -386,6 +387,18 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
         )
         await stream_ready.wait()
 
+        reacquire_response = await asyncio.to_thread(
+            self._post_json,
+            '/api/hmi/lease/acquire',
+            {
+                'sessionId': session_id,
+                'operatorId': operator_id,
+                'requestedRole': 'controller',
+            },
+        )
+        self.assertTrue(reacquire_response['accepted'])
+        lease_token = reacquire_response['lease']['leaseToken']
+
         confirm_response = await asyncio.to_thread(
             self._post_json,
             f'/api/hmi/sequences/{urllib.parse.quote(sequence_id)}/confirm',
@@ -494,6 +507,7 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
             stdout=self._sim_log_handle,
             stderr=subprocess.STDOUT,
             text=True,
+            start_new_session=True,
         )
 
     def _start_api_server(self) -> None:
@@ -511,6 +525,7 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
             stdout=self._api_log_handle,
             stderr=subprocess.STDOUT,
             text=True,
+            start_new_session=True,
         )
 
     def _base_url(self) -> str:
@@ -537,12 +552,12 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
             except Exception as exc:  # pragma: no cover - transient startup path
                 last_error = exc
                 if (
-                    not self._api_restarted_once
+                    self._api_restart_count < 3
                     and self._is_connection_refused(exc)
                     and (time.monotonic() - startup_started_at) >= 20.0
                 ):
                     self._restart_api_server()
-                    self._api_restarted_once = True
+                    self._api_restart_count += 1
                     startup_started_at = time.monotonic()
                 time.sleep(0.5)
                 continue
@@ -667,12 +682,24 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
             return
         if process.poll() is not None:
             return
-        process.terminate()
+        self._terminate_process_group(process, signal.SIGTERM)
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            process.kill()
+            self._terminate_process_group(process, signal.SIGKILL)
             process.wait(timeout=5)
+
+    @staticmethod
+    def _terminate_process_group(process: subprocess.Popen[str], sig: signal.Signals) -> None:
+        try:
+            os.killpg(os.getpgid(process.pid), sig)
+        except ProcessLookupError:
+            return
+        except Exception:
+            if sig == signal.SIGTERM:
+                process.terminate()
+            else:
+                process.kill()
 
 
 if __name__ == '__main__':

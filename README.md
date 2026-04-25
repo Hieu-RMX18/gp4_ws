@@ -63,7 +63,7 @@ llm_gateway  ──► /validate_command ──► safety
 | `primitives`        | C++      | Library of primitive implementations and dispatch helpers. |
 | `jog_pendant`       | C++      | **Experimental** MoveIt Servo + MotoROS2 bridge for real-time joint jogging. NOT for production use. |
 | `gp4_moveit_config` | —        | URDF/SRDF, planners, controllers, MoveIt launch/config. |
-| `gp4_bringup`       | Python   | Composes sim vs hardware launches, LLM stack, workspace scanner. |
+| `gp4_bringup`       | Python   | Composes sim vs hardware launches and the LLM stack. |
 
 ### HMI Stack
 
@@ -94,8 +94,8 @@ This system controls real industrial hardware. **Safety overrides speed and conv
 | Workspace X                      | `[-0.45, 0.45] m` |
 | Workspace Y                      | `[-0.16, 0.52] m` |
 | Workspace Z                      | `[0.23, 0.52] m`  |
-| Human approval velocity threshold | `0.05`           |
-| Human approval distance from HOME | `> 0.30 m`       |
+| HMI review velocity threshold    | `0.05`            |
+| HMI review distance from HOME    | `> 0.30 m`        |
 
 Forbidden zones (pre-planning, 30 mm inflation):
 - `front_wall_guard` — station front face at Y = −0.197 m
@@ -218,12 +218,6 @@ cd ~/gp4_ws/hmi/frontend && npm run dev
 ros2 launch jog_pendant jog_pendant_experimental.launch.py
 ```
 
-### Workspace Reachability Scanner
-
-```bash
-ros2 run gp4_bringup workspace_scanner --ros-args -p output_path:=/tmp/gp4_workspace_scan.json
-```
-
 ---
 
 ## Example Commands
@@ -267,7 +261,7 @@ The HMI provides a browser-based operator panel with:
 - **Jog pendant** — real-time joint jogging (requires `jog_pendant` stack running)
 - **Session management** — operator session lock and audit trail
 
-The HMI command path follows the same safety pipeline: `ValidateCommand → ExecuteMotion`. It does **not** bypass to MotoROS2 directly.
+The HMI command path follows the same safety pipeline: `ValidateCommand → ExecuteMotion`. It does **not** bypass to MotoROS2 directly. Human confirmation is owned by the HMI/supervisor before dispatch; `ExecuteMotion.require_approval` is a deprecated wire-compatibility field and confirmed commands are dispatched with `require_approval=false`.
 
 Full spec: `hmi/HMI_V2_COMMAND_INGRESS.md`
 
@@ -286,7 +280,19 @@ Full spec: `hmi/HMI_V2_COMMAND_INGRESS.md`
 | Environment Variable | Description |
 |----------------------|-------------|
 | `GP4_LLM_API_KEY`    | API key for `llm_gateway` LLM backend |
+| `GP4_LLM_ENV_FILE`   | Local `.env` file path, usually `/home/hieu2/gp4_ws/.env` |
 | `RMW_IMPLEMENTATION` | Set to `rmw_fastrtps_cpp` for hardware launch |
+| `ROS_DOMAIN_ID`      | Keep at `39` for this GP4 workspace to isolate it from other ROS 2 stacks |
+
+Recommended shell setup:
+
+```bash
+export GP4_LLM_ENV_FILE=/home/hieu2/gp4_ws/.env
+export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+
+# GP4 workspace: isolate from other ROS2 stacks on same network
+export ROS_DOMAIN_ID=39
+```
 
 ---
 

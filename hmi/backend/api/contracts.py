@@ -155,6 +155,10 @@ class CommandExecutionResultModel(StrictModel):
     status: str
     summary: str
     dispatchedToRos: bool
+    queryOnly: bool = False
+    referenceFrame: str | None = None
+    pose: dict[str, Any] | None = None
+    poseMm: dict[str, Any] | None = None
     commandId: str | None = None
     planFingerprint: str | None = None
     operatorId: str | None = None

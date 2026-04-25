@@ -45,7 +45,7 @@ export function JogPendant({
   const [activating, setActivating] = useState(false);
 
   const canJog = s.state === 'READY' || s.state === 'ACTIVE';
-  const canActivate = s.state === 'IDLE' || s.state === 'HALTED';
+  const canActivate = s.state !== 'ACTIVE' && s.state !== 'STARTING';
   const canDeactivate = s.state !== 'IDLE';
   const errorText = s.lastError || s.rejectionReason || null;
 

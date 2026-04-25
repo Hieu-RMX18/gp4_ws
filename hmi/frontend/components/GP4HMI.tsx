@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 
 import type {
   BridgeConnection,
@@ -715,6 +715,8 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedbackView | null>(null);
   const [latestMutationReason, setLatestMutationReason] = useState<string | null>(null);
+  const submitPendingRef = useRef(false);
+  const confirmPendingRef = useRef(false);
 
   const {
     state,
@@ -907,11 +909,15 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
   ]);
 
   const handleSubmit = async () => {
+    if (submitPendingRef.current) {
+      return;
+    }
     const rawText = draft.trim();
     if (!rawText || !canSubmitCommands) {
       return;
     }
 
+    submitPendingRef.current = true;
     try {
       const response = await submitCommand(rawText);
       if (!response.accepted) {
@@ -960,10 +966,16 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
       const message = error instanceof Error ? error.message : 'Failed to submit intent.';
       setSubmitError(message);
       pushActionFeedback('err', `Submit failed · ${message}`, message);
+    } finally {
+      submitPendingRef.current = false;
     }
   };
 
   const handleConfirmClick = async () => {
+    if (confirmPendingRef.current) {
+      return;
+    }
+    confirmPendingRef.current = true;
     try {
       const response = await confirmActiveCommand();
       if (!response) {
@@ -979,6 +991,8 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Failed to confirm command.';
       pushActionFeedback('err', `Confirm failed · ${message}`, message);
+    } finally {
+      confirmPendingRef.current = false;
     }
   };
 

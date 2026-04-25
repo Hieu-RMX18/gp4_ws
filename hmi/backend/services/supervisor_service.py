@@ -461,6 +461,14 @@ class SupervisorService(
             )
             return self._command_response(session_id, operator_id, command, accepted=False, reason=reject_reason)
 
+        if self._is_get_pose_command(command):
+            return self._execute_get_pose_query(
+                command=command,
+                session_id=session_id,
+                operator_id=operator_id,
+                runtime=runtime,
+            )
+
         command.confirmation_expires_at = utcnow() + self._confirmation_window
         self._transition_command(
             command,

@@ -309,11 +309,25 @@ class SupervisorExecutionMixin:
             }
         else:
             position = pose.get("position", {}) if isinstance(pose, dict) else {}
+            orientation = pose.get("orientation", {}) if isinstance(pose, dict) else {}
+            pose_mm = {
+                "position": {
+                    "x": float(position.get("x", 0.0)) * 1000.0,
+                    "y": float(position.get("y", 0.0)) * 1000.0,
+                    "z": float(position.get("z", 0.0)) * 1000.0,
+                },
+                "orientation": {
+                    "x": float(orientation.get("x", 0.0)),
+                    "y": float(orientation.get("y", 0.0)),
+                    "z": float(orientation.get("z", 0.0)),
+                    "w": float(orientation.get("w", 1.0)),
+                },
+            }
             summary = (
                 "GET_POSE result: "
-                f"x={float(position.get('x', 0.0)):.4f}, "
-                f"y={float(position.get('y', 0.0)):.4f}, "
-                f"z={float(position.get('z', 0.0)):.4f} in {reference_frame}."
+                f"x={pose_mm['position']['x']:.1f} mm, "
+                f"y={pose_mm['position']['y']:.1f} mm, "
+                f"z={pose_mm['position']['z']:.1f} mm in {reference_frame}."
             )
             execution_result = {
                 "accepted": True,
@@ -324,6 +338,7 @@ class SupervisorExecutionMixin:
                 "queryOnly": True,
                 "referenceFrame": reference_frame,
                 "pose": pose,
+                "poseMm": pose_mm,
             }
 
         command.execution_result = execution_result
@@ -342,15 +357,17 @@ class SupervisorExecutionMixin:
             status=execution_result.get("status"),
             summary=execution_result.get("summary"),
         )
-        self._transition_command(
-            command,
-            next_state=CommandLifecycleState.EXECUTING,
-            reason="supervisor queried current pose via dedicated ROS service",
-            runtime_state=runtime.system_state,
-            payload=execution_result,
-            message_text="Step 5/6 QUERYING: current TCP pose requested from /get_current_pose.",
-            message_tag=CommandLifecycleState.EXECUTING.value,
-        )
+        should_emit_querying_state = command.lifecycle_state != CommandLifecycleState.VALIDATING
+        if should_emit_querying_state:
+            self._transition_command(
+                command,
+                next_state=CommandLifecycleState.EXECUTING,
+                reason="supervisor queried current pose via dedicated ROS service",
+                runtime_state=runtime.system_state,
+                payload=execution_result,
+                message_text="Step 5/6 QUERYING: current TCP pose requested from /get_current_pose.",
+                message_tag=CommandLifecycleState.EXECUTING.value,
+            )
 
         if execution_result["status"] == "succeeded":
             command.final_state = CommandLifecycleState.SUCCEEDED

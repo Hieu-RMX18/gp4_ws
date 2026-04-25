@@ -31,6 +31,8 @@ ALLOWED_COMMAND_TRANSITIONS = {
     },
     CommandLifecycleState.VALIDATING: {
         CommandLifecycleState.NEEDS_CONFIRMATION,
+        CommandLifecycleState.SUCCEEDED,
+        CommandLifecycleState.FAILED,
         CommandLifecycleState.REJECTED,
         CommandLifecycleState.CANCELLED,
         CommandLifecycleState.EXPIRED,

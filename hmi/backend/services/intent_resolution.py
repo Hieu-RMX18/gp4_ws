@@ -1104,9 +1104,9 @@ class IntentResolutionService:
         if primitive == "MOVE_REL":
             return (
                 "Relative translation in base_link: "
-                f"dx={normalized_command.get('delta_x', 0.0):.4f} "
-                f"dy={normalized_command.get('delta_y', 0.0):.4f} "
-                f"dz={normalized_command.get('delta_z', 0.0):.4f} m."
+                f"dx={float(normalized_command.get('delta_x', 0.0)) * 1000.0:.1f} mm "
+                f"dy={float(normalized_command.get('delta_y', 0.0)) * 1000.0:.1f} mm "
+                f"dz={float(normalized_command.get('delta_z', 0.0)) * 1000.0:.1f} mm."
             )
         if primitive == "MOVE_JOINT":
             return (

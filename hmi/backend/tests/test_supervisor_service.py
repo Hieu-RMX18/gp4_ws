@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
+from hmi.backend.api.contracts import CommandExecutionResultModel
 from hmi.backend.domain.models import (
     BridgeConnection,
     ConnectionHealth,
@@ -352,6 +353,22 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertEqual(response['command']['parsedIntent']['action'], 'MOVE_REL')
         self.assertEqual(response['command']['parsedIntent']['normalizedCommand']['reference_frame'], 'base_link')
 
+    def test_cartesian_text_intent_accepts_meters_but_summarizes_mm(self) -> None:
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='move up 0.1 m',
+            mode='sim',
+        )
+
+        self.assertTrue(response['accepted'])
+        normalized_command = response['command']['parsedIntent']['normalizedCommand']
+        self.assertEqual(normalized_command['primitive_type'], 'MOVE_REL')
+        self.assertAlmostEqual(normalized_command['delta_z'], 0.1)
+        self.assertIn('dz=100.0 mm', response['command']['parsedIntent']['targetSummary'])
+
     def test_joint_text_intent_maps_to_absolute_joint_target(self) -> None:
         lease_token = self._acquire_lease()
         response = self.supervisor.submit_intent(
@@ -575,26 +592,66 @@ class SupervisorServiceTests(unittest.TestCase):
             mode='sim',
         )
 
-        confirm_response = self.supervisor.confirm_command(
-            session_id=self.session_id,
-            operator_id=self.operator_id,
-            lease_token=lease_token,
-            command_id=response['commandId'],
-            plan_fingerprint=response['command']['planFingerprint'],
-        )
-
-        self.assertTrue(confirm_response['accepted'])
-        self.assertEqual(confirm_response['command']['lifecycleState'], 'SUCCEEDED')
-        self.assertEqual(confirm_response['command']['finalState'], 'SUCCEEDED')
+        self.assertTrue(response['accepted'])
+        self.assertEqual(response['command']['lifecycleState'], 'SUCCEEDED')
+        self.assertEqual(response['command']['finalState'], 'SUCCEEDED')
         self.assertEqual(self.adapter.confirm_calls, [])
         self.assertEqual(self.adapter.get_pose_calls, [{'reference_frame': 'base_link'}])
-        self.assertTrue(confirm_response['command']['executionResult']['queryOnly'])
+        self.assertTrue(response['command']['executionResult']['queryOnly'])
         self.assertEqual(
-            confirm_response['command']['executionResult']['pose'],
+            response['command']['executionResult']['pose'],
             {
                 'position': {'x': 0.30, 'y': 0.00, 'z': 0.30},
                 'orientation': {'x': 0.0, 'y': 1.0, 'z': 0.0, 'w': 0.0},
             },
+        )
+        self.assertEqual(
+            response['command']['executionResult']['poseMm'],
+            {
+                'position': {'x': 300.0, 'y': 0.0, 'z': 300.0},
+                'orientation': {'x': 0.0, 'y': 1.0, 'z': 0.0, 'w': 0.0},
+            },
+        )
+        self.assertIn('x=300.0 mm', response['command']['executionResult']['summary'])
+
+    def test_get_pose_completes_as_read_only_query_during_submit(self) -> None:
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text='get pose',
+            mode='sim',
+        )
+
+        self.assertTrue(response['accepted'])
+        self.assertEqual(response['command']['lifecycleState'], 'SUCCEEDED')
+        self.assertEqual(response['command']['finalState'], 'SUCCEEDED')
+        self.assertIsNone(response['command']['confirmationExpiresAt'])
+        self.assertEqual(self.adapter.confirm_calls, [])
+        self.assertEqual(self.adapter.get_pose_calls, [{'reference_frame': 'base_link'}])
+        self.assertTrue(response['command']['executionResult']['queryOnly'])
+        self.assertEqual(response['command']['executionResult']['status'], 'succeeded')
+
+    def test_pose_query_execution_result_matches_api_contract(self) -> None:
+        CommandExecutionResultModel.model_validate(
+            {
+                'accepted': True,
+                'adapter': 'workspace_ros_adapter',
+                'status': 'succeeded',
+                'summary': 'GET_POSE result: x=300.0 mm, y=0.0 mm, z=300.0 mm in base_link.',
+                'dispatchedToRos': False,
+                'queryOnly': True,
+                'referenceFrame': 'base_link',
+                'pose': {
+                    'position': {'x': 0.30, 'y': 0.00, 'z': 0.30},
+                    'orientation': {'x': 0.0, 'y': 1.0, 'z': 0.0, 'w': 0.0},
+                },
+                'poseMm': {
+                    'position': {'x': 300.0, 'y': 0.0, 'z': 300.0},
+                    'orientation': {'x': 0.0, 'y': 1.0, 'z': 0.0, 'w': 0.0},
+                },
+            }
         )
 
     def test_rejected_command_event_carries_terminal_fields(self) -> None:

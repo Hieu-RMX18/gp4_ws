@@ -176,6 +176,10 @@ export interface CommandExecutionResult {
   status: string;
   summary: string;
   dispatchedToRos: boolean;
+  queryOnly?: boolean;
+  referenceFrame?: string | null;
+  pose?: Record<string, unknown> | null;
+  poseMm?: Record<string, unknown> | null;
   commandId?: string | null;
   planFingerprint?: string | null;
   operatorId?: string | null;

@@ -39,7 +39,7 @@ from typing import Optional
 
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, Reliability
+from rclpy.qos import QoSProfile, ReliabilityPolicy
 
 from control_msgs.msg import JointJog
 from interfaces.msg import JogCommand
@@ -124,7 +124,7 @@ class JogInputNode(Node):
         self._state_lock = threading.Lock()
 
         # ── Subscriptions ───────────────────────────────────────────
-        self._qos = QoSProfile(depth=10, reliability=Reliability.RELIABLE)
+        self._qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
 
         self._jog_sub = self.create_subscription(
             JogCommand,

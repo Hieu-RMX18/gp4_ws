@@ -80,6 +80,16 @@ asyncio.run(main())
 PY
 ```
 
+Hardware telemetry validation (read-only):
+
+```bash
+cd /home/hieu2/gp4_ws
+source install/setup.bash
+python3 hmi/tools/hardware_telemetry_validation.py \
+  --duration-sec 120 \
+  --output /tmp/gp4_hardware_telemetry_report.json
+```
+
 WebSocket heartbeat:
 
 - server sends an explicit `heartbeat` event every `5 s` when no semantic snapshot changed

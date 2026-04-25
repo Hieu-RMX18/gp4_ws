@@ -17,6 +17,11 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import String
 
+from llm_gateway.command_pipeline import (
+    command_from_sanitized_json as _pipeline_command_from_sanitized_json,
+    hydrate_draw_workplane as _pipeline_hydrate_draw_workplane,
+    prepare_execution_command as _pipeline_prepare_execution_command,
+)
 from llm_gateway.goal_mapper import GoalMapper
 from llm_gateway.intent_router import IntentRouter
 from llm_gateway.llm_client import OpenAICompatibleLLMClient
@@ -78,7 +83,11 @@ class LLMGatewayNode(Node):
             self._default_velocity_scale, self._default_acceleration_scale
         )
         self._semantic_validator = semantic_validator or SemanticValidator()
-        self._goal_mapper = goal_mapper or GoalMapper()
+        self._goal_mapper = goal_mapper or GoalMapper(
+            default_velocity_scale=self._default_velocity_scale,
+            default_acceleration_scale=self._default_acceleration_scale,
+            default_require_approval=False,
+        )
         runtime_mode = self._resolve_runtime_mode()
         self._intent_router = intent_router or IntentRouter(runtime_mode=runtime_mode)
         self._sequence_validator = sequence_validator or SequenceValidator(
@@ -154,6 +163,9 @@ class LLMGatewayNode(Node):
         self.declare_parameter("default_acceleration_scale", 0.06)
         self.declare_parameter("safety_service_timeout_sec", 2.0)
         self.declare_parameter("status_heartbeat_period_sec", 5.0)
+        # DEPRECATED: compatibility flag for older launch/test files. Direct
+        # gateway dispatch ignores it and always sends executable commands with
+        # require_approval=false. Will be removed in a future release.
         self.declare_parameter("auto_clear_unimplemented_approval", False)
 
     def _resolve_runtime_mode(self) -> str:
@@ -168,6 +180,12 @@ class LLMGatewayNode(Node):
             .get_parameter_value()
             .bool_value
         )
+        if auto_clear:
+            self.get_logger().warn(
+                "auto_clear_unimplemented_approval is DEPRECATED/no-op for "
+                "approval dispatch. Direct executable commands dispatch with "
+                "require_approval=false."
+            )
         return "sim" if auto_clear else "hardware"
 
     def publish_status(self, status: str) -> None:
@@ -373,6 +391,27 @@ class LLMGatewayNode(Node):
     ) -> None:
         primitive_type = normalized_command.get("primitive_type", "")
 
+        if normalized_command.get("plan_only"):
+            command_payload = self._goal_mapper.to_command_payload(normalized_command)
+            reason = (
+                "plan_only_not_executable: plan_only requests are not executable "
+                "through /execute_motion."
+            )
+            if sequence_state is None:
+                self._reject(
+                    "plan_only_not_executable",
+                    reason,
+                    intent_text=intent_text,
+                    validated_command=command_payload,
+                )
+            else:
+                self._reject_sequence_step(
+                    sequence_state,
+                    reason,
+                    validated_command=command_payload,
+                )
+            return
+
         if sequence_state is None and self._is_query_command(primitive_type):
             self._publish_command(self._goal_mapper.to_command_payload(normalized_command))
             self._handle_get_pose_query(normalized_command, intent_text)
@@ -560,7 +599,23 @@ class LLMGatewayNode(Node):
                 )
             return
 
-        execution_command = self._prepare_execution_command(normalized_command)
+        try:
+            execution_command = self._prepare_execution_command(normalized_command)
+        except Exception as exc:
+            if sequence_state is None:
+                self._reject(
+                    "plan_only_not_executable",
+                    str(exc),
+                    intent_text=intent_text,
+                    validated_command=command_payload,
+                )
+            else:
+                self._reject_sequence_step(
+                    sequence_state,
+                    str(exc),
+                    validated_command=command_payload,
+                )
+            return
         goal_payload = self._goal_mapper.to_command_payload(execution_command)
         self._publish_command(goal_payload)
         validated_debug_payload = {
@@ -698,44 +753,26 @@ class LLMGatewayNode(Node):
                 )
 
     def _prepare_execution_command(self, normalized_command: Dict[str, Any]) -> Dict[str, Any]:
-        if normalized_command.get("plan_only"):
-            execution_command = dict(normalized_command)
-            execution_command["require_approval"] = True
-            return execution_command
-
+        # Thin wrapper keeps the deprecated ROS parameter wired for compatibility;
+        # the pure helper treats it as no-op for approval dispatch.
         auto_clear = (
             self.get_parameter("auto_clear_unimplemented_approval")
             .get_parameter_value()
             .bool_value
         )
-        if not auto_clear:
-            return normalized_command
-
-        execution_command = dict(normalized_command)
-        if execution_command.get("require_approval"):
-            # Fake/sim Phase 9 still uses ValidateCommand as the safety gate, but
-            # simulation workflows often need immediate execution after validation.
-            # Keep this override launch-controlled so hardware remains conservative
-            # by default while fake/sim can run end-to-end.
-            self.get_logger().info(
-                "Clearing require_approval for fake/sim compatibility after ValidateCommand approval."
-            )
-        self.get_logger().warn(
-            "[DEFERRED] require_approval cleared by auto_clear_unimplemented_approval. "
-            "Approval gate is deferred to a future phase.")
-        execution_command["require_approval"] = False
-        return execution_command
+        return _pipeline_prepare_execution_command(
+            normalized_command,
+            auto_clear_deprecated_approval=auto_clear,
+            logger=self.get_logger(),
+        )
 
     def _command_from_sanitized_json(
         self, sanitized_json: str, fallback_payload: Dict[str, Any]
     ) -> Dict[str, Any]:
-        if not sanitized_json:
-            return fallback_payload
-        loaded = json.loads(sanitized_json)
-        if not isinstance(loaded, dict):
-            raise ValueError("sanitized_json must decode to a JSON object.")
-        self._schema_validator.validate(loaded)
-        return loaded
+        # Thin wrapper: supplies the node's schema_validator to the pure helper.
+        return _pipeline_command_from_sanitized_json(
+            sanitized_json, fallback_payload, self._schema_validator
+        )
 
     def _reject_sequence_step(
         self,
@@ -805,38 +842,11 @@ class LLMGatewayNode(Node):
         )
 
     def _hydrate_draw_workplane(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        if not isinstance(payload, dict):
-            return payload
-        intent = str(payload.get("intent", "")).strip().lower()
-        if intent not in {"draw_shape", "draw_text"}:
-            return payload
-
-        working_payload = dict(payload)
-        workplane = working_payload.get("workplane")
-        if workplane is None:
-            workplane = {"mode": "tool"}
-            working_payload["workplane"] = workplane
-        if not isinstance(workplane, dict):
-            return working_payload
-
-        mode = str(workplane.get("mode", "base")).strip().lower()
-        if mode != "tool":
-            return working_payload
-        if isinstance(workplane.get("origin"), dict):
-            return working_payload
-        if isinstance(working_payload.get("start_pose"), dict):
-            return working_payload
-
-        current_pose = self._request_current_pose_snapshot("base_link")
-        if current_pose is None:
-            raise ValueError(
-                "missing_workplane: tool mode requires current pose, but /get_current_pose is unavailable"
-            )
-
-        hydrated_workplane = dict(workplane)
-        hydrated_workplane["origin"] = current_pose
-        working_payload["workplane"] = hydrated_workplane
-        return working_payload
+        # Thin wrapper: injects the ROS-coupled pose-snapshot fetcher.
+        return _pipeline_hydrate_draw_workplane(
+            payload,
+            fetch_current_pose=self._request_current_pose_snapshot,
+        )
 
     def _request_current_pose_snapshot(self, reference_frame: str) -> Dict[str, Any] | None:
         if not self._get_pose_client.wait_for_service(timeout_sec=self._safety_service_timeout_sec):

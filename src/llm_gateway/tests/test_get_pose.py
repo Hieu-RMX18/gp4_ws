@@ -124,19 +124,9 @@ class ImmediateFuture:
             raise self._error
         return self._result
 
-
-def _ensure_rclpy():
-    """Initialize rclpy if not already initialized."""
-    import rclpy
-    if not rclpy.ok():
-        rclpy.init()
-
-
 @pytest.mark.ros_integration
-def test_gateway_routes_get_pose_to_query_service():
+def test_gateway_routes_get_pose_to_query_service(ros_integration_context):
     """GET_POSE must go through query service, NOT ValidateCommand/ExecuteMotion."""
-    pytest.importorskip("interfaces", reason="requires colcon-sourced workspace with built interfaces")
-    _ensure_rclpy()
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
     node = LLMGatewayNode()
@@ -199,10 +189,8 @@ def test_gateway_routes_get_pose_to_query_service():
 
 
 @pytest.mark.ros_integration
-def test_gateway_fails_closed_when_get_pose_service_unavailable():
+def test_gateway_fails_closed_when_get_pose_service_unavailable(ros_integration_context):
     """GET_POSE must fail-closed when the query service is unavailable."""
-    pytest.importorskip("interfaces", reason="requires colcon-sourced workspace with built interfaces")
-    _ensure_rclpy()
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
     node = LLMGatewayNode()
@@ -233,10 +221,8 @@ def test_gateway_fails_closed_when_get_pose_service_unavailable():
 
 
 @pytest.mark.ros_integration
-def test_gateway_handles_get_pose_service_failure():
+def test_gateway_handles_get_pose_service_failure(ros_integration_context):
     """GET_POSE must propagate service failure with explicit message."""
-    pytest.importorskip("interfaces", reason="requires colcon-sourced workspace with built interfaces")
-    _ensure_rclpy()
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
     node = LLMGatewayNode()
@@ -273,10 +259,8 @@ def test_gateway_handles_get_pose_service_failure():
 
 
 @pytest.mark.ros_integration
-def test_gateway_get_pose_does_not_affect_motion_path():
+def test_gateway_get_pose_does_not_affect_motion_path(ros_integration_context):
     """After GET_POSE, a motion command (HOME) should still use the motion action path."""
-    pytest.importorskip("interfaces", reason="requires colcon-sourced workspace with built interfaces")
-    _ensure_rclpy()
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
     node = LLMGatewayNode()
@@ -289,8 +273,8 @@ def test_gateway_get_pose_does_not_affect_motion_path():
     node._validate_client.wait_for_service = MagicMock(return_value=True)
     sanitized_json = json.dumps({
         "primitive_type": "HOME",
-        "velocity_scale": 0.10,
-        "acceleration_scale": 0.10,
+        "velocity_scale": 0.06,
+        "acceleration_scale": 0.06,
         "planner_id": "PILZ_PTP",
         "require_approval": False,
     })

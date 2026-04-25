@@ -31,6 +31,9 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
   const auto sim_mode = declare_parameter<bool>("sim_mode", false);
   const auto robot_status_topic =
     declare_parameter<std::string>("robot_status_topic", "/yaskawa/robot_status");
+  const auto joint_states_topic = declare_parameter<std::string>(
+    "joint_states_topic",
+    backend_capabilities_.snapshot().names.joint_states_topic);
   const auto trajectory_action_name = declare_parameter<std::string>(
     "follow_joint_trajectory_action",
     backend_capabilities_.snapshot().names.trajectory_action);
@@ -52,6 +55,14 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
     declare_parameter<int64_t>("trajectory_safe_budget_points", 180);
   const auto trajectory_hard_limit_param =
     declare_parameter<int64_t>("trajectory_hard_limit_points", 200);
+  const auto joint_state_max_age_ms = declare_parameter<int64_t>("joint_state_max_age_ms", 200);
+  const auto robot_status_max_age_ms = declare_parameter<int64_t>("robot_status_max_age_ms", 200);
+  const auto trajectory_header_max_age_ms = declare_parameter<int64_t>(
+    "trajectory_header_max_age_ms", 200);
+  const auto start_state_max_abs_delta_rad = declare_parameter<double>(
+    "start_state_max_abs_delta_rad", 0.01);
+  const auto start_state_max_l2_delta_rad = declare_parameter<double>(
+    "start_state_max_l2_delta_rad", 0.02);
   sim_mode_ = sim_mode;
 
   trajectory_safe_budget_points_ =
@@ -69,9 +80,18 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
     trajectory_hard_limit_points_ = trajectory_safe_budget_points_;
   }
 
+  joint_state_monitor_ = std::make_unique<JointStateMonitor>(
+    *this,
+    backend_capabilities_.snapshot().joint_names,
+    joint_states_topic,
+    std::chrono::milliseconds(joint_state_max_age_ms > 0 ? joint_state_max_age_ms : 200));
+
   if (!sim_mode_)
   {
-    robot_status_monitor_ = std::make_unique<RobotStatusMonitor>(*this, robot_status_topic);
+    robot_status_monitor_ = std::make_unique<RobotStatusMonitor>(
+      *this,
+      robot_status_topic,
+      std::chrono::milliseconds(robot_status_max_age_ms > 0 ? robot_status_max_age_ms : 200));
   }
   session_manager_ = std::make_unique<Motoros2SessionManager>(
     *this,
@@ -83,28 +103,13 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
   trajectory_executor_ = std::make_unique<TrajectoryExecutor>(
     *this,
     trajectory_action_name,
-    [this](std::string & reason) {
-      if (sim_mode_)
-      {
-        reason.clear();
-        return true;
-      }
-      if (!robot_status_monitor_)
-      {
-        reason = "robot_status_monitor is not initialized";
-        return false;
-      }
-      return robot_status_monitor_->is_ready_for_motion(reason);
-    },
-    [this](std::string & reason) {
-      if (session_manager_->is_session_ready())
-      {
-        reason.clear();
-        return true;
-      }
-      reason = session_manager_->snapshot().status_message;
-      return false;
-    });
+    [this]() {return build_execution_runtime_snapshot();},
+    std::chrono::seconds(30),
+    backend_capabilities_.snapshot().joint_names,
+    std::chrono::milliseconds(
+      trajectory_header_max_age_ms > 0 ? trajectory_header_max_age_ms : 200),
+    start_state_max_abs_delta_rad,
+    start_state_max_l2_delta_rad);
   tool_state_monitor_ = std::make_unique<ToolStateMonitor>(
     *this,
     ToolServiceNames{read_single_io_service, write_single_io_service},
@@ -170,6 +175,12 @@ HwAdapterNode::HwAdapterNode(const rclcpp::NodeOptions & options)
     trajectory_hard_limit_points_);
 }
 
+HwAdapterNode::~HwAdapterNode()
+{
+  shutdown_requested_.store(true);
+  wait_for_dispatch_workers();
+}
+
 // --- DispatchTrajectory action callbacks ---
 
 rclcpp_action::GoalResponse HwAdapterNode::handle_dispatch_goal(
@@ -219,12 +230,84 @@ rclcpp_action::CancelResponse HwAdapterNode::handle_dispatch_cancel(
 void HwAdapterNode::handle_dispatch_accepted(
   const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle)
 {
-  std::thread([this, goal_handle]() { execute_dispatch(goal_handle); }).detach();
+  cleanup_dispatch_workers();
+  std::future<void> worker = std::async(
+    std::launch::async,
+    [this, goal_handle]()
+    {
+      if (shutdown_requested_.load())
+      {
+        return;
+      }
+      execute_dispatch(goal_handle);
+    });
+  std::lock_guard<std::mutex> lock(dispatch_worker_mutex_);
+  dispatch_worker_futures_.emplace_back(std::move(worker));
+}
+
+void HwAdapterNode::cleanup_dispatch_workers()
+{
+  std::lock_guard<std::mutex> lock(dispatch_worker_mutex_);
+  auto it = dispatch_worker_futures_.begin();
+  while (it != dispatch_worker_futures_.end())
+  {
+    if (it->valid() && it->wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+    {
+      try
+      {
+        it->get();
+      }
+      catch (const std::exception & ex)
+      {
+        RCLCPP_ERROR(get_logger(), "Dispatch worker ended with exception: %s", ex.what());
+      }
+      catch (...)
+      {
+        RCLCPP_ERROR(get_logger(), "Dispatch worker ended with unknown exception.");
+      }
+      it = dispatch_worker_futures_.erase(it);
+      continue;
+    }
+    ++it;
+  }
+}
+
+void HwAdapterNode::wait_for_dispatch_workers()
+{
+  std::vector<std::future<void>> workers;
+  {
+    std::lock_guard<std::mutex> lock(dispatch_worker_mutex_);
+    workers.swap(dispatch_worker_futures_);
+  }
+  for (auto & worker : workers)
+  {
+    if (!worker.valid())
+    {
+      continue;
+    }
+    try
+    {
+      worker.get();
+    }
+    catch (const std::exception & ex)
+    {
+      RCLCPP_ERROR(get_logger(), "Dispatch worker join failed: %s", ex.what());
+    }
+    catch (...)
+    {
+      RCLCPP_ERROR(get_logger(), "Dispatch worker join failed with unknown exception.");
+    }
+  }
 }
 
 void HwAdapterNode::execute_dispatch(
   const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle)
 {
+  if (shutdown_requested_.load())
+  {
+    return;
+  }
+
   const auto started_at = std::chrono::steady_clock::now();
   const auto goal = goal_handle->get_goal();
   const std::string dispatch_goal_id = goal_uuid_to_string(goal_handle->get_goal_id());
@@ -256,6 +339,12 @@ void HwAdapterNode::execute_dispatch(
     result->success = false;
     result->message = "DispatchTrajectory canceled before execution start";
     result->execution_time_sec = 0.0;
+    result->failure_stage = "dispatch_canceled";
+    result->controller_error_code = 0;
+    result->controller_error_name = "SUCCESSFUL";
+    result->controller_error_string.clear();
+    result->max_start_state_abs_delta = 0.0;
+    result->start_state_l2_delta = 0.0;
     feedback->state = "canceled";
     goal_handle->publish_feedback(feedback);
     goal_handle->canceled(result);
@@ -265,7 +354,7 @@ void HwAdapterNode::execute_dispatch(
   std::atomic<bool> execution_finished{false};
   std::atomic<bool> cancel_stop_requested{false};
   std::thread cancel_watcher([this, goal_handle, &execution_finished, &cancel_stop_requested, dispatch_goal_id]() {
-    while (!execution_finished.load())
+    while (!execution_finished.load() && !shutdown_requested_.load())
     {
       if (goal_handle->is_canceling())
       {
@@ -285,8 +374,18 @@ void HwAdapterNode::execute_dispatch(
     }
   });
 
-  // Delegate to the existing execute_trajectory orchestration
-  const auto report = execute_trajectory_internal(goal->trajectory, timeout_ms, true);
+  TrajectoryExecutionRequest execution_request;
+  execution_request.trajectory = goal->trajectory;
+  execution_request.result_timeout = timeout_ms;
+  execution_request.command_id = goal->command_id;
+  execution_request.primitive = goal->primitive;
+  execution_request.planner_id = goal->planner_id;
+  execution_request.source_joint_state_stamp = goal->source_joint_state_stamp;
+  execution_request.expected_start_positions = goal->expected_start_positions;
+  execution_request.enforce_start_state_match = goal->enforce_start_state_match;
+
+  // Delegate to the existing execute_trajectory orchestration.
+  const auto report = execute_trajectory_internal(execution_request, true);
   execution_finished.store(true);
   if (cancel_watcher.joinable())
   {
@@ -301,10 +400,17 @@ void HwAdapterNode::execute_dispatch(
   result->success = report.success;
   result->message = report.message;
   result->execution_time_sec = execution_time_sec;
+  result->failure_stage = report.failure_stage;
+  result->controller_error_code = report.controller_error_code;
+  result->controller_error_name = report.controller_error_name;
+  result->controller_error_string = report.controller_error_string;
+  result->max_start_state_abs_delta = report.max_start_state_abs_delta;
+  result->start_state_l2_delta = report.start_state_l2_delta;
 
   if (goal_handle->is_canceling() || cancel_stop_requested.load())
   {
     result->success = false;
+    result->failure_stage = "dispatch_canceled";
     if (result->message.empty())
     {
       result->message = "DispatchTrajectory canceled";
@@ -392,6 +498,19 @@ bool HwAdapterNode::is_ready_for_execution(std::string & reason) const
     }
   }
 
+  if (!joint_state_monitor_)
+  {
+    reason = "joint_state_monitor is not initialized";
+    return false;
+  }
+
+  const auto joint_state_snapshot = joint_state_monitor_->latest_snapshot();
+  if (!joint_state_snapshot.valid)
+  {
+    reason = joint_state_snapshot.status_message;
+    return false;
+  }
+
   if (sim_mode_)
   {
     reason.clear();
@@ -421,12 +540,22 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory(
   const trajectory_msgs::msg::JointTrajectory & trajectory,
   std::chrono::milliseconds timeout)
 {
-  return execute_trajectory_internal(trajectory, timeout, false);
+  TrajectoryExecutionRequest request;
+  request.trajectory = trajectory;
+  request.result_timeout = timeout;
+  request.command_id = "direct_hw_adapter_execute";
+  request.primitive = "UNSPECIFIED";
+  request.planner_id = "UNSPECIFIED";
+  if (!trajectory.points.empty())
+  {
+    request.expected_start_positions = trajectory.points.front().positions;
+  }
+  request.enforce_start_state_match = false;
+  return execute_trajectory_internal(request, false);
 }
 
 HwAdapterExecutionReport HwAdapterNode::execute_trajectory_internal(
-  const trajectory_msgs::msg::JointTrajectory & trajectory,
-  std::chrono::milliseconds timeout,
+  const TrajectoryExecutionRequest & request,
   const bool dispatch_reservation_expected)
 {
   HwAdapterExecutionReport report;
@@ -478,9 +607,31 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory_internal(
     };
 
   std::string reason;
+  if (!joint_state_monitor_)
+  {
+    report.blocked = true;
+    report.failure_stage = "runtime_preflight";
+    report.message = "joint_state_monitor is not initialized";
+    finalize("execution blocked: " + report.message);
+    RCLCPP_WARN(get_logger(), "%s", report.message.c_str());
+    return report;
+  }
+
+  const auto joint_state_snapshot = joint_state_monitor_->latest_snapshot();
+  if (!joint_state_snapshot.valid)
+  {
+    report.blocked = true;
+    report.failure_stage = "runtime_preflight";
+    report.message = joint_state_snapshot.status_message;
+    finalize("execution blocked: " + report.message);
+    RCLCPP_WARN(get_logger(), "%s", report.message.c_str());
+    return report;
+  }
+
   if (!sim_mode_ && !robot_status_monitor_)
   {
     report.blocked = true;
+    report.failure_stage = "runtime_preflight";
     report.message = "robot_status_monitor is not initialized";
     finalize("execution blocked: " + report.message);
     RCLCPP_WARN(get_logger(), "%s", report.message.c_str());
@@ -489,16 +640,18 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory_internal(
   if (!sim_mode_ && !robot_status_monitor_->is_ready_for_motion(reason))
   {
     report.blocked = true;
+    report.failure_stage = "runtime_preflight";
     report.message = reason.empty() ? "robot is not ready for execution" : std::move(reason);
     finalize("execution blocked: " + report.message);
     RCLCPP_WARN(get_logger(), "%s", report.message.c_str());
     return report;
   }
 
-  const std::size_t point_count = trajectory.points.size();
+  const std::size_t point_count = request.trajectory.points.size();
   if (point_count > trajectory_hard_limit_points_)
   {
     report.blocked = true;
+    report.failure_stage = "trajectory_validation";
     report.message =
       "trajectory has " + std::to_string(point_count) +
       " points, exceeding hard limit " + std::to_string(trajectory_hard_limit_points_);
@@ -518,16 +671,9 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory_internal(
       trajectory_hard_limit_points_);
   }
 
-  if (!trajectory_executor_->validate_trajectory_request(trajectory, reason))
+  if (!trajectory_executor_->validate_trajectory_request(request.trajectory, reason))
   {
-    report.message = reason;
-    finalize("execution rejected before dispatch: " + report.message);
-    RCLCPP_WARN(get_logger(), "%s", report.message.c_str());
-    return report;
-  }
-
-  if (!backend_capabilities_.validate_joint_names(trajectory.joint_names, reason))
-  {
+    report.failure_stage = "trajectory_validation";
     report.message = reason;
     finalize("execution rejected before dispatch: " + report.message);
     RCLCPP_WARN(get_logger(), "%s", report.message.c_str());
@@ -541,6 +687,7 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory_internal(
 
   if (!session_manager_->ensure_trajectory_mode(reason))
   {
+    report.failure_stage = "trajectory_mode";
     report.message = reason.empty() ? "failed to enter trajectory mode" : std::move(reason);
     if (sim_mode_)
     {
@@ -566,9 +713,14 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory_internal(
     last_status_message_ = "hw_adapter executing validated trajectory";
   }
 
-  const auto execution_result = trajectory_executor_->execute_blocking(
-    TrajectoryExecutionRequest{trajectory, timeout});
+  const auto execution_result = trajectory_executor_->execute_blocking(request);
   report.success = execution_result.success;
+  report.failure_stage = execution_result.failure_stage;
+  report.controller_error_code = execution_result.controller_error_code;
+  report.controller_error_name = execution_result.controller_error_name;
+  report.controller_error_string = execution_result.controller_error_string;
+  report.max_start_state_abs_delta = execution_result.max_start_state_abs_delta;
+  report.start_state_l2_delta = execution_result.start_state_l2_delta;
   report.message = execution_result.message.empty() ?
     "trajectory execution completed successfully" :
     execution_result.message;
@@ -577,7 +729,10 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory_internal(
   if (report.success)
   {
     finalize("trajectory execution completed successfully");
-    RCLCPP_INFO(get_logger(), "Trajectory execution completed successfully.");
+    RCLCPP_INFO(
+      get_logger(),
+      "Trajectory execution completed successfully (command_id=%s).",
+      request.command_id.empty() ? "<unset>" : request.command_id.c_str());
     return report;
   }
 
@@ -613,6 +768,71 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory_internal(
   finalize("execution failed before motion completed: " + report.message);
   RCLCPP_WARN(get_logger(), "%s", report.message.c_str());
   return report;
+}
+
+ExecutionRuntimeSnapshot HwAdapterNode::build_execution_runtime_snapshot() const
+{
+  ExecutionRuntimeSnapshot snapshot;
+
+  if (!joint_state_monitor_)
+  {
+    snapshot.failure_reason = "joint_state_monitor is not initialized";
+    return snapshot;
+  }
+
+  const auto joint_state = joint_state_monitor_->latest_snapshot();
+  snapshot.joint_state_valid = joint_state.valid;
+  snapshot.current_joint_positions = joint_state.ordered_positions;
+  snapshot.joint_state_stamp = joint_state.header_stamp;
+  snapshot.joint_state_age = joint_state.age;
+  if (!joint_state.valid)
+  {
+    snapshot.failure_reason = joint_state.status_message;
+  }
+
+  if (sim_mode_)
+  {
+    snapshot.robot_ready = true;
+    snapshot.robot_status_age = std::chrono::milliseconds(0);
+  }
+  else if (!robot_status_monitor_)
+  {
+    snapshot.robot_ready = false;
+    snapshot.robot_status_age = std::chrono::milliseconds::max();
+    if (snapshot.failure_reason.empty())
+    {
+      snapshot.failure_reason = "robot_status_monitor is not initialized";
+    }
+  }
+  else
+  {
+    const auto robot_status = robot_status_monitor_->latest_snapshot();
+    snapshot.robot_ready = robot_status.ready && robot_status.fresh;
+    snapshot.robot_status_age = robot_status.age;
+    if ((!robot_status.ready || !robot_status.fresh) && snapshot.failure_reason.empty())
+    {
+      snapshot.failure_reason = robot_status.status_message;
+    }
+  }
+
+  if (sim_mode_)
+  {
+    snapshot.session_ready = true;
+    snapshot.session_status = "simulation mode: trajectory session check bypassed";
+  }
+  else if (!session_manager_)
+  {
+    snapshot.session_ready = false;
+    snapshot.session_status = "session_manager is not initialized";
+  }
+  else
+  {
+    const auto session_snapshot = session_manager_->snapshot();
+    snapshot.session_ready = session_snapshot.session_ready;
+    snapshot.session_status = session_snapshot.status_message;
+  }
+
+  return snapshot;
 }
 
 HwAdapterOrchestrationSnapshot HwAdapterNode::build_snapshot_locked() const

@@ -2,7 +2,9 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 from moveit_configs_utils import MoveItConfigsBuilder
+import os
 
 
 def _move_group_remappings(use_fake_hardware_value: str):
@@ -13,18 +15,6 @@ def _move_group_remappings(use_fake_hardware_value: str):
         ('/tf', '/yaskawa/tf'),
         ('/tf_static', '/yaskawa/tf_static'),
     ]
-
-
-def _normalized_move_group_parameters(moveit_config):
-    parameters = moveit_config.to_dict()
-    parameters['planning_plugin'] = 'pilz_industrial_motion_planner/CommandPlanner'
-    parameters['default_planning_pipeline'] = 'pilz_industrial_motion_planner'
-    parameters.setdefault('ompl', {})['planning_plugin'] = 'ompl_interface/OMPLPlanner'
-    parameters.setdefault('pilz_industrial_motion_planner', {})[
-        'planning_plugin'
-    ] = 'pilz_industrial_motion_planner/CommandPlanner'
-    parameters.setdefault('chomp', {})['planning_plugin'] = 'chomp_interface/CHOMPPlanner'
-    return parameters
 
 
 def _launch_setup(context):
@@ -39,13 +29,50 @@ def _launch_setup(context):
         .to_moveit_configs()
     )
 
+    # Build normalized parameters
+    params = moveit_config.to_dict()
+    params['planning_plugin'] = 'pilz_industrial_motion_planner/CommandPlanner'
+    params['default_planning_pipeline'] = 'pilz_industrial_motion_planner'
+
+    # Load kinematics.yaml explicitly (fixes "No kinematics plugins defined" warning)
+    kinematics_config_path = os.path.join(
+        FindPackageShare('gp4_moveit_config').perform(context),
+        'config', 'kinematics.yaml'
+    )
+    import yaml
+    with open(kinematics_config_path, 'r') as f:
+        kinematics_params = yaml.safe_load(f)
+    params.update(kinematics_params)
+
+    # Load moveit_controllers.yaml to fix "No controller_names specified" error
+    controllers_config_path = os.path.join(
+        FindPackageShare('gp4_moveit_config').perform(context),
+        'config', 'moveit_controllers.yaml'
+    )
+    with open(controllers_config_path, 'r') as f:
+        controllers_params = yaml.safe_load(f)
+    # Extract only the controller manager settings
+    if 'moveit_simple_controller_manager' in controllers_params:
+        params['moveit_simple_controller_manager'] = controllers_params['moveit_simple_controller_manager']
+    if 'moveit_controller_manager' in controllers_params:
+        params['moveit_controller_manager'] = controllers_params['moveit_controller_manager']
+    if 'trajectory_execution' in controllers_params:
+        params['trajectory_execution'] = controllers_params['trajectory_execution']
+
+    # Load Pilz planner config
+    pilz_config_path = os.path.join(
+        FindPackageShare('gp4_moveit_config').perform(context),
+        'config', 'pilz_industrial_motion_planner_planning.yaml'
+    )
+    with open(pilz_config_path, 'r') as f:
+        pilz_params = yaml.safe_load(f)
+    params.setdefault('pilz_industrial_motion_planner', {}).update(pilz_params)
+
     move_group_node = Node(
         package='moveit_ros_move_group',
         executable='move_group',
         output='screen',
-        parameters=[
-            _normalized_move_group_parameters(moveit_config),
-        ],
+        parameters=[params],
         remappings=_move_group_remappings(use_fake_hardware),
     )
 

@@ -22,9 +22,17 @@ Skip policy:
 """
 
 import json
+import os
 from pathlib import Path
+import sys
+import tempfile
 
 import pytest
+
+
+SAFETY_SOURCE_ROOT = Path(__file__).resolve().parents[2] / "safety"
+if SAFETY_SOURCE_ROOT.exists() and str(SAFETY_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SAFETY_SOURCE_ROOT))
 
 
 @pytest.fixture(scope="session")
@@ -70,7 +78,7 @@ def canonical_command() -> dict:
     return {
         "primitive_type": "LIN",
         "target_pose": {
-            "position": {"x": 0.35, "y": 0.1, "z": 0.2},
+            "position": {"x": 0.30, "y": 0.0, "z": 0.30},
             "orientation": {"x": 0.0, "y": 0.707, "z": 0.0, "w": 0.707},
         },
         "velocity_scale": 0.06,
@@ -148,3 +156,25 @@ def model_error_payload() -> str:
         ]
     }
     return json.dumps(payload)
+
+
+@pytest.fixture(scope="module")
+def ros_integration_context():
+    pytest.importorskip("interfaces", reason="requires colcon-sourced workspace with built interfaces")
+    import rclpy
+
+    ros_log_dir = Path(tempfile.gettempdir()) / "ros_logs_llm_gateway_tests"
+    ros_log_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["ROS_LOG_DIR"] = str(ros_log_dir)
+    os.environ.setdefault("ROS_LOCALHOST_ONLY", "1")
+    os.environ.setdefault("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp")
+
+    initialized_here = False
+    if not rclpy.ok():
+        rclpy.init()
+        initialized_here = True
+    try:
+        yield
+    finally:
+        if initialized_here and rclpy.ok():
+            rclpy.shutdown()

@@ -116,3 +116,29 @@ TEST_F(RobotStatusMonitorTest, estop_transitions_update_readiness)
     [&monitor]() {return monitor.has_status() && monitor.is_estop_active() && !monitor.is_ready();}));
   EXPECT_NE(monitor.status_summary().find("E-STOP active"), std::string::npos);
 }
+
+TEST_F(RobotStatusMonitorTest, stale_status_is_not_ready_for_motion)
+{
+  const std::string topic = "/test_hw_adapter/status_stale";
+  auto monitor_node = std::make_shared<rclcpp::Node>("robot_status_monitor_stale_test");
+  auto publisher_node = std::make_shared<rclcpp::Node>("robot_status_monitor_stale_pub");
+  hw_adapter::RobotStatusMonitor monitor(*monitor_node, topic, 30ms);
+
+  auto publisher =
+    publisher_node->create_publisher<industrial_msgs::msg::RobotStatus>(topic, rclcpp::QoS(10));
+
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(monitor_node);
+  executor.add_node(publisher_node);
+
+  ASSERT_TRUE(spin_until(executor, [&publisher]() {return publisher->get_subscription_count() > 0;}));
+  publisher->publish(make_status(industrial_msgs::msg::TriState::FALSE, industrial_msgs::msg::TriState::FALSE));
+  ASSERT_TRUE(spin_until(executor, [&monitor]() {return monitor.has_status() && monitor.is_ready();}));
+
+  std::this_thread::sleep_for(80ms);
+  executor.spin_some();
+
+  std::string reason;
+  EXPECT_FALSE(monitor.is_ready_for_motion(reason));
+  EXPECT_NE(reason.find("stale robot status"), std::string::npos);
+}

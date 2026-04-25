@@ -6,8 +6,10 @@ This document is the current architecture note for the HMI command-capable path.
 
 - Telemetry bridge v1 remains the source of truth for runtime state, freshness, heartbeats, and schema versioning.
 - HMI v2 adds only a supervisor-owned command ingress workflow.
-- MotoROS2 and real hardware execution remain explicitly unverified.
-- The backend execution boundary now dispatches ROS motion in **sim mode only** through `/validate_command` and `/execute_motion`.
+- MotoROS2 and real hardware execution remain fail-closed by default.
+- The backend execution boundary dispatches ROS motion through `/validate_command` and `/execute_motion` in:
+  - `sim` mode (unchanged), and
+  - `hardware` mode **only when dual gate + preflight pass**.
 - The live hardware validation gate is tracked in `hmi/HARDWARE_TELEMETRY_VALIDATION.md`.
 
 ## Sim-mode freshness policy
@@ -68,10 +70,12 @@ Frontend
   - missing or invalid control lease
   - `ESTOP`, `FAULT`, `LOST_CONN`, `SAFETY_BLOCKED`
   - stale freshness-critical telemetry
+  - hardware dual-gate failure (`HMI_ENABLE_HARDWARE_COMMANDS` + `hmi/data/hardware_gate.json`)
+  - hardware preflight failure (required source freshness, active preferred joint source, command interfaces ready)
   - unsupported or ambiguous intent
   - plan fingerprint mismatch
   - expired confirmation window
-  - runtime mode other than `sim`
+  - runtime mode mismatch or unknown mode
 
 ## API surface
 
@@ -106,8 +110,10 @@ Current sim behavior:
 - valid commands stop at `NEEDS_CONFIRMATION` until the operator confirms
 - on confirm, the supervisor records `CONFIRMED` and `EXECUTION_REQUESTED`
 - the sim execution adapter calls `/validate_command` first and fails closed if validation rejects the payload
-- if validation passes, the adapter dispatches `/execute_motion` and the command transitions through `EXECUTING`
+- if validation passes, the adapter dispatches `/execute_motion` with `require_approval=false` and the command transitions through `EXECUTING`
 - the command ends in `SUCCEEDED`, `FAILED`, or `CANCELLED` from the action result
+
+`ExecuteMotion.require_approval` is retained only for ROS wire compatibility. It is not an approval state machine, and raw direct callers must send `require_approval=false`. Plan-only requests are not executable through `/execute_motion`.
 
 ## Capability model
 
@@ -123,8 +129,9 @@ The snapshot capability fields now distinguish between:
 Current default behavior:
 
 - sim mode: command ingress and confirmation are available
-- hardware/unknown mode: bridge stays read-only
-- `executionAllowed=true` only in sim mode because confirmed commands can now cross the supervisor-owned ROS execution boundary there
+- hardware mode: command ingress stays read-only until dual gate passes; then confirmation/execution become available
+- unknown mode: bridge stays read-only
+- `executionAllowed=true` when command ingress is available for the active mode
 
 ## WebSocket event policy
 
@@ -154,8 +161,9 @@ The audit SQLite store now persists enough command state for review/debug:
 
 ### Acceptable for v2 development
 
-- sim-only command ingress, validation, confirmation, and audit trail
-- backend-owned sim execution adapter that validates and dispatches ROS motion without opening raw browser -> ROS control
+- sim command ingress, validation, confirmation, and audit trail
+- hardware mode remains fail-closed until dual gate + preflight pass
+- backend-owned execution adapter that validates and dispatches ROS motion without opening raw browser -> ROS control
 - browser UX gating backed by backend enforcement
 
 ### Must fix before treating real hardware as fresh/executable

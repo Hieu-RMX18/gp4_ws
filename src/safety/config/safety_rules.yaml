@@ -1,62 +1,64 @@
-# HIL commissioning limits for the asymmetric GP4 workcell.
-# Conservative assumptions from workstation images:
-# - stay below the overhead crossbar by keeping z_max well under its underside
-# - keep TCP above low fixtures / parts on the table by enforcing a table-wide
-#   clearance zone instead of relying on exact fixture pickup coordinates
-# Keep the existing workspace_bounds + center/size AABB schema because
-# workspace_guard.py and downstream tests consume this format today.
+# Hardware conservative limits for the real GP4 workcell.
+# Source of truth: station3.stl bounding box in base_link (from current gp4_station xacro)
+#   Station in base_link: X[-0.482, +0.761] Y[-0.197, +0.806] Z[-0.757, +1.093]
+#   GP4 reach: 550 mm. Safety margin: 30 mm.
+# Notes:
+#   - workspace_bounds derived from station walls + GP4 reach, whichever is closer.
+#     30 mm kept from every physical boundary (user rule: max - 30 mm).
+#   - forbidden_zones are inflated 30 mm pre-planning checks in front of MoveIt
+#     mesh collision. MoveIt station_mesh remains the authoritative geometry check.
 workspace_bounds:
-  x_min: -0.25
-  x_max:  0.38
-  y_min: -0.25
-  y_max:  0.38
-  z_min:  0.20
-  z_max:  0.45
+  x_min: -0.45   # station near side -0.482m + 30mm ~= -0.452m (conservative rounded)
+  x_max:  0.45   # conservative cap; do not expand positive X for hardware pass
+  y_min: -0.16   # station front wall -0.197m + 37mm; kept above front_wall_guard max
+  y_max:  0.52   # reach-limited  (back wall at +0.806m, beyond reach)
+  z_min:  0.23   # table-top estimated 0.20m + 30mm margin
+  z_max:  0.56   # relaxed from 0.52 for commissioning; current TCP z~0.53 when START
 
 # Backward-compatible keys still used by safety.command_validator.
 joint_limits_override:
   max_velocity_scale: 0.06
   max_acceleration_scale: 0.06
 
-# Preferred commissioning motion policy for new consumers.
+# Preferred conservative hardware motion policy for new consumers.
 motion_limits:
   max_velocity_scale: 0.06
   max_acceleration_scale: 0.06
-  max_move_rel_translation: 0.03
+  max_move_rel_translation: 0.05
 
 forbidden_zones:
-  - name: table_clearance_guard
-    x: 0.10
-    y: 0.05
-    z: 0.09
-    size_x: 1.10
-    size_y: 0.95
-    size_z: 0.18
+  # Station front face (Y = -0.197m in base_link).  30mm zone each side of wall.
+  # Spans Y: [-0.227, -0.167]. Covers full station width and robot height.
+  - name: front_wall_guard
+    x:  0.00
+    y: -0.197
+    z:  0.00
+    size_x: 1.30
+    size_y: 0.06
+    size_z: 1.50
 
-  - name: avoid_left_region
-    x: -0.22
-    y: 0.21
-    z: 0.35
-    size_x: 0.22
-    size_y: 0.24
-    size_z: 0.70
+  # Station side wall nearest robot negative-X side (X = -0.482m in base_link).
+  # 30mm zone each side of wall. Spans X: [-0.512, -0.452].
+  - name: right_wall_guard
+    x: -0.482
+    y:  0.305
+    z:  0.00
+    size_x: 0.06
+    size_y: 1.10
+    size_z: 1.50
 
-  - name: wall_region
-    x: 0.34
-    y: 0.32
-    z: 0.35
-    size_x: 0.18
-    size_y: 0.32
-    size_z: 0.70
-
-  - name: corner_clearance_guard
-    x: 0.24
-    y: 0.24
-    z: 0.35
-    size_x: 0.22
-    size_y: 0.22
-    size_z: 0.70
+  # Low-Z floor/table clearance. Defence-in-depth under workspace z_min.
+  # Spans Z: [0.00, 0.20]. Prevents inadvertent descent into table surface.
+  - name: floor_clearance_guard
+    x:  0.00
+    y:  0.30
+    z:  0.10
+    size_x: 1.50
+    size_y: 1.10
+    size_z: 0.20
 
 require_human_approval:
-  velocity_scale_threshold: 0.06
-  distance_from_home_threshold: 0.35
+  # Advisory HMI/supervisor review policy only; ExecuteMotion.require_approval
+  # is a deprecated compatibility field and is not enforced by motion_core.
+  velocity_scale_threshold: 0.05
+  distance_from_home_threshold: 0.30

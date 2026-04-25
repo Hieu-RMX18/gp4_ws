@@ -1,0 +1,80 @@
+# Parameters for jog_pendant nodes
+# These are conservative defaults for the experimental jog pendant.
+
+# ── jog_input_node parameters ────────────────────────────────────────────────
+jog_input_node:
+  ros__parameters:
+    # Joint names in order (0-based index = [0..5])
+    joint_names:
+      - joint_1_s
+      - joint_2_l
+      - joint_3_u
+      - joint_4_r
+      - joint_5_b
+      - joint_6_t
+
+    # Max velocity scale (0.0, 0.3] — applied to joint.max_velocity from joint_limits.yaml
+    max_velocity_scale: 0.3
+
+    # Min velocity scale — prevents zero or negative velocity
+    min_velocity_scale: 0.01
+
+    # Max step size in degrees (for discrete mode)
+    max_step_degrees: 10.0
+
+    # Min step size in degrees
+    min_step_degrees: 0.01
+
+    # Default velocity scale when not specified
+    default_velocity_scale: 0.05
+
+    # Watchdog timeout: no heartbeat for this duration → halt
+    watchdog_timeout_ms: 200
+
+    # Servo command topic (relative — namespace + this = /servo_node/delta_joint_cmds)
+    servo_cmd_topic: delta_joint_cmds
+
+# ── servo_bridge_node parameters ────────────────────────────────────────────
+servo_bridge_node:
+  ros__parameters:
+    # Topics
+    robot_status_topic: /yaskawa/robot_status
+    joint_states_topic: /yaskawa/joint_states
+    servo_status_topic: /servo_node/status
+    servo_trajectory_topic: /servo_node/command_out
+
+    # MotoROS2 services
+    start_point_queue_service: /yaskawa/start_point_queue_mode
+    queue_traj_point_service: /yaskawa/queue_traj_point
+
+    # Bridge status topic (for HMI to subscribe)
+    status_pub_topic: /servo_bridge/status
+
+    # Activation/deactivation services
+    activate_service: /servo_bridge/activate
+    deactivate_service: /servo_bridge/deactivate
+
+    # Forwarding rate (Hz). Start conservative, tune up.
+    # NOTE: This is the bridge's forwarding rate. Servo's internal publish rate
+    # (publish_period) is configured in servo_gp4_jog.yaml.
+    forward_rate_hz: 10.0
+
+    # Joint names (must match GP4 joint order exactly)
+    joint_names:
+      - joint_1_s
+      - joint_2_l
+      - joint_3_u
+      - joint_4_r
+      - joint_5_b
+      - joint_6_t
+
+    # BUSY retry settings
+    # If queue_traj_point returns BUSY, retry this many times before giving up
+    busy_retry_max: 3
+    busy_retry_interval_ms: 50
+
+    # Service call timeouts
+    activation_timeout_ms: 5000
+
+    # MoveIt Servo start service (called by bridge during activation)
+    start_servo_service: /servo_node/servo_node/start_servo

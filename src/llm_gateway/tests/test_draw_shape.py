@@ -204,7 +204,7 @@ def test_tool_workplane_requires_origin_or_start_pose():
         )
 
 
-def test_plan_only_sets_require_approval_on_all_segments():
+def test_plan_only_marks_segments_without_requiring_approval():
     router = _router(runtime_mode="sim")
 
     result = router.route(
@@ -216,7 +216,7 @@ def test_plan_only_sets_require_approval_on_all_segments():
     )
 
     for command in result.commands:
-        assert command["require_approval"] is True
+        assert command["require_approval"] is False
         assert command["plan_only"] is True
 
 

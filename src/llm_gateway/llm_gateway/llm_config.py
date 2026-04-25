@@ -116,6 +116,11 @@ class LLMBackendConfig:
     fail_on_non_json: bool
     fail_on_schema_mismatch: bool
     request_timeout_sec: float
+    # Retry policy for transient failures (network errors, HTTP 5xx, HTTP 429).
+    # max_retries=0 disables retry. Non-transient failures (auth, 4xx) never retry.
+    max_retries: int = 2
+    retry_base_delay_sec: float = 0.5
+    retry_max_delay_sec: float = 4.0
 
     @property
     def model_is_configured(self) -> bool:
@@ -170,9 +175,12 @@ def load_llm_backend_config(config_path: str | None = None) -> LLMBackendConfig:
         api_mode=str(backend.get("api_mode", "openai_compatible")),
         model=str(pick("model", _MODEL_PLACEHOLDER)),
         temperature=float(pick("temperature", 0.0)),
-        max_tokens=int(pick("max_tokens", 200)),
+        max_tokens=int(pick("max_tokens", 500)),
         require_json_only=_as_bool(pick("require_json_only", True), True),
         fail_on_non_json=_as_bool(pick("fail_on_non_json", True), True),
         fail_on_schema_mismatch=_as_bool(pick("fail_on_schema_mismatch", True), True),
         request_timeout_sec=float(pick("request_timeout_sec", 10.0)),
+        max_retries=int(pick("max_retries", 2)),
+        retry_base_delay_sec=float(pick("retry_base_delay_sec", 0.5)),
+        retry_max_delay_sec=float(pick("retry_max_delay_sec", 4.0)),
     )

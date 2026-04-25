@@ -63,6 +63,28 @@ export interface BridgeCapabilities {
   executionAllowed: boolean;
   replayAvailable: boolean;
   simOnly: boolean;
+  hardwareGate: HardwareGateStatus;
+}
+
+export interface HardwareGateChecklist {
+  timingJitter: boolean;
+  disconnectReconnect: boolean;
+  robotStatusSemantics: boolean;
+  jointSourcePrecedence: boolean;
+  auditVisibility: boolean;
+}
+
+export interface HardwareGateStatus {
+  unlocked: boolean;
+  reasons: string[];
+  flagEnabled: boolean;
+  evidencePath: string;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  reportPath: string | null;
+  reportSha256: string | null;
+  reportSha256Match: boolean;
+  checklist: HardwareGateChecklist | null;
 }
 
 export interface TelemetrySourceStatus {
@@ -144,6 +166,8 @@ export interface CommandValidationResult {
   criticalSources: ValidationSourceStatus[];
   optionalSources: ValidationSourceStatus[];
   eventDrivenSources: ValidationSourceStatus[];
+  hardwareGate: HardwareGateStatus;
+  preflight: Record<string, unknown>;
 }
 
 export interface CommandExecutionResult {
@@ -152,6 +176,10 @@ export interface CommandExecutionResult {
   status: string;
   summary: string;
   dispatchedToRos: boolean;
+  queryOnly?: boolean;
+  referenceFrame?: string | null;
+  pose?: Record<string, unknown> | null;
+  poseMm?: Record<string, unknown> | null;
   commandId?: string | null;
   planFingerprint?: string | null;
   operatorId?: string | null;
@@ -162,6 +190,7 @@ export interface CommandExecutionResult {
 
 export interface CommandView {
   commandId: string;
+  commandKind: 'command';
   sessionId: string;
   operatorId: string;
   rawText: string;
@@ -186,10 +215,47 @@ export interface CommandView {
   executeAt: string | null;
   executionResult?: CommandExecutionResult | null;
   finalState: TerminalCommandLifecycleState | null;
+  parentSequenceId?: string | null;
+  sequenceStepIndex?: number | null;
+  sequenceStepCount?: number | null;
+}
+
+export interface SequenceView {
+  sequenceId: string;
+  commandKind: 'sequence';
+  sessionId: string;
+  operatorId: string;
+  rawText: string;
+  intentSource: 'text' | 'structured';
+  structuredIntent?: Record<string, unknown> | null;
+  lifecycleState: CommandLifecycleState;
+  summaryLabel: string;
+  plannerUsed: string | null;
+  frameUsed: string | null;
+  mode: RuntimeMode;
+  riskLevel: CommandRiskLevel | null;
+  planFingerprint: string | null;
+  correlationId: string | null;
+  rejectReason: string | null;
+  validationResult?: CommandValidationResult | null;
+  planSummary?: Record<string, unknown> | null;
+  metrics?: PlanMetrics | null;
+  confirmationExpiresAt: string | null;
+  createdAt: string;
+  confirmAt: string | null;
+  executeAt: string | null;
+  executionResult?: CommandExecutionResult | null;
+  finalState: TerminalCommandLifecycleState | null;
+  stepCount: number;
+  currentStepIndex?: number | null;
+  diagnostics: string[];
+  manualRecoveryRequired: boolean;
+  steps: CommandView[];
 }
 
 export interface ReplayListItem {
   commandId: string;
+  kind: 'command' | 'sequence';
   sessionId: string;
   operatorId: string;
   summaryLabel: string;
@@ -201,6 +267,9 @@ export interface ReplayListItem {
   createdAt: string;
   executeAt: string | null;
   riskLevel: CommandRiskLevel | null;
+  stepCount?: number | null;
+  currentStepIndex?: number | null;
+  manualRecoveryRequired: boolean;
 }
 
 export interface TimelineEvent {
@@ -215,7 +284,9 @@ export interface TimelineEvent {
 }
 
 export interface ReplayDetail {
-  command: CommandView;
+  jobType: 'command' | 'sequence';
+  command: CommandView | null;
+  sequence: SequenceView | null;
   timeline: TimelineEvent[];
   runtimeEvents: TimelineEvent[];
 }
@@ -233,6 +304,7 @@ export interface HmiStateSnapshot {
   runtime: RuntimeSnapshot;
   messages: ChatMessage[];
   activeCommand: CommandView | null;
+  activeSequence: SequenceView | null;
   jointPositions: JointPosition[];
   planMetrics: PlanMetrics | null;
   replayItems: ReplayListItem[];
@@ -314,10 +386,13 @@ export interface LeaseMutationResponse {
 
 export interface CommandMutationResponse {
   accepted: boolean;
-  commandId: string;
+  jobType: 'command' | 'sequence';
+  commandId: string | null;
+  sequenceId?: string | null;
   reason: string | null;
   snapshot?: HmiStateSnapshot | null;
-  command: CommandView;
+  command: CommandView | null;
+  sequence?: SequenceView | null;
 }
 
 export interface ReplayListQuery {
@@ -338,8 +413,59 @@ export type HmiStreamEvent =
   | { type: 'heartbeat'; schemaVersion: string; generatedAt: string; transportState: TransportState; telemetryState: TelemetryState }
   | { type: 'lease_state'; lease: LeaseView; capabilities: BridgeCapabilities }
   | { type: 'command_lifecycle'; command: CommandView; messages?: ChatMessage[]; planMetrics?: PlanMetrics | null }
+  | { type: 'sequence_lifecycle'; sequence: SequenceView; messages?: ChatMessage[] }
   | { type: 'replay_updated'; replayItems: ReplayListItem[] }
-  | { type: 'connection_state'; transportState: TransportState; connections?: BridgeConnection[] };
+  | { type: 'connection_state'; transportState: TransportState; connections?: BridgeConnection[] }
+  | { type: 'jog_bridge_status'; jogBridgeStatus: JogBridgeStatusSnapshot };
+
+// ── Jog Pendant Types ──────────────────────────────────────────────────────
+
+export type JogMode = 'continuous' | 'discrete';
+
+export type JogBridgeState =
+  | 'IDLE'
+  | 'STARTING'
+  | 'READY'
+  | 'ACTIVE'
+  | 'HALTING'
+  | 'HALTED'
+  | 'ERROR'
+  | 'REJECTED_NOT_READY'
+  | 'REJECTED_FJT_ACTIVE'
+  | 'TIMEOUT'
+  | 'BUSY_RETRY';
+
+export interface JogBridgeStatusSnapshot {
+  state: JogBridgeState;
+  pointsQueued: number;
+  effectiveHz: number;
+  robotReady: boolean;
+  servoActive: boolean;
+  bridgeActive: boolean;
+  lastError: string;
+  rejectionReason: string;
+}
+
+export interface JogCommandRequest {
+  jointIndex: number;       // 0-5
+  direction: 1 | -1;        // +1 = positive, -1 = negative
+  mode: JogMode;
+  velocityScale: number;     // 0.0-0.3
+  stepDegrees: number;       // for discrete mode
+}
+
+export interface JogBridgeCapabilities {
+  jogAvailable: boolean;
+  bridgeServiceAvailable: boolean;
+  canActivateBridge: boolean;
+  bridgeState: JogBridgeState;
+  isExclusiveMode: boolean;  // true when jog bridge is active (blocks FJT path)
+}
+
+export interface ServoControlResponse {
+  accepted: boolean;
+  message: string;
+}
 
 export interface GP4BridgeClient {
   connect(params: {
@@ -353,10 +479,20 @@ export interface GP4BridgeClient {
   releaseLease(request: LeaseReleaseRequest): Promise<LeaseMutationResponse>;
   submitCommand(request: CommandIntentRequest): Promise<CommandMutationResponse>;
   confirmCommand(commandId: string, request: CommandConfirmRequest): Promise<CommandMutationResponse>;
+  confirmSequence(sequenceId: string, request: CommandConfirmRequest): Promise<CommandMutationResponse>;
   abortCommand(commandId: string, request: CommandCancelRequest): Promise<CommandMutationResponse>;
+  abortSequence(sequenceId: string, request: CommandCancelRequest): Promise<CommandMutationResponse>;
   getRuntimeState(sessionId: string, operatorId: string): Promise<RuntimeStateResponse>;
   getConnectionState(): Promise<ConnectionStateResponse>;
   getLeaseState(sessionId: string, operatorId: string): Promise<LeaseStateResponse>;
   listReplay(query?: ReplayListQuery): Promise<ReplayListResponse>;
   getReplayDetail(commandId: string): Promise<ReplayDetail>;
+  getSequence(sequenceId: string): Promise<SequenceView>;
+  // Jog pendant
+  activateJogBridge(): Promise<{ accepted: boolean; message: string }>;
+  deactivateJogBridge(): Promise<{ accepted: boolean; message: string }>;
+  sendJogCommand(cmd: JogCommandRequest): Promise<{ accepted: boolean; message: string }>;
+  // Servo control
+  startServo(): Promise<ServoControlResponse>;
+  stopServo(): Promise<ServoControlResponse>;
 }

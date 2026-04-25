@@ -204,6 +204,22 @@ def test_move_relative():
     assert cmd["reference_frame"] == "base_link"
 
 
+def test_move_relative_preserves_explicit_linear_unit():
+    router = _router()
+
+    result = router.route({
+        "intent": "move_relative",
+        "delta": {"x": 0.0, "y": 0.0, "z": 5.0},
+        "linear_unit": "cm",
+        "reference_frame": "base_link",
+    })
+
+    cmd = result.commands[0]
+    assert cmd["primitive_type"] == "MOVE_REL"
+    assert cmd["delta_z"] == 5.0
+    assert cmd["linear_unit"] == "cm"
+
+
 def test_move_relative_missing_delta_raises():
     router = _router()
 
@@ -447,7 +463,7 @@ def test_sequence_non_dict_step_raises():
 
 
 def test_optional_motion_fields_forwarded():
-    """velocity_scale, acceleration_scale, planner_id, require_approval pass through."""
+    """Motion metadata, including explicit unit hints, passes through."""
     router = _router()
 
     result = router.route({
@@ -456,6 +472,8 @@ def test_optional_motion_fields_forwarded():
         "acceleration_scale": 0.1,
         "planner_id": "PILZ_PTP",
         "require_approval": True,
+        "linear_unit": "mm",
+        "angular_unit": "deg",
     })
 
     cmd = result.commands[0]
@@ -463,6 +481,8 @@ def test_optional_motion_fields_forwarded():
     assert cmd["acceleration_scale"] == 0.1
     assert cmd["planner_id"] == "PILZ_PTP"
     assert cmd["require_approval"] is True
+    assert cmd["linear_unit"] == "mm"
+    assert cmd["angular_unit"] == "deg"
 
 
 # ── Semantic intent naming consistency ───────────────────────────────────────
@@ -534,3 +554,44 @@ def _minimal_payload_for(intent_name: str) -> dict:
     }
     base.update(extras.get(intent_name, {}))
     return base
+
+
+# ── circular_move intent (CIRC) ─────────────────────────────────────────────
+
+
+def test_circular_move_routes_to_circ():
+    router = _router()
+
+    result = router.route({
+        "intent": "circular_move",
+        "target_pose": {"position": {"x": 0.30, "y": 0.00, "z": 0.40}},
+        "auxiliary_pose": {"position": {"x": 0.32, "y": 0.05, "z": 0.42}},
+    })
+
+    assert result.route_type == "primitive"
+    assert len(result.commands) == 1
+    cmd = result.commands[0]
+    assert cmd["primitive_type"] == "CIRC"
+    assert cmd["reference_frame"] == "base_link"
+    assert "target_pose" in cmd
+    assert isinstance(cmd["waypoints"], list) and len(cmd["waypoints"]) == 1
+
+
+def test_circular_move_missing_auxiliary_pose_rejects():
+    router = _router()
+
+    with pytest.raises(ValueError, match="auxiliary_pose"):
+        router.route({
+            "intent": "circular_move",
+            "target_pose": {"position": {"x": 0.30, "y": 0.00, "z": 0.40}},
+        })
+
+
+def test_circular_move_missing_target_pose_rejects():
+    router = _router()
+
+    with pytest.raises(ValueError, match="target_pose"):
+        router.route({
+            "intent": "circular_move",
+            "auxiliary_pose": {"position": {"x": 0.32, "y": 0.05, "z": 0.42}},
+        })

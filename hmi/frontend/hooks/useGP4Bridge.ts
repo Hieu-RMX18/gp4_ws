@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type {
+  CommandView,
   CommandMutationResponse,
   GP4BridgeClient,
   HmiStateSnapshot,
@@ -8,6 +9,7 @@ import type {
   JointPosition,
   LeaseMutationResponse,
   ReplayListItem,
+  SequenceView,
   TransportState,
 } from '../../shared/contracts';
 
@@ -46,6 +48,18 @@ function createDisconnectedSnapshot(): HmiStateSnapshot {
       executionAllowed: false,
       replayAvailable: false,
       simOnly: true,
+      hardwareGate: {
+        unlocked: false,
+        reasons: ['hardware gate status unavailable while bridge is disconnected'],
+        flagEnabled: false,
+        evidencePath: 'hmi/data/hardware_gate.json',
+        approvedBy: null,
+        approvedAt: null,
+        reportPath: null,
+        reportSha256: null,
+        reportSha256Match: false,
+        checklist: null,
+      },
     },
     lease: {
       leaseId: null,
@@ -76,9 +90,18 @@ function createDisconnectedSnapshot(): HmiStateSnapshot {
     },
     messages: [],
     activeCommand: null,
+    activeSequence: null,
     jointPositions: DEFAULT_JOINTS,
     planMetrics: null,
     replayItems: [],
+  };
+}
+
+function mergeSequenceStep(sequence: SequenceView, command: CommandView): SequenceView {
+  return {
+    ...sequence,
+    currentStepIndex: command.sequenceStepIndex ?? sequence.currentStepIndex ?? null,
+    steps: sequence.steps.map((step) => (step.commandId === command.commandId ? command : step)),
   };
 }
 
@@ -101,11 +124,32 @@ function applyEvent(snapshot: HmiStateSnapshot, event: HmiStreamEvent): HmiState
         telemetryState: event.telemetryState,
       };
     case 'command_lifecycle':
+      if (snapshot.activeSequence && event.command.parentSequenceId === snapshot.activeSequence.sequenceId) {
+        return {
+          ...snapshot,
+          generatedAt: new Date().toISOString(),
+          activeCommand: event.command,
+          activeSequence: mergeSequenceStep(snapshot.activeSequence, event.command),
+          planMetrics: event.planMetrics ?? event.command.metrics ?? snapshot.planMetrics,
+          messages: event.messages ? [...snapshot.messages, ...event.messages] : snapshot.messages,
+        };
+      }
       return {
         ...snapshot,
         generatedAt: new Date().toISOString(),
         activeCommand: event.command,
         planMetrics: event.planMetrics ?? event.command.metrics ?? snapshot.planMetrics,
+        messages: event.messages ? [...snapshot.messages, ...event.messages] : snapshot.messages,
+      };
+    case 'sequence_lifecycle':
+      return {
+        ...snapshot,
+        generatedAt: new Date().toISOString(),
+        activeSequence: event.sequence,
+        activeCommand:
+          snapshot.activeCommand && snapshot.activeCommand.parentSequenceId === event.sequence.sequenceId
+            ? snapshot.activeCommand
+            : event.sequence.steps[event.sequence.currentStepIndex ?? 0] ?? snapshot.activeCommand,
         messages: event.messages ? [...snapshot.messages, ...event.messages] : snapshot.messages,
       };
     case 'replay_updated':
@@ -142,6 +186,7 @@ export interface UseGp4BridgeResult {
   isController: boolean;
   blockingRuntime: boolean;
   submitCommand: (rawText: string) => Promise<CommandMutationResponse>;
+  confirmCommandById: (commandId: string, planFingerprint: string) => Promise<CommandMutationResponse>;
   acquireControllerLease: () => Promise<LeaseMutationResponse>;
   releaseLease: () => Promise<LeaseMutationResponse | null>;
   confirmActiveCommand: () => Promise<CommandMutationResponse | null>;
@@ -237,23 +282,51 @@ export function useGP4Bridge(
     return response;
   }, [client, operatorId, sessionId, state.lease.leaseToken, state.mode]);
 
-  const confirmActiveCommand = useCallback(async () => {
-    if (!state.activeCommand || !state.activeCommand.planFingerprint) {
-      return null;
-    }
-    const response = await client.confirmCommand(state.activeCommand.commandId, {
+  const confirmCommandById = useCallback(async (commandId: string, planFingerprint: string) => {
+    const response = await client.confirmCommand(commandId, {
       sessionId,
       operatorId,
       leaseToken: state.lease.leaseToken,
-      planFingerprint: state.activeCommand.planFingerprint,
+      planFingerprint,
     });
     if (response.snapshot) {
       setState(response.snapshot);
     }
     return response;
-  }, [client, operatorId, sessionId, state.activeCommand, state.lease.leaseToken]);
+  }, [client, operatorId, sessionId, state.lease.leaseToken]);
+
+  const confirmActiveCommand = useCallback(async () => {
+    if (state.activeSequence?.planFingerprint) {
+      const response = await client.confirmSequence(state.activeSequence.sequenceId, {
+        sessionId,
+        operatorId,
+        leaseToken: state.lease.leaseToken,
+        planFingerprint: state.activeSequence.planFingerprint,
+      });
+      if (response.snapshot) {
+        setState(response.snapshot);
+      }
+      return response;
+    }
+    if (!state.activeCommand?.planFingerprint) {
+      return null;
+    }
+    return confirmCommandById(state.activeCommand.commandId, state.activeCommand.planFingerprint);
+  }, [client, confirmCommandById, operatorId, sessionId, state.activeCommand, state.activeSequence, state.lease.leaseToken]);
 
   const abortActiveCommand = useCallback(async (reason?: string) => {
+    if (state.activeSequence) {
+      const response = await client.abortSequence(state.activeSequence.sequenceId, {
+        sessionId,
+        operatorId,
+        leaseToken: state.lease.leaseToken,
+        reason,
+      });
+      if (response.snapshot) {
+        setState(response.snapshot);
+      }
+      return response;
+    }
     if (!state.activeCommand) {
       return null;
     }
@@ -267,7 +340,7 @@ export function useGP4Bridge(
       setState(response.snapshot);
     }
     return response;
-  }, [client, operatorId, sessionId, state.activeCommand, state.lease.leaseToken]);
+  }, [client, operatorId, sessionId, state.activeCommand, state.activeSequence, state.lease.leaseToken]);
 
   const refreshReplay = useCallback(async () => {
     const response = await client.listReplay({ limit: 25 });
@@ -285,6 +358,7 @@ export function useGP4Bridge(
     isController: state.lease.ownsControl && !state.capabilities.readOnly,
     blockingRuntime,
     submitCommand,
+    confirmCommandById,
     acquireControllerLease,
     releaseLease,
     confirmActiveCommand,

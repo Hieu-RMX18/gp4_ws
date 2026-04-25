@@ -18,7 +18,12 @@ import pytest
 import yaml
 
 from llm_gateway.normalizer import Normalizer
-from llm_gateway.prompt_builder import FROZEN_SEMANTIC_INTENTS, build_system_prompt
+from llm_gateway.prompt_builder import (
+    FROZEN_SEMANTIC_INTENTS,
+    FROZEN_TOP_LEVEL_OUTPUT_INTENTS,
+    build_system_prompt,
+)
+from llm_gateway.schema_validator import SchemaValidator
 from llm_gateway.semantic_validator import SemanticValidator
 
 
@@ -27,6 +32,7 @@ _FROZEN_PUBLIC_PRIMITIVES = {
     "HOME",
     "PTP",
     "LIN",
+    "CIRC",
     "CARTESIAN_PATH",
     "MOVE_REL",
     "GET_POSE",
@@ -60,6 +66,7 @@ _INTENT_TO_PRIMITIVES = {
     "move_relative": {"MOVE_REL"},
     "absolute_move_ptp": {"PTP"},
     "absolute_move_lin": {"LIN"},
+    "circular_move": {"CIRC"},
     "move_joint": {"MOVE_JOINT"},
     "move_joints": {"MOVE_JOINTS"},
     "io_set": {"IO_SET"},
@@ -117,13 +124,21 @@ def test_prompt_builder_mentions_all_semantic_intents():
 
 
 def test_intent_to_primitive_mapping_covers_all_primitives():
-    """Every frozen public primitive must be producible by at least one intent."""
+    """Every frozen public primitive must be producible by at least one intent.
+
+    Primitives in _DIRECT_ONLY_PRIMITIVES are valid public primitives but only
+    reachable via the raw command path (/llm_raw_command), not through a
+    semantic intent.  They are excluded from intent-coverage checks.
+    """
+    # All public primitives are now reachable via a semantic intent.
+    _DIRECT_ONLY_PRIMITIVES: set = set()
     producible = set()
     for primitive_set in _INTENT_TO_PRIMITIVES.values():
         producible |= primitive_set
-    assert producible >= _FROZEN_PUBLIC_PRIMITIVES, (
+    intent_required = _FROZEN_PUBLIC_PRIMITIVES - _DIRECT_ONLY_PRIMITIVES
+    assert producible >= intent_required, (
         f"Intent-to-primitive mapping does not cover all primitives.\n"
-        f"  Uncovered: {_FROZEN_PUBLIC_PRIMITIVES - producible}"
+        f"  Uncovered: {intent_required - producible}"
     )
 
 
@@ -165,6 +180,10 @@ def test_intent_router_covers_all_frozen_intents():
     )
 
 
+def test_top_level_output_intents_include_sequence():
+    assert FROZEN_TOP_LEVEL_OUTPUT_INTENTS == (FROZEN_SEMANTIC_INTENTS | {"sequence"})
+
+
 def test_no_deprecated_schema_loaded_at_runtime():
     """command_schema.json must not exist (deprecated to .DEPRECATED)."""
     deprecated_path = Path(__file__).resolve().parents[1] / "config" / "command_schema.json"
@@ -181,3 +200,33 @@ def test_macro_policy_declares_draw_shape_and_draw_text():
     macros = policy["macros"]
     assert "draw_shape" in macros
     assert "draw_text" in macros
+
+
+def test_schema_declares_explicit_unit_hints():
+    schema_path = Path(__file__).resolve().parents[1] / "config" / "llm_schema.yaml"
+    with open(schema_path, "r", encoding="utf-8") as schema_file:
+        schema = yaml.safe_load(schema_file)
+
+    assert schema["properties"]["linear_unit"]["enum"] == ["m", "cm", "mm"]
+    assert schema["properties"]["angular_unit"]["enum"] == ["rad", "deg"]
+
+
+def test_router_output_with_explicit_units_survives_schema_and_normalizer():
+    from llm_gateway.intent_router import IntentRouter
+
+    router = IntentRouter()
+    routed = router.route(
+        {
+            "intent": "move_relative",
+            "delta": {"x": 0.0, "y": 0.0, "z": 5.0},
+            "linear_unit": "cm",
+            "reference_frame": "base_link",
+        }
+    ).commands[0]
+
+    SchemaValidator().validate(routed)
+    normalized = Normalizer().normalize(routed)
+
+    assert normalized["primitive_type"] == "MOVE_REL"
+    assert normalized["delta_z"] == pytest.approx(0.05)
+    assert "linear_unit" not in normalized

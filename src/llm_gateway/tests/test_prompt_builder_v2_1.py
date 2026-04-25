@@ -17,14 +17,25 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
-from llm_gateway.prompt_builder import FROZEN_SEMANTIC_INTENTS, build_system_prompt
+from llm_gateway.prompt_builder import (
+    FROZEN_SEMANTIC_INTENTS,
+    FROZEN_TOP_LEVEL_OUTPUT_INTENTS,
+    build_system_prompt,
+)
 
 
 @pytest.fixture(scope="module")
 def prompt() -> str:
     """Build the system prompt with a placeholder schema."""
     return build_system_prompt("{}")
+
+
+def _load_workspace_bounds() -> dict:
+    safety_yaml = Path(__file__).resolve().parents[2] / "safety" / "config" / "safety_rules.yaml"
+    safety_rules = yaml.safe_load(safety_yaml.read_text()) or {}
+    return safety_rules["workspace_bounds"]
 
 
 # ── 1. Frozen intent list is exactly correct ──────────────────────────────────
@@ -39,6 +50,7 @@ _EXPECTED_INTENTS = frozenset({
     "move_relative",
     "absolute_move_ptp",
     "absolute_move_lin",
+    "circular_move",
     "move_joint",
     "move_joints",
     "io_set",
@@ -56,6 +68,10 @@ def test_frozen_intent_list_matches_expected():
     )
 
 
+def test_top_level_output_intents_include_sequence():
+    assert FROZEN_TOP_LEVEL_OUTPUT_INTENTS == (_EXPECTED_INTENTS | {"sequence"})
+
+
 # ── 2. Prompt mentions every frozen intent ────────────────────────────────────
 
 @pytest.mark.parametrize("intent_name", sorted(_EXPECTED_INTENTS))
@@ -64,6 +80,10 @@ def test_prompt_mentions_intent(prompt: str, intent_name: str):
     assert intent_name in prompt, (
         f"Prompt does not mention semantic intent '{intent_name}'"
     )
+
+
+def test_prompt_mentions_sequence(prompt: str):
+    assert '"intent":"sequence"' in prompt or '"intent": "sequence"' in prompt
 
 
 # ── 3. Prompt uses "intent" field, not "intent_type" ─────────────────────────
@@ -118,15 +138,25 @@ def test_prompt_includes_unsupported_error_format(prompt: str):
 # ── 6. Prompt includes workspace and velocity constraints ─────────────────────
 
 def test_prompt_includes_workspace_limits(prompt: str):
-    assert "-0.25" in prompt and "0.38" in prompt, "Workspace x-limits missing"
-    assert "-0.25" in prompt and "0.34" in prompt, "Workspace y-limits missing"
-    assert "0.10" in prompt and "0.50" in prompt, "Workspace z-limits missing"
+    bounds = _load_workspace_bounds()
+    expected_line = (
+        f"WORKSPACE LIMITS (meters): "
+        f"x: {bounds['x_min']:.2f}–{bounds['x_max']:.2f}, "
+        f"y: {bounds['y_min']:.2f}–{bounds['y_max']:.2f}, "
+        f"z: {bounds['z_min']:.2f}–{bounds['z_max']:.2f}"
+    )
+    assert expected_line in prompt, "Prompt workspace limits are not synced with safety_rules.yaml"
 
 def test_prompt_includes_velocity_scale_range(prompt: str):
-    assert "0.05" in prompt and "0.06" in prompt, "Velocity scale range missing"
+    assert "0.01" in prompt and "0.06" in prompt, "Velocity scale range missing"
 
 def test_prompt_includes_unit_conversions(prompt: str):
     assert "0.01" in prompt or "cm" in prompt, "Unit conversion rules missing"
+
+
+def test_prompt_mentions_explicit_unit_fields(prompt: str):
+    assert "linear_unit" in prompt, "Prompt must mention linear_unit for non-SI distances"
+    assert "angular_unit" in prompt, "Prompt must mention angular_unit for non-SI angles"
 
 
 # ── 7. Prompt mentions correct slot names for key intents ─────────────────────
@@ -136,6 +166,11 @@ def test_prompt_move_relative_uses_delta_object(prompt: str):
     assert '"delta":' in prompt, (
         "move_relative must use 'delta' slot matching IntentRouter._route_move_relative"
     )
+
+
+def test_prompt_non_si_examples_use_explicit_unit_fields(prompt: str):
+    assert '"linear_unit": "cm"' in prompt
+    assert '"angular_unit": "deg"' in prompt
 
 
 def test_prompt_absolute_move_uses_target_pose(prompt: str):

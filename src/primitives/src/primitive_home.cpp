@@ -212,6 +212,7 @@ public:
     if (!quality_gate_.validate_plan(
           output_traj,
           motion_core::QualityGate::kFractionNotApplicable,
+          "HOME",
           quality_reason))
     {
       return make_result_failure(

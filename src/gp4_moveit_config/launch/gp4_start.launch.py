@@ -1,3 +1,5 @@
+# DEPRECATED (2026-04-21): Superseded by gp4_bringup/launch/moveit_only.launch.py.
+# Will be removed in a future cleanup once external users migrate.
 """
 gp4_start.launch.py
 ────────────────────

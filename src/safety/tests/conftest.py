@@ -12,7 +12,7 @@ def safety_rules():
     # Inject a known test_box inside bounds to test AABB logic independently of z_min
     rules['forbidden_zones'].append({
         'name': 'test_box',
-        'x': -0.05, 'y': -0.05, 'z': 0.2,
+        'x': -0.05, 'y': -0.05, 'z': 0.30,
         'size_x': 0.1, 'size_y': 0.1, 'size_z': 0.1
     })
     return rules
@@ -22,7 +22,7 @@ def valid_pose():
     p = Pose()
     p.position.x = 0.15
     p.position.y = -0.15
-    p.position.z = 0.20
+    p.position.z = 0.30
     return p
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def table_collision_pose():
     p = Pose()
     p.position.x = -0.05
     p.position.y = -0.05
-    p.position.z = 0.2
+    p.position.z = 0.30
     return p
 
 @pytest.fixture

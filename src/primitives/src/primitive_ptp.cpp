@@ -288,6 +288,7 @@ public:
     if (!quality_gate_.validate_plan(
           output_traj,
           motion_core::QualityGate::kFractionNotApplicable,
+          "PTP",
           quality_reason))
     {
       return make_result_failure(map_quality_failure(quality_reason), "PTP quality gate rejected: " + quality_reason);

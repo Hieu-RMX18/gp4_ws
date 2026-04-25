@@ -16,48 +16,46 @@ namespace motion_core
 struct MoveRelLimits
 {
   // Max single-command translation norm (meters).
-  static constexpr double kMaxDeltaNorm = 0.03;
+  // MUST match safety_rules.yaml motion_limits.max_move_rel_translation.
+  // Update both locations together. Hardware pass keeps MOVE_REL short and
+  // conservative for real-cell nudges only.
+  static constexpr double kMaxDeltaNorm = 0.05;
 
-  // Workspace bounds for the computed absolute target.
-  // These MUST match safety_rules.yaml; if safety_rules.yaml changes,
-  // update here and add a cross-check test.  Centralising in one header
-  // removes the duplication that previously existed between
-  // motion_core_node.cpp and safety_rules.yaml.
-  static constexpr double kXMin = -0.25;
-  static constexpr double kXMax =  0.38;
-  static constexpr double kYMin = -0.25;
-  static constexpr double kYMax =  0.34;
-  static constexpr double kZMin =  0.10;
-  static constexpr double kZMax =  0.50;
+  // Workspace bounds — MUST match safety_rules.yaml workspace_bounds.
+  // Derived from current gp4_station xacro station mesh in base_link:
+  // X[-0.482,+0.761] Y[-0.197,+0.806] Z[-0.757,+1.093].
+  // Hardware policy is conservative: do not expand positive X beyond +0.45.
+  static constexpr double kXMin = -0.45;  // near side wall -0.482 + margin (rounded conservative)
+  static constexpr double kXMax =  0.45;  // conservative positive cap
+  static constexpr double kYMin = -0.16;  // front wall -0.197 + 37mm; above front_wall_guard max
+  static constexpr double kYMax =  0.52;  // reach-limited
+  static constexpr double kZMin =  0.23;  // table top ~0.20 + 30mm
+  static constexpr double kZMax =  0.56;  // relaxed from 0.52 for commissioning
 
-  // Commissioning keepout zones — center/size AABB form to mirror safety_rules.yaml.
-  static constexpr double kTableClearanceX = 0.10;
-  static constexpr double kTableClearanceY = 0.05;
-  static constexpr double kTableClearanceZ = 0.09;
-  static constexpr double kTableClearanceSizeX = 1.10;
-  static constexpr double kTableClearanceSizeY = 0.95;
-  static constexpr double kTableClearanceSizeZ = 0.18;
+  // Station wall keepout zones — MUST mirror safety_rules.yaml forbidden_zones.
+  // front_wall_guard: station front face Y = -0.197m, 30mm inflated zone.
+  static constexpr double kFrontWallX     =  0.00;
+  static constexpr double kFrontWallY     = -0.197;
+  static constexpr double kFrontWallZ     =  0.00;
+  static constexpr double kFrontWallSizeX =  1.30;
+  static constexpr double kFrontWallSizeY =  0.06;
+  static constexpr double kFrontWallSizeZ =  1.50;
 
-  static constexpr double kAvoidLeftX = -0.22;
-  static constexpr double kAvoidLeftY = 0.21;
-  static constexpr double kAvoidLeftZ = 0.35;
-  static constexpr double kAvoidLeftSizeX = 0.22;
-  static constexpr double kAvoidLeftSizeY = 0.24;
-  static constexpr double kAvoidLeftSizeZ = 0.70;
+  // right_wall_guard: station side wall on negative X, center X = -0.482m.
+  static constexpr double kRightWallX     = -0.482;
+  static constexpr double kRightWallY     =  0.305;
+  static constexpr double kRightWallZ     =  0.00;
+  static constexpr double kRightWallSizeX =  0.06;
+  static constexpr double kRightWallSizeY =  1.10;
+  static constexpr double kRightWallSizeZ =  1.50;
 
-  static constexpr double kWallX = 0.34;
-  static constexpr double kWallY = 0.32;
-  static constexpr double kWallZ = 0.35;
-  static constexpr double kWallSizeX = 0.18;
-  static constexpr double kWallSizeY = 0.32;
-  static constexpr double kWallSizeZ = 0.70;
-
-  static constexpr double kCornerGuardX = 0.24;
-  static constexpr double kCornerGuardY = 0.24;
-  static constexpr double kCornerGuardZ = 0.35;
-  static constexpr double kCornerGuardSizeX = 0.22;
-  static constexpr double kCornerGuardSizeY = 0.22;
-  static constexpr double kCornerGuardSizeZ = 0.70;
+  // floor_clearance_guard: low-Z table/floor zone, Z in [0.00, 0.20].
+  static constexpr double kFloorClearanceX     =  0.00;
+  static constexpr double kFloorClearanceY     =  0.30;
+  static constexpr double kFloorClearanceZ     =  0.10;
+  static constexpr double kFloorClearanceSizeX =  1.50;
+  static constexpr double kFloorClearanceSizeY =  1.10;
+  static constexpr double kFloorClearanceSizeZ =  0.20;
 };
 
 /// Validate that reference_frame is either empty or "base_link".
@@ -132,6 +130,11 @@ inline bool validate_move_rel_target_bounds(
     return false;
   }
 
+  // Defense-in-depth:
+  // Under the current conservative workspace policy, points that would enter
+  // these keepout zones are already rejected by the workspace bounds above.
+  // Keep these explicit AABB checks so future workspace expansions cannot
+  // silently bypass wall/floor guard intent.
   const auto inside_aabb = [](
     const geometry_msgs::msg::Pose & pose,
     double cx, double cy, double cz,
@@ -150,41 +153,28 @@ inline bool validate_move_rel_target_bounds(
 
   if (inside_aabb(
         target,
-        MoveRelLimits::kTableClearanceX,
-        MoveRelLimits::kTableClearanceY,
-        MoveRelLimits::kTableClearanceZ,
-        MoveRelLimits::kTableClearanceSizeX,
-        MoveRelLimits::kTableClearanceSizeY,
-        MoveRelLimits::kTableClearanceSizeZ))
+        MoveRelLimits::kFrontWallX, MoveRelLimits::kFrontWallY, MoveRelLimits::kFrontWallZ,
+        MoveRelLimits::kFrontWallSizeX, MoveRelLimits::kFrontWallSizeY, MoveRelLimits::kFrontWallSizeZ))
   {
-    reason = "MOVE_REL: computed target intersects forbidden zone 'table_clearance_guard'";
+    reason = "MOVE_REL: computed target intersects forbidden zone 'front_wall_guard'";
     return false;
   }
 
   if (inside_aabb(
         target,
-        MoveRelLimits::kAvoidLeftX, MoveRelLimits::kAvoidLeftY, MoveRelLimits::kAvoidLeftZ,
-        MoveRelLimits::kAvoidLeftSizeX, MoveRelLimits::kAvoidLeftSizeY, MoveRelLimits::kAvoidLeftSizeZ))
+        MoveRelLimits::kRightWallX, MoveRelLimits::kRightWallY, MoveRelLimits::kRightWallZ,
+        MoveRelLimits::kRightWallSizeX, MoveRelLimits::kRightWallSizeY, MoveRelLimits::kRightWallSizeZ))
   {
-    reason = "MOVE_REL: computed target intersects forbidden zone 'avoid_left_region'";
+    reason = "MOVE_REL: computed target intersects forbidden zone 'right_wall_guard'";
     return false;
   }
 
   if (inside_aabb(
         target,
-        MoveRelLimits::kWallX, MoveRelLimits::kWallY, MoveRelLimits::kWallZ,
-        MoveRelLimits::kWallSizeX, MoveRelLimits::kWallSizeY, MoveRelLimits::kWallSizeZ))
+        MoveRelLimits::kFloorClearanceX, MoveRelLimits::kFloorClearanceY, MoveRelLimits::kFloorClearanceZ,
+        MoveRelLimits::kFloorClearanceSizeX, MoveRelLimits::kFloorClearanceSizeY, MoveRelLimits::kFloorClearanceSizeZ))
   {
-    reason = "MOVE_REL: computed target intersects forbidden zone 'wall_region'";
-    return false;
-  }
-
-  if (inside_aabb(
-        target,
-        MoveRelLimits::kCornerGuardX, MoveRelLimits::kCornerGuardY, MoveRelLimits::kCornerGuardZ,
-        MoveRelLimits::kCornerGuardSizeX, MoveRelLimits::kCornerGuardSizeY, MoveRelLimits::kCornerGuardSizeZ))
-  {
-    reason = "MOVE_REL: computed target intersects forbidden zone 'corner_clearance_guard'";
+    reason = "MOVE_REL: computed target intersects forbidden zone 'floor_clearance_guard'";
     return false;
   }
 

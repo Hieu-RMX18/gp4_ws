@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 
 import type {
   BridgeConnection,
   ChatMessage,
   CommandLifecycleState,
+  CommandMutationResponse,
   CommandView,
   GP4BridgeClient,
   JointPosition,
   MessageOrigin,
+  SequenceView,
   TelemetrySourceStatus,
 } from '../../shared/contracts';
 import { useGP4Bridge } from '../hooks/useGP4Bridge';
@@ -15,13 +17,56 @@ import { RuntimeStateBanner } from './RuntimeStateBanner';
 
 const JOINT_ORDER = ['joint_1_s', 'joint_2_l', 'joint_3_u', 'joint_4_r', 'joint_5_b', 'joint_6_t'];
 
-const QUICK_COMMANDS = [
-  'home',
-  'stop',
-  'move up 10 cm',
-  'move down 10 cm',
-  'move joint 1 +10 deg',
-  'move joint 2 -5 deg',
+interface IntentTemplate {
+  id: string;
+  intent: string;
+  title: string;
+  subtitle: string;
+}
+
+const INTENT_TEMPLATES: IntentTemplate[] = [
+  {
+    id: 'home',
+    intent: 'home',
+    title: 'Home / Về home',
+    subtitle: 'Return to home pose · Đưa robot về vị trí home',
+  },
+  {
+    id: 'stop',
+    intent: 'stop',
+    title: 'Stop / Dừng',
+    subtitle: 'Immediate supervised stop request · Yêu cầu dừng có giám sát',
+  },
+  {
+    id: 'up_5cm',
+    intent: 'move up 5 cm',
+    title: 'Move up 5 cm / Nâng lên 5 cm',
+    subtitle: 'Small vertical lift in base_link · Tịnh tiến đứng nhỏ trong base_link',
+  },
+  {
+    id: 'down_2cm',
+    intent: 'move down 2 cm',
+    title: 'Move down 2 cm / Hạ xuống 2 cm',
+    subtitle: 'Small downward move in base_link · Tịnh tiến xuống nhỏ trong base_link',
+  },
+  {
+    id: 'joint_1_plus_5',
+    intent: 'move joint 1 +5 deg',
+    title: 'Joint 1 +5° / Khớp 1 +5°',
+    subtitle: 'Conservative joint adjustment · Điều chỉnh khớp bảo thủ',
+  },
+  {
+    id: 'wait_2s',
+    intent: 'wait 2 s',
+    title: 'Wait 2 s / Chờ 2 giây',
+    subtitle: 'Pause sequence safely · Tạm dừng chuỗi an toàn',
+  },
+  {
+    id: 'get_pose',
+    intent: 'get pose',
+    title: 'Get pose / Lấy pose',
+    subtitle: 'Query current TCP pose · Truy vấn pose TCP hiện tại',
+  },
 ];
 
 type PillTone = 'green' | 'blue' | 'amber' | 'red' | 'cyan' | 'gray';
@@ -29,12 +74,7 @@ type MessageRole = 'user' | 'robot' | 'system';
 type LogLevel = 'info' | 'ok' | 'warn' | 'err';
 type PipelineStatus = 'done' | 'active' | 'pending' | 'error';
 
-interface PipelineStepView {
-  key: string;
-  label: string;
-  status: PipelineStatus;
-  marker: string;
-}
+const DISPLAY_TIME_ZONE = 'Asia/Ho_Chi_Minh';
 
 interface TopicView {
   key: string;
@@ -48,6 +88,21 @@ interface LogEntryView {
   time: string;
   level: LogLevel;
   message: string;
+}
+
+interface ActionFeedbackView {
+  id: string;
+  timestamp: string;
+  level: LogLevel;
+  message: string;
+}
+
+interface TraceStepView {
+  key: string;
+  label: string;
+  status: PipelineStatus;
+  summary: string;
+  details: Record<string, unknown> | null;
 }
 
 interface StatusPillView {
@@ -137,22 +192,107 @@ function formatMetric(value: number | null, digits = 2, suffix = ''): string {
   return `${value.toFixed(digits)}${suffix}`;
 }
 
+function parseBackendTimestamp(value: string): Date | null {
+  const timeOnlyMatch = /^(\d{2}):(\d{2}):(\d{2})$/.exec(value);
+  if (timeOnlyMatch) {
+    const now = new Date();
+    const parsed = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate(),
+        Number(timeOnlyMatch[1]),
+        Number(timeOnlyMatch[2]),
+        Number(timeOnlyMatch[3]),
+      ),
+    );
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value);
+  const parsed = new Date(hasTimezone ? value : `${value}Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getDateTimeParts(value: Date): Record<string, string> {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: DISPLAY_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  })
+    .formatToParts(value)
+    .reduce<Record<string, string>>((parts, part) => {
+      if (part.type !== 'literal') {
+        parts[part.type] = part.value;
+      }
+      return parts;
+    }, {});
+}
+
 function formatTimestamp(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
+  const parsed = parseBackendTimestamp(value);
+  if (!parsed) {
     return value;
   }
-  return parsed.toLocaleTimeString('en-GB', { hour12: false });
+  const parts = getDateTimeParts(parsed);
+  return `${parts.hour}:${parts.minute}:${parts.second}`;
 }
 
 function formatClock(value: Date): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, '0');
-  const day = String(value.getDate()).padStart(2, '0');
-  const hour = String(value.getHours()).padStart(2, '0');
-  const minute = String(value.getMinutes()).padStart(2, '0');
-  const second = String(value.getSeconds()).padStart(2, '0');
-  return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+  const parts = getDateTimeParts(value);
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second} GMT+7`;
+}
+
+function shouldShowMessageInSystemLog(message: ChatMessage): boolean {
+  return !/^Step \d+\/6\b/.test(message.text);
+}
+
+function formatPlanFingerprintLog(job: CommandView | SequenceView | null): string {
+  return job?.planFingerprint
+    ? `Plan fingerprint: ${job.planFingerprint.slice(0, 12)}...`
+    : 'No validated plan fingerprint yet.';
+}
+
+function buildReviewLogEntries(
+  job: CommandView | SequenceView | null,
+  blockingReasons: readonly string[],
+  declineReason: string | null,
+  fallbackTimestamp: string,
+): LogEntryView[] {
+  const time = formatTimestamp(job?.createdAt ?? fallbackTimestamp);
+  const entries: LogEntryView[] = [
+    {
+      id: 'review-plan-fingerprint',
+      time,
+      level: 'info',
+      message: formatPlanFingerprintLog(job),
+    },
+  ];
+
+  if (blockingReasons.length > 0) {
+    entries.push({
+      id: 'review-blocking-reasons',
+      time,
+      level: 'warn',
+      message: `Blocking reasons: ${blockingReasons.join(' ')}`,
+    });
+  }
+
+  if (declineReason) {
+    entries.push({
+      id: 'review-decline-reason',
+      time,
+      level: 'err',
+      message: `Decline reason: ${declineReason}`,
+    });
+  }
+
+  return entries;
 }
 
 function humanizeLabel(value: string): string {
@@ -314,51 +454,6 @@ function toLogLevel(message: ChatMessage): LogLevel {
   return 'info';
 }
 
-function buildPipeline(state: CommandLifecycleState | null | undefined): PipelineStepView[] {
-  const steps: Array<Omit<PipelineStepView, 'marker'>> = [
-    {
-      key: 'parsed',
-      label: 'Parsed',
-      status: state === 'PARSING' ? 'active' : state !== undefined && state !== null && state !== 'RECEIVED' ? 'done' : 'pending',
-    },
-    {
-      key: 'validated',
-      label: 'Validated',
-      status: state === 'VALIDATING' ? 'active' : isInStateSet(state, VALIDATED_OR_BEYOND) ? 'done' : 'pending',
-    },
-    {
-      key: 'confirmation',
-      label: 'Confirmation',
-      status: state === 'NEEDS_CONFIRMATION' ? 'active' : isInStateSet(state, CONFIRMED_OR_BEYOND) ? 'done' : 'pending',
-    },
-    {
-      key: 'dispatch',
-      label: 'Dispatch Requested',
-      status:
-        state === 'EXECUTION_REQUESTED'
-          ? 'active'
-          : isInStateSet(state, EXECUTION_REQUESTED_OR_BEYOND)
-            ? 'done'
-            : 'pending',
-    },
-    {
-      key: 'executing',
-      label: 'Executing',
-      status: state === 'EXECUTING' ? 'active' : isInStateSet(state, EXECUTING_OR_BEYOND) ? 'done' : 'pending',
-    },
-    {
-      key: 'completed',
-      label: 'Completed',
-      status: state === 'SUCCEEDED' ? 'done' : isInStateSet(state, TERMINAL_FAILURE_STATES) ? 'error' : 'pending',
-    },
-  ];
-
-  return steps.map((step, index) => ({
-    ...step,
-    marker: step.status === 'done' ? '✓' : step.status === 'error' ? '!' : String(index + 1),
-  }));
-}
-
 function durationSeconds(command: CommandView | null): number | null {
   if (!command) {
     return null;
@@ -376,6 +471,238 @@ function durationSeconds(command: CommandView | null): number | null {
   return (endTime - startTime) / 1000;
 }
 
+function prettyJson(value: unknown): string {
+  const serialized = JSON.stringify(value, null, 2);
+  return serialized ?? 'null';
+}
+
+function resolveDeclineReason(
+  mutationReason: string | null | undefined,
+  command: CommandView | null | undefined,
+): string | null {
+  const trimmedMutationReason = mutationReason?.trim();
+  if (trimmedMutationReason) {
+    return trimmedMutationReason;
+  }
+
+  const rejectReason = command?.rejectReason?.trim();
+  if (rejectReason) {
+    return rejectReason;
+  }
+
+  const blockingReasons = command?.validationResult?.blockingReasons ?? [];
+  if (blockingReasons.length > 0) {
+    return blockingReasons.join('; ');
+  }
+
+  return null;
+}
+
+function reasonToVietnamese(reason: string): string {
+  const normalized = reason.toLowerCase();
+  if (normalized.includes('hmi_enable_hardware_commands')) {
+    return 'Biến môi trường bật lệnh phần cứng chưa được đặt true.';
+  }
+  if (normalized.includes('evidence file is missing')) {
+    return 'Thiếu file minh chứng cổng phần cứng.';
+  }
+  if (normalized.includes('approved=true')) {
+    return 'Biên bản chưa được phê duyệt chính thức.';
+  }
+  if (normalized.includes('approvedby')) {
+    return 'Thiếu thông tin người phê duyệt.';
+  }
+  if (normalized.includes('approvedat')) {
+    return 'Thiếu thời điểm phê duyệt theo ISO8601.';
+  }
+  if (normalized.includes('report sha256')) {
+    return 'Checksum báo cáo không khớp với tệp minh chứng.';
+  }
+  if (normalized.includes('timing/jitter')) {
+    return 'Checklist timing/jitter chưa đạt.';
+  }
+  if (normalized.includes('disconnect-reconnect')) {
+    return 'Checklist disconnect-reconnect chưa đạt.';
+  }
+  if (normalized.includes('robot_status semantics')) {
+    return 'Checklist semantics robot_status chưa đạt.';
+  }
+  if (normalized.includes('joint source precedence')) {
+    return 'Checklist ưu tiên nguồn joint chưa đạt.';
+  }
+  if (normalized.includes('audit visibility')) {
+    return 'Checklist hiển thị audit chưa đạt.';
+  }
+  if (normalized.includes('runtime state')) {
+    return 'Trạng thái runtime hiện tại đang chặn lệnh.';
+  }
+  if (normalized.includes('telemetry') && normalized.includes('stale')) {
+    return 'Telemetry nguồn bắt buộc đang stale hoặc unavailable.';
+  }
+  if (normalized.includes('preflight')) {
+    return 'Preflight phần cứng thất bại.';
+  }
+  return 'Điều kiện an toàn chưa đạt, hệ thống giữ fail-closed.';
+}
+
+function hardwareGateLabel(unlocked: boolean): string {
+  return unlocked ? 'UNLOCKED · MỞ KHÓA' : 'LOCKED · KHÓA';
+}
+
+function summarizeMutationResponse(response: CommandMutationResponse): string {
+  const lifecycleState = response.sequence?.lifecycleState ?? response.command?.lifecycleState;
+  const stateLabel = lifecycleState ? humanizeLabel(lifecycleState) : 'Idle';
+  if (response.accepted) {
+    return `Accepted · ${stateLabel}`;
+  }
+  const reason = resolveDeclineReason(response.reason, response.command ?? null);
+  return reason ? `Declined · ${reason}` : `Declined · ${stateLabel}`;
+}
+
+function buildTraceSteps(command: CommandView | null): TraceStepView[] {
+  if (!command) {
+    return [];
+  }
+
+  const lifecycle = command.lifecycleState;
+  const validation = command.validationResult ?? null;
+  const execution = command.executionResult ?? null;
+  const blockingReasons = validation?.blockingReasons ?? [];
+  const confirmationReasons = validation?.confirmationReasons ?? [];
+  const parsedAction = command.parsedIntent ? command.parsedIntent['action'] : undefined;
+
+  const parseStatus: PipelineStatus =
+    lifecycle === 'PARSING' ? 'active' : lifecycle !== 'RECEIVED' ? 'done' : 'pending';
+  const validateStatus: PipelineStatus =
+    lifecycle === 'VALIDATING'
+      ? 'active'
+      : isInStateSet(lifecycle, VALIDATED_OR_BEYOND)
+        ? 'done'
+        : 'pending';
+  const confirmationStatus: PipelineStatus =
+    lifecycle === 'NEEDS_CONFIRMATION'
+      ? 'active'
+      : isInStateSet(lifecycle, CONFIRMED_OR_BEYOND)
+        ? 'done'
+        : 'pending';
+  const dispatchStatus: PipelineStatus =
+    lifecycle === 'EXECUTION_REQUESTED'
+      ? 'active'
+      : isInStateSet(lifecycle, EXECUTION_REQUESTED_OR_BEYOND)
+        ? 'done'
+        : 'pending';
+  const executingStatus: PipelineStatus =
+    lifecycle === 'EXECUTING'
+      ? 'active'
+      : isInStateSet(lifecycle, EXECUTING_OR_BEYOND)
+        ? 'done'
+        : 'pending';
+  const terminalStatus: PipelineStatus =
+    lifecycle === 'SUCCEEDED'
+      ? 'done'
+      : isInStateSet(lifecycle, TERMINAL_FAILURE_STATES)
+        ? 'error'
+        : 'pending';
+
+  const parseSummary =
+    parsedAction
+      ? `Parsed action ${String(parsedAction)} from ${command.intentSource} input.`
+      : lifecycle === 'REJECTED'
+        ? `Parser/enrichment rejected this command.`
+        : 'Waiting for parser output.';
+
+  const validationSummary =
+    validation === null
+      ? 'Validation has not run yet.'
+      : validation.accepted
+        ? `Validation accepted · risk=${validation.riskLevel ?? 'unknown'}.`
+        : `Validation rejected: ${blockingReasons.join('; ') || 'no reason provided'}.`;
+
+  const confirmationSummary = command.planFingerprint
+    ? `Plan fingerprint ready (${command.planFingerprint.slice(0, 12)}...).`
+    : lifecycle === 'NEEDS_CONFIRMATION'
+      ? 'Waiting for operator confirmation.'
+      : 'Confirmation gate not reached.';
+
+  const dispatchSummary = isInStateSet(lifecycle, EXECUTION_REQUESTED_OR_BEYOND)
+    ? 'Confirmed command forwarded to execution boundary.'
+    : 'Execution request not sent yet.';
+
+  const executingSummary = execution
+    ? `Execution status=${execution.status} · ${execution.summary}`
+    : lifecycle === 'EXECUTING'
+      ? 'Execution requested; waiting for ROS result.'
+      : 'Execution boundary not reached.';
+
+  const terminalReason = resolveDeclineReason(null, command);
+  const resultSummary =
+    command.finalState !== null
+      ? terminalReason
+        ? `${humanizeLabel(command.finalState)} · ${terminalReason}`
+        : humanizeLabel(command.finalState)
+      : 'No terminal result yet.';
+
+  return [
+    {
+      key: 'parse',
+      label: 'Step 1 · Parse intent',
+      status: parseStatus,
+      summary: parseSummary,
+      details: {
+        rawText: command.rawText,
+        intentSource: command.intentSource,
+        parsedIntent: command.parsedIntent ?? null,
+      },
+    },
+    {
+      key: 'validate',
+      label: 'Step 2 · Validate command',
+      status: validateStatus,
+      summary: validationSummary,
+      details: validation ? { validationResult: validation } : null,
+    },
+    {
+      key: 'confirm',
+      label: 'Step 3 · Confirmation gate',
+      status: confirmationStatus,
+      summary: confirmationSummary,
+      details: {
+        planFingerprint: command.planFingerprint,
+        confirmationExpiresAt: command.confirmationExpiresAt,
+        confirmationReasons,
+      },
+    },
+    {
+      key: 'dispatch',
+      label: 'Step 4 · Dispatch request',
+      status: dispatchStatus,
+      summary: dispatchSummary,
+      details: {
+        dispatchedToRos: execution?.dispatchedToRos ?? false,
+        executionStatus: execution?.status ?? null,
+      },
+    },
+    {
+      key: 'executing',
+      label: 'Step 5 · Executing',
+      status: executingStatus,
+      summary: executingSummary,
+      details: execution ? { executionResult: execution } : null,
+    },
+    {
+      key: 'result',
+      label: 'Step 6 · Terminal result',
+      status: terminalStatus,
+      summary: resultSummary,
+      details: {
+        finalState: command.finalState,
+        rejectReason: command.rejectReason,
+        executionResult: command.executionResult ?? null,
+      },
+    },
+  ];
+}
+
 interface GP4HMIProps {
   client: GP4BridgeClient;
   sessionId: string;
@@ -386,12 +713,17 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
   const [draft, setDraft] = useState('');
   const [clockText, setClockText] = useState(() => formatClock(new Date()));
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<ActionFeedbackView | null>(null);
+  const [latestMutationReason, setLatestMutationReason] = useState<string | null>(null);
+  const submitPendingRef = useRef(false);
+  const confirmPendingRef = useRef(false);
 
   const {
     state,
     isController,
     blockingRuntime,
     submitCommand,
+    confirmCommandById,
     acquireControllerLease,
     releaseLease,
     confirmActiveCommand,
@@ -408,11 +740,33 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
   const canReleaseLease = !readOnlyBridge && isController && state.lease.leaseToken !== null;
   const canConfirmCommands = state.capabilities.canConfirmCommands && !blockingRuntime && isController;
   const canAbortCommands = (state.capabilities.canCancelCommands || state.capabilities.canAbortCommands) && isController;
+  const hardwareGate = state.capabilities.hardwareGate;
+  const hardwareGateReasons = hardwareGate.reasons ?? [];
+  const primaryHardwareGateReason =
+    hardwareGateReasons[0] ??
+    'Dual gate is not satisfied: runtime flag + signed evidence checklist are required.';
+  const primaryHardwareGateReasonVi = reasonToVietnamese(primaryHardwareGateReason);
 
   const activeCommand = state.activeCommand;
-  const blockingReasons = activeCommand?.validationResult?.blockingReasons ?? [];
-  const confirmationReasons = activeCommand?.validationResult?.confirmationReasons ?? [];
-  const executionSummary = activeCommand?.executionResult?.summary ?? null;
+  const activeSequence = state.activeSequence;
+  const activeReviewJob = activeSequence ?? activeCommand;
+  const blockingReasons =
+    activeSequence?.validationResult?.blockingReasons ?? activeCommand?.validationResult?.blockingReasons ?? [];
+  const traceSteps = useMemo(() => buildTraceSteps(activeCommand), [activeCommand]);
+  const declineReason = useMemo(
+    () => resolveDeclineReason(latestMutationReason, activeCommand),
+    [latestMutationReason, activeCommand],
+  );
+
+  const pushActionFeedback = (level: LogLevel, message: string, reason?: string | null) => {
+    setActionFeedback({
+      id: `action-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      level,
+      message,
+    });
+    setLatestMutationReason(reason?.trim() || null);
+  };
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -430,8 +784,6 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
       jointMap.get(name) ?? { name, positionDeg: null, minDeg: -180, maxDeg: 180 },
     );
   }, [state.jointPositions]);
-
-  const pipeline = useMemo(() => buildPipeline(activeCommand?.lifecycleState), [activeCommand?.lifecycleState]);
 
   const commandCount = useMemo(() => {
     if (state.replayItems.length > 0) {
@@ -473,11 +825,11 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
       },
       {
         key: 'command',
-        label: `Command ${activeCommand?.lifecycleState ? humanizeLabel(activeCommand.lifecycleState) : 'Idle'}`,
-        tone: toneFromLifecycle(activeCommand?.lifecycleState),
+        label: `${activeSequence ? 'Sequence' : 'Command'} ${activeReviewJob?.lifecycleState ? humanizeLabel(activeReviewJob.lifecycleState) : 'Idle'}`,
+        tone: toneFromLifecycle(activeReviewJob?.lifecycleState),
       },
     ];
-  }, [activeCommand?.lifecycleState, connectionMap, state.mode, state.runtime.robotStatus.servoState]);
+  }, [activeReviewJob?.lifecycleState, activeSequence, connectionMap, state.mode, state.runtime.robotStatus.servoState]);
 
   const topicRows = useMemo<TopicView[]>(() => {
     if (state.telemetrySources.length > 0) {
@@ -507,15 +859,34 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
   }, [state.connections, state.telemetrySources]);
 
   const logEntries = useMemo<LogEntryView[]>(() => {
-    const entries = state.messages.slice(-14).map((message) => ({
-      id: message.id,
-      time: formatTimestamp(message.timestamp),
-      level: toLogLevel(message),
-      message: message.text,
-    }));
+    const reviewEntries = buildReviewLogEntries(
+      activeReviewJob,
+      blockingReasons,
+      declineReason,
+      state.generatedAt,
+    );
+    const entries = state.messages
+      .filter(shouldShowMessageInSystemLog)
+      .slice(-11)
+      .map((message) => ({
+        id: message.id,
+        time: formatTimestamp(message.timestamp),
+        level: toLogLevel(message),
+        message: message.text,
+      }));
+
+    entries.unshift(...reviewEntries);
+    if (actionFeedback) {
+      entries.unshift({
+        id: actionFeedback.id,
+        time: formatTimestamp(actionFeedback.timestamp),
+        level: actionFeedback.level,
+        message: actionFeedback.message,
+      });
+    }
 
     if (entries.length > 0) {
-      return entries;
+      return entries.slice(0, 14);
     }
 
     return [
@@ -526,24 +897,121 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
         message: state.runtime.statusText,
       },
     ];
-  }, [state.generatedAt, state.messages, state.runtime.blocking, state.runtime.statusText]);
+  }, [
+    actionFeedback,
+    activeReviewJob,
+    blockingReasons,
+    declineReason,
+    state.generatedAt,
+    state.messages,
+    state.runtime.blocking,
+    state.runtime.statusText,
+  ]);
 
   const handleSubmit = async () => {
+    if (submitPendingRef.current) {
+      return;
+    }
     const rawText = draft.trim();
     if (!rawText || !canSubmitCommands) {
       return;
     }
 
+    submitPendingRef.current = true;
     try {
       const response = await submitCommand(rawText);
       if (!response.accepted) {
-        setSubmitError(response.reason ?? 'Command rejected by supervisor validation.');
+        const reason = resolveDeclineReason(response.reason, response.command);
+        setSubmitError(reason ?? 'Command rejected by supervisor validation.');
+        pushActionFeedback('err', `Submit declined · ${reason ?? 'no reason provided'}`, reason);
         return;
       }
       setDraft('');
       setSubmitError(null);
+      pushActionFeedback('ok', `Submit response · ${summarizeMutationResponse(response)}`, response.reason);
+
+      const shouldAutoConfirmSimCommand =
+        response.jobType === 'command' &&
+        response.command !== null &&
+        response.command.lifecycleState === 'NEEDS_CONFIRMATION' &&
+        response.command.mode === 'sim' &&
+        response.command.planFingerprint !== null;
+      if (shouldAutoConfirmSimCommand) {
+        const command = response.command as NonNullable<typeof response.command>;
+        try {
+          const confirmResponse = await confirmCommandById(
+            response.commandId as string,
+            command.planFingerprint as string,
+          );
+          const confirmReason = resolveDeclineReason(confirmResponse.reason, confirmResponse.command);
+          if (!confirmResponse.accepted) {
+            pushActionFeedback(
+              'err',
+              `Sim auto-confirm declined · ${confirmReason ?? 'no reason provided'}`,
+              confirmReason,
+            );
+            return;
+          }
+          pushActionFeedback(
+            'ok',
+            `Sim auto-confirm · ${summarizeMutationResponse(confirmResponse)}`,
+            confirmResponse.reason,
+          );
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : 'Sim auto-confirm failed.';
+          pushActionFeedback('err', `Sim auto-confirm failed · ${message}`, message);
+        }
+      }
     } catch (error: unknown) {
-      setSubmitError(error instanceof Error ? error.message : 'Failed to submit intent.');
+      const message = error instanceof Error ? error.message : 'Failed to submit intent.';
+      setSubmitError(message);
+      pushActionFeedback('err', `Submit failed · ${message}`, message);
+    } finally {
+      submitPendingRef.current = false;
+    }
+  };
+
+  const handleConfirmClick = async () => {
+    if (confirmPendingRef.current) {
+      return;
+    }
+    confirmPendingRef.current = true;
+    try {
+      const response = await confirmActiveCommand();
+      if (!response) {
+        pushActionFeedback('warn', 'Confirm skipped · no active command available.');
+        return;
+      }
+      const reason = resolveDeclineReason(response.reason, response.command);
+      if (!response.accepted) {
+        pushActionFeedback('err', `Confirm declined · ${reason ?? 'no reason provided'}`, reason);
+        return;
+      }
+      pushActionFeedback('ok', `Confirm response · ${summarizeMutationResponse(response)}`, response.reason);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to confirm command.';
+      pushActionFeedback('err', `Confirm failed · ${message}`, message);
+    } finally {
+      confirmPendingRef.current = false;
+    }
+  };
+
+  const handleAbortClick = async (reason: string) => {
+    try {
+      const response = await abortActiveCommand(reason);
+      if (!response) {
+        pushActionFeedback('warn', 'Abort skipped · no active command available.');
+        return;
+      }
+      const resolvedReason = resolveDeclineReason(response.reason, response.command);
+      if (!response.accepted) {
+        pushActionFeedback('err', `Abort declined · ${resolvedReason ?? 'no reason provided'}`, resolvedReason);
+        return;
+      }
+      pushActionFeedback('warn', `Abort response · ${summarizeMutationResponse(response)}`, resolvedReason);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to abort command.';
+      pushActionFeedback('err', `Abort failed · ${message}`, message);
     }
   };
 
@@ -554,15 +1022,15 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
     }
   };
 
-  const canAbortTopbar = canAbortCommands && activeCommand !== null;
+  const canAbortTopbar = canAbortCommands && (activeSequence !== null || activeCommand !== null);
 
   return (
     <div className="hmi-shell">
       <div className="hmi-app">
         <header className="topbar">
           <div className="logo">
-            <div className="logo-icon">GP4</div>
-            GP4 <span>HMI</span>
+            <div className="logo-icon">HMI</div>
+            GP4 <span>Yaskawa</span>
           </div>
           <div className="top-divider" />
           <div className="status-pills">
@@ -577,10 +1045,43 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
             <span className="top-time">{clockText}</span>
             <div className="top-divider"></div>
             <button
+              className="servo-btn servo-start"
+              onClick={async () => {
+                try {
+                  const res = await client.startServo();
+                  pushActionFeedback(
+                    res.accepted ? 'ok' : 'err',
+                    `Servo START · ${res.message}`,
+                  );
+                } catch (e: unknown) {
+                  pushActionFeedback('err', `Servo START failed · ${e instanceof Error ? e.message : String(e)}`);
+                }
+              }}
+            >
+              START
+            </button>
+            <button
+              className="servo-btn servo-stop"
+              onClick={async () => {
+                try {
+                  const res = await client.stopServo();
+                  pushActionFeedback(
+                    res.accepted ? 'ok' : 'err',
+                    `Servo HOLD · ${res.message}`,
+                  );
+                } catch (e: unknown) {
+                  pushActionFeedback('err', `Servo HOLD failed · ${e instanceof Error ? e.message : String(e)}`);
+                }
+              }}
+            >
+              HOLD
+            </button>
+            <div className="top-divider"></div>
+            <button
               className="estop-btn"
               disabled={!canAbortTopbar}
               onClick={() => {
-                void abortActiveCommand('Operator requested topbar abort from HMI.');
+                void handleAbortClick('Operator requested topbar abort from HMI.');
               }}
             >
               Abort command
@@ -636,33 +1137,47 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
             </div>
           </section>
 
-          <section className="section">
+          <section className="section command-review-section">
             <div className="section-title">Command Pipeline</div>
-            <div className="pipeline">
-              {pipeline.map((step) => (
-                <div key={step.key} className={`pipe-step ${step.status}`}>
-                  <div className="pipe-num">{step.marker}</div>
-                  <span className="pipe-label">{step.label}</span>
-                </div>
-              ))}
-            </div>
+            {traceSteps.length > 0 ? (
+              <div className="trace-list">
+                {traceSteps.map((step) => (
+                  <div key={step.key} className={`trace-step ${step.status}`}>
+                    <div className="trace-head">
+                      <span className="trace-label">{step.label}</span>
+                      <span className={`trace-state ${step.status}`}>{step.status.toUpperCase()}</span>
+                    </div>
+                    <div className="trace-summary">{step.summary}</div>
+                    {step.details ? (
+                      <details className="trace-json">
+                        <summary>View JSON</summary>
+                        <pre>{prettyJson(step.details)}</pre>
+                      </details>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </section>
 
           <section className="section section-grow">
             <div className="section-title">Quick Commands</div>
             <div className="quick-cmds">
-              {QUICK_COMMANDS.map((command) => (
+              {INTENT_TEMPLATES.map((template) => (
                 <button
-                  key={command}
+                  key={template.id}
                   type="button"
                   className="qcmd"
                   onClick={() => {
-                    setDraft(command);
+                    setDraft(template.intent);
                     setSubmitError(null);
                   }}
                 >
                   <span className="cmd-icon">&gt;</span>
-                  {command}
+                  <span className="qcmd-text">
+                    <span className="qcmd-title">{template.title}</span>
+                    <span className="qcmd-subtitle">{template.subtitle}</span>
+                  </span>
                 </button>
               ))}
             </div>
@@ -673,11 +1188,46 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
           <div className="chat-header">
             <span className="chat-title">LLM Command Interface - Yaskawa GP4</span>
             <span className="chat-sub">
-              transport {state.transportState} · schema {state.schemaVersion} · {readOnlyBridge ? 'read only' : 'command ingress enabled'}
+              transport {state.transportState} · schema {state.schemaVersion} · {readOnlyBridge ? 'read only' : 'command ingress enabled'} · gate {hardwareGateLabel(hardwareGate.unlocked)}
             </span>
           </div>
 
           <div className="chat-messages">
+            <section className={`hardware-gate-panel ${hardwareGate.unlocked ? 'unlocked' : 'locked'}`}>
+              <div className="hardware-gate-header">
+                <div className="hardware-gate-title">Hardware Gate / Cổng phần cứng</div>
+                <span className={`hardware-gate-pill ${hardwareGate.unlocked ? 'unlocked' : 'locked'}`}>
+                  {hardwareGateLabel(hardwareGate.unlocked)}
+                </span>
+              </div>
+              <div className="hardware-gate-line">
+                Flag / Cờ bật phần cứng: <strong>{hardwareGate.flagEnabled ? 'ON' : 'OFF'}</strong>
+              </div>
+              <div className="hardware-gate-line">
+                Evidence / Minh chứng: <code>{hardwareGate.evidencePath}</code>
+              </div>
+              {!hardwareGate.unlocked ? (
+                <>
+                  <div className="hardware-gate-reason">
+                    EN: {primaryHardwareGateReason}
+                  </div>
+                  <div className="hardware-gate-reason vi">
+                    VI: {primaryHardwareGateReasonVi}
+                  </div>
+                </>
+              ) : (
+                <div className="hardware-gate-reason ok">
+                  EN+VI: Hardware gate passed. Hệ thống cho phép command ingress phần cứng.
+                </div>
+              )}
+              {hardwareGate.checklist ? (
+                <details className="hardware-gate-json">
+                  <summary>Checklist JSON / Chi tiết checklist</summary>
+                  <pre>{prettyJson(hardwareGate.checklist)}</pre>
+                </details>
+              ) : null}
+            </section>
+
             <RuntimeStateBanner runtime={state.runtime} />
 
             {state.messages.length === 0 ? (
@@ -695,7 +1245,8 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
             {state.messages.map((message) => {
               const role = toMessageRole(message.origin);
               const needsConfirmation =
-                message.tag === 'NEEDS_CONFIRMATION' && activeCommand?.commandId === message.commandId;
+                message.tag === 'NEEDS_CONFIRMATION' &&
+                (activeCommand?.commandId === message.commandId || activeSequence?.sequenceId === message.commandId);
 
               return (
                 <div key={message.id} className={`msg ${role}`}>
@@ -711,9 +1262,9 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
                       <div className="confirm-btns">
                         <button
                           className="btn-confirm yes"
-                          disabled={!canConfirmCommands || !activeCommand?.planFingerprint}
+                          disabled={!canConfirmCommands || !activeReviewJob?.planFingerprint}
                           onClick={() => {
-                            void confirmActiveCommand();
+                            void handleConfirmClick();
                           }}
                         >
                           Confirm and execute
@@ -722,7 +1273,7 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
                           className="btn-confirm no"
                           disabled={!canAbortCommands}
                           onClick={() => {
-                            void abortActiveCommand('Operator aborted from HMI confirmation panel.');
+                            void handleAbortClick('Operator aborted from HMI confirmation panel.');
                           }}
                         >
                           Abort
@@ -746,7 +1297,9 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
                 onKeyDown={handleInputKeyDown}
                 placeholder={
                   readOnlyBridge
-                    ? 'Command ingress is read only until simulation mode and telemetry freshness gates are satisfied.'
+                    ? state.mode === 'hardware' && !hardwareGate.unlocked
+                      ? `Hardware gate locked: ${primaryHardwareGateReason} | VI: ${primaryHardwareGateReasonVi}`
+                      : 'Command ingress is read only until mode + telemetry + preflight gates are satisfied.'
                     : 'Type intent in English or Vietnamese, then press Enter or Submit.'
                 }
               />
@@ -761,18 +1314,23 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
               </button>
             </div>
             {submitError ? <div className="input-error">{submitError}</div> : null}
+            {actionFeedback ? (
+              <div className={`input-feedback ${actionFeedback.level}`}>
+                {formatTimestamp(actionFeedback.timestamp)} · {actionFeedback.message}
+              </div>
+            ) : null}
             <div className="hint-row">
-              {QUICK_COMMANDS.map((hint) => (
+              {INTENT_TEMPLATES.map((template) => (
                 <button
-                  key={`hint-${hint}`}
+                  key={`hint-${template.id}`}
                   type="button"
                   className="hint"
                   onClick={() => {
-                    setDraft(hint);
+                    setDraft(template.intent);
                     setSubmitError(null);
                   }}
                 >
-                  {hint}
+                  {template.intent}
                 </button>
               ))}
             </div>
@@ -821,37 +1379,6 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
           </section>
 
           <section className="section">
-            <div className="section-title">Command Review</div>
-            <div className="summary-chip">{activeCommand?.summaryLabel ?? 'No active command review'}</div>
-            <div
-              className={`result-chip ${
-                activeCommand?.lifecycleState === 'SUCCEEDED'
-                  ? 'success'
-                  : activeCommand?.lifecycleState === 'FAILED' ||
-                      activeCommand?.lifecycleState === 'REJECTED' ||
-                      activeCommand?.lifecycleState === 'CANCELLED' ||
-                      activeCommand?.lifecycleState === 'EXPIRED'
-                    ? 'fail'
-                    : 'pending'
-              }`}
-            >
-              {activeCommand?.lifecycleState ? humanizeLabel(activeCommand.lifecycleState) : 'Idle'}
-            </div>
-            <div className="lease-caption">
-              {activeCommand?.planFingerprint
-                ? `Plan fingerprint: ${activeCommand.planFingerprint.slice(0, 12)}...`
-                : 'No validated plan fingerprint yet.'}
-            </div>
-            {confirmationReasons.length > 0 ? (
-              <div className="lease-caption">Confirm reasons: {confirmationReasons.join(' ')}</div>
-            ) : null}
-            {blockingReasons.length > 0 ? (
-              <div className="lease-caption">Blocking reasons: {blockingReasons.join(' ')}</div>
-            ) : null}
-            {executionSummary ? <div className="lease-caption">{executionSummary}</div> : null}
-          </section>
-
-          <section className="section">
             <div className="section-title">Control Lease</div>
             <div className="lease-actions">
               {canReleaseLease ? (
@@ -866,9 +1393,14 @@ export function GP4HMI({ client, sessionId, operatorId }: GP4HMIProps) {
             </div>
             <div className="lease-caption">
               {readOnlyBridge
-                ? 'Telemetry remains live but command ingress stays read only until simulation mode is active and hardware freshness is verified.'
+                ? state.mode === 'hardware'
+                  ? `Hardware gate locked: ${primaryHardwareGateReason}`
+                  : 'Telemetry is live, but command ingress stays read-only until command-capable mode and freshness gates are satisfied.'
                 : state.lease.statusText}
             </div>
+            {readOnlyBridge && state.mode === 'hardware' ? (
+              <div className="lease-caption">VI: {primaryHardwareGateReasonVi}</div>
+            ) : null}
             <div className="lease-caption">
               Execution allowed: {state.capabilities.executionAllowed ? 'yes' : 'no'} · Replay: {state.capabilities.replayAvailable ? 'yes' : 'no'}
             </div>

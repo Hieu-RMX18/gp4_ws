@@ -76,6 +76,14 @@ def robot_mode_name(value: int) -> str:
     return str(value)
 
 
+def numeric_ros_value(value: Any) -> int:
+    if isinstance(value, (bytes, bytearray)):
+        if len(value) != 1:
+            raise ValueError(f"expected single-byte ROS value, got {len(value)} bytes")
+        return value[0]
+    return int(value)
+
+
 @dataclass(slots=True)
 class SourceMetric:
     name: str
@@ -284,12 +292,13 @@ class HardwareTelemetryValidationNode(Node):
 
     def _on_supervisor_alert(self, msg: DiagnosticStatus) -> None:
         self._touch_source("supervisor_alerts")
+        level = numeric_ros_value(msg.level)
         level_name = {
             DiagnosticStatus.OK: "OK",
             DiagnosticStatus.WARN: "WARN",
             DiagnosticStatus.ERROR: "ERROR",
             DiagnosticStatus.STALE: "STALE",
-        }.get(int(msg.level), str(int(msg.level)))
+        }.get(level, str(level))
         self._alert_level_counts[level_name] += 1
         values = {str(item.key): str(item.value) for item in getattr(msg, "values", [])}
         if values.get("reason"):
@@ -298,12 +307,12 @@ class HardwareTelemetryValidationNode(Node):
 
     def _on_robot_status(self, msg: RobotStatus) -> None:
         self._touch_source("robot_status")
-        self._robot_mode_counts[robot_mode_name(int(msg.mode.val))] += 1
-        self._robot_estop_counts[tri_state_name(int(msg.e_stopped.val))] += 1
-        self._robot_drives_counts[tri_state_name(int(msg.drives_powered.val))] += 1
-        self._robot_motion_possible_counts[tri_state_name(int(msg.motion_possible.val))] += 1
-        self._robot_in_motion_counts[tri_state_name(int(msg.in_motion.val))] += 1
-        self._robot_in_error_counts[tri_state_name(int(msg.in_error.val))] += 1
+        self._robot_mode_counts[robot_mode_name(numeric_ros_value(msg.mode.val))] += 1
+        self._robot_estop_counts[tri_state_name(numeric_ros_value(msg.e_stopped.val))] += 1
+        self._robot_drives_counts[tri_state_name(numeric_ros_value(msg.drives_powered.val))] += 1
+        self._robot_motion_possible_counts[tri_state_name(numeric_ros_value(msg.motion_possible.val))] += 1
+        self._robot_in_motion_counts[tri_state_name(numeric_ros_value(msg.in_motion.val))] += 1
+        self._robot_in_error_counts[tri_state_name(numeric_ros_value(msg.in_error.val))] += 1
         if msg.error_codes:
             self._robot_error_code_samples.append([int(code) for code in msg.error_codes])
 

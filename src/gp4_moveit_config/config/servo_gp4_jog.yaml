@@ -1,0 +1,118 @@
+/**:
+  ros__parameters:
+    # MoveIt Servo configuration for GP4 experimental joint jog pendant.
+    #
+    # This config is for JOINT JOGGING ONLY in the first hardware pass.
+    # Cartesian servo is not enabled.
+    #
+    # Based on: /opt/ros/humble/share/moveit_servo/config/panda_simulated_config.yaml
+    # Adjusted for: Yaskawa GP4 / gp4_arm
+    #
+    # IMPORTANT: This is an EXPERIMENTAL config. Verify all parameters on hardware
+    # before treating as production-ready.
+
+    ###############################################
+    # General
+    ###############################################
+    use_gazebo: false
+
+    ## Joint jogging only — no Cartesian twist
+    command_in_type: "unitless"  # Scales the displacement by scale.joint
+
+    scale:
+      # Conservative joint velocity limit for experimental jog.
+      # This is applied as a multiplier to joint.max_velocity from joint_limits.yaml.
+      # Effective max ~= 0.08 * joint.max_velocity rad/s.
+      joint: 0.08
+
+    publish_period: 0.05  # 20 Hz publish rate (50ms)
+
+    low_latency_mode: false
+
+    ###############################################
+    # Output: JointTrajectory
+    ###############################################
+    # The bridge (servo_bridge_node) subscribes to this topic to forward
+    # points to MotoROS2 point-queue mode.
+    # NOTE: The actual topic name will include the Servo node's namespace.
+    # Default param: ~/command_out → /servo_node/command_out
+    command_out_type: trajectory_msgs/JointTrajectory
+
+    # Only positions are needed for point-queue mode.
+    publish_joint_positions: true
+    publish_joint_velocities: false
+    publish_joint_accelerations: false
+
+    ###############################################
+    # Smoothing
+    ###############################################
+    # Use the butterworth filter for smoothing.
+    # Remove or change this if the plugin is unavailable.
+    smoothing_filter_plugin_name: "online_signal_smoothing::ButterworthFilterPlugin"
+
+    ###############################################
+    # MoveIt Integration
+    ###############################################
+    is_primary_planning_scene_monitor: false  # move_group owns the scene; don't create a second one
+
+    ## Reference the actual planning group from motoman_gp4.srdf
+    move_group_name: gp4_arm
+
+    ## These frames come from motoman_gp4.urdf + SRDF
+    planning_frame: base_link
+    ee_frame_name: tool0
+    robot_link_command_frame: base_link  # Commands in base frame
+
+    ###############################################
+    # Stopping
+    ###############################################
+    # Servo internal watchdog: if no command received for this duration, halt.
+    # This is the LAST line of defense. The jog_input_node has its own 200ms watchdog.
+    incoming_command_timeout: 0.1  # seconds
+
+    # Number of halt messages to publish after incoming_command_timeout.
+    # Important because ROS may drop some messages — we need the robot to halt reliably.
+    num_outgoing_halt_msgs_to_publish: 10  # increased from default for safety
+
+    ###############################################
+    # Singularity and Joint Limits
+    ###############################################
+    # These values are reasonable for a 6-axis industrial arm.
+    # Tune based on actual hardware behavior.
+    lower_singularity_threshold: 17.0  # Start decelerating near singularity
+    hard_stop_singularity_threshold: 30.0  # Hard stop at singularity
+    joint_limit_margin: 0.1  # Buffer to joint limits [radians]
+
+    # Multiplier for leaving singularity — when resuming after singularity.
+    leaving_singularity_threshold_multiplier: 2.0
+
+    ###############################################
+    # Topic Names
+    ###############################################
+    # Input topic: jog_input_node publishes JointJog here.
+    # This is relative to the Servo node's namespace.
+    # Default: /servo_node/delta_joint_cmds
+    joint_command_in_topic: ~/delta_joint_cmds
+
+    # Joint states source: use the MotoROS2-publisher joint states.
+    joint_topic: /yaskawa/joint_states
+
+    # Status topic: bridge subscribes to check Servo health.
+    # Default: /servo_node/status
+    status_topic: ~/status
+
+    # Output topic: servo_bridge_node subscribes here.
+    # This is the JointTrajectory that gets forwarded to queue_traj_point.
+    # The namespace prefix depends on how the Servo node is launched.
+    # Default: /servo_node/command_out
+    command_out_topic: ~/command_out
+
+    ###############################################
+    # Collision Checking
+    ###############################################
+    check_collisions: true
+    collision_check_rate: 10.0  # Hz
+
+    # Self-collision proximity thresholds
+    self_collision_proximity_threshold: 0.01  # meters
+    scene_collision_proximity_threshold: 0.02  # meters

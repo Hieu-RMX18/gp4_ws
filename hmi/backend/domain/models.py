@@ -39,6 +39,11 @@ class CommandRiskLevel(str, Enum):
     CRITICAL = "critical"
 
 
+class CommandKind(str, Enum):
+    COMMAND = "command"
+    SEQUENCE = "sequence"
+
+
 class SystemRuntimeState(str, Enum):
     NORMAL = "NORMAL"
     FAULT = "FAULT"
@@ -69,6 +74,52 @@ class BridgeConnection:
 
 
 @dataclass(slots=True)
+class HardwareGateChecklistSnapshot:
+    timing_jitter: bool = False
+    disconnect_reconnect: bool = False
+    robot_status_semantics: bool = False
+    joint_source_precedence: bool = False
+    audit_visibility: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "timingJitter": self.timing_jitter,
+            "disconnectReconnect": self.disconnect_reconnect,
+            "robotStatusSemantics": self.robot_status_semantics,
+            "jointSourcePrecedence": self.joint_source_precedence,
+            "auditVisibility": self.audit_visibility,
+        }
+
+
+@dataclass(slots=True)
+class HardwareGateStatusSnapshot:
+    unlocked: bool = False
+    reasons: list[str] = field(default_factory=list)
+    flag_enabled: bool = False
+    evidence_path: str = "hmi/data/hardware_gate.json"
+    approved_by: str | None = None
+    approved_at: str | None = None
+    report_path: str | None = None
+    report_sha256: str | None = None
+    report_sha256_match: bool = False
+    checklist: HardwareGateChecklistSnapshot | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "unlocked": self.unlocked,
+            "reasons": list(self.reasons),
+            "flagEnabled": self.flag_enabled,
+            "evidencePath": self.evidence_path,
+            "approvedBy": self.approved_by,
+            "approvedAt": self.approved_at,
+            "reportPath": self.report_path,
+            "reportSha256": self.report_sha256,
+            "reportSha256Match": self.report_sha256_match,
+            "checklist": self.checklist.to_dict() if self.checklist else None,
+        }
+
+
+@dataclass(slots=True)
 class BridgeCapabilities:
     read_only: bool = True
     can_acquire_lease: bool = False
@@ -81,6 +132,7 @@ class BridgeCapabilities:
     execution_allowed: bool = False
     replay_available: bool = False
     sim_only: bool = False
+    hardware_gate: HardwareGateStatusSnapshot = field(default_factory=HardwareGateStatusSnapshot)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,6 +147,7 @@ class BridgeCapabilities:
             "executionAllowed": self.execution_allowed,
             "replayAvailable": self.replay_available,
             "simOnly": self.sim_only,
+            "hardwareGate": self.hardware_gate.to_dict(),
         }
 
 
@@ -223,6 +276,7 @@ class CommandRecord:
     summary_label: str
     mode: RuntimeMode
     created_at: datetime
+    command_kind: CommandKind = CommandKind.COMMAND
     intent_source: str = "text"
     correlation_id: str | None = None
     planner_used: str | None = None
@@ -240,6 +294,13 @@ class CommandRecord:
     execute_at: datetime | None = None
     execution_result: dict[str, Any] | None = None
     final_state: CommandLifecycleState | None = None
+    parent_sequence_id: str | None = None
+    sequence_step_index: int | None = None
+    sequence_step_count: int | None = None
+    current_step_index: int | None = None
+    sequence_diagnostics: list[str] = field(default_factory=list)
+    child_command_ids: list[str] = field(default_factory=list)
+    manual_recovery_required: bool = False
 
 
 @dataclass(slots=True)

@@ -11,6 +11,7 @@ properties:
       - HOME
       - PTP
       - LIN
+      - CIRC
       - CARTESIAN_PATH
       - MOVE_REL
       - GET_POSE
@@ -134,17 +135,18 @@ properties:
       type: number
   velocity_scale:
     type: number
-    minimum: 0.05
+    minimum: 0.01
     maximum: 0.06
   acceleration_scale:
     type: number
-    minimum: 0.05
+    minimum: 0.01
     maximum: 0.06
   planner_id:
     type: string
     enum:
       - PILZ_LIN
       - PILZ_PTP
+      - PILZ_CIRC
       - OMPL_RRTConnect
   require_approval:
     type: boolean
@@ -162,6 +164,17 @@ properties:
     type: number
   delta_z:
     type: number
+  linear_unit:
+    type: string
+    enum:
+      - m
+      - cm
+      - mm
+  angular_unit:
+    type: string
+    enum:
+      - rad
+      - deg
   reference_frame:
     type: string
     enum:
@@ -192,6 +205,18 @@ allOf:
     then:
       required:
         - target_pose
+  - if:
+      properties:
+        primitive_type:
+          const: CIRC
+    then:
+      required:
+        - target_pose
+        - waypoints
+      properties:
+        waypoints:
+          minItems: 1
+          maxItems: 1
   - if:
       properties:
         primitive_type:

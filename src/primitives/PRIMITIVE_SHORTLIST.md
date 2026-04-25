@@ -2,7 +2,7 @@
 
 > **Version:** 1.2 (Agentic Stack reconciled)
 > **Date:** 2026-04-06
-> **Owner package:** `primitives`
+> **Owner package:** `primitives` (contract shortlist) + `motion_core` (runtime planning/dispatch)
 > **Last audited by:** Antigravity — Sprint: New Primitives Integration
 
 This is the **single source of truth** for which primitives are public,
@@ -26,7 +26,7 @@ optional, internal-only, or deferred in the GP4 thesis/demo system.
 | 10 | `MOVE_JOINTS`          | **PUBLIC**        | ❌¹  | ❌¹  | ❌¹        | ✅     | ✅          | ✅     | ✅          | ✅   |
 | 11 | `IO_SET`               | **PUBLIC**        | ❌¹  | ❌¹  | ❌¹        | ✅     | ✅          | ✅     | ✅          | ✅   |
 | 12 | `ALARM_RESET`          | **PUBLIC**        | ❌¹  | ❌¹  | ❌¹        | ✅     | ✅          | ✅     | ✅          | ✅   |
-| 13 | `CIRC`                 | **INTERNAL**      | ✅   | ✅   | ✅         | ❌     | ❌          | ❌     | ❌          | ✅   |
+| 13 | `CIRC`                 | **PUBLIC**        | ✅   | ✅   | ✅         | ✅     | ✅          | ✅     | ✅          | ✅   |
 | 14 | `approach`             | **INTERNAL**      | ✅   | ✅   | ✅         | ✅²    | ❌          | ❌     | ❌          | ✅   |
 | 15 | `retract`              | **INTERNAL**      | ✅   | ✅   | ✅         | ✅²    | ❌          | ❌     | ❌          | ✅   |
 | 16 | `blended_sequence`     | **INTERNAL**      | ✅   | ✅   | ✅         | ❌     | ❌          | ❌     | ❌          | ✅   |
@@ -44,15 +44,22 @@ optional, internal-only, or deferred in the GP4 thesis/demo system.
 
 ### What is FULLY wired today (LLM → safety → motion_core → hw_adapter):
 
-All 12 **PUBLIC** primitives listed above are fully integrated into the end-to-end stack and verified via regression tests.
+All 13 **PUBLIC** primitives listed above are fully integrated into the end-to-end stack and verified via regression tests.
 
 | Primitive Group | Primitives | Planning Pipeline | Execution |
 |-----------------|------------|-------------------|-----------|
 | **Motion**      | `HOME`, `PTP`, `LIN`, `MOVE_REL` | Pilz Industrial Planner | MotoROS2 |
+| **Arc Motion**  | `CIRC` | Pilz CIRC | MotoROS2 |
 | **Joint Motion**| `MOVE_JOINT`, `MOVE_JOINTS` | Delegated to PTP Payload | MotoROS2 |
 | **Logical**     | `WAIT`, `STOP`, `SET_SPEED` | In-place execution | n/a |
 | **Maintenance** | `ALARM_RESET`, `IO_SET` | Delegated to HW Adapter | MotoROS2 (via Service) |
 | **Query**       | `GET_POSE` | Direct State Query | n/a |
+
+### Known ownership debt (explicitly tracked)
+
+- Primitive contract truth is centralized here, but runtime planning logic is still split between
+  `primitives` and `motion_core`.
+- Keep behavior-compatible fixes explicit and avoid introducing duplicate primitive routing layers.
 
 ---
 

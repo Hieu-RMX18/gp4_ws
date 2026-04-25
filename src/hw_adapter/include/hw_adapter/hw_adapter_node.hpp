@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
+#include <vector>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
@@ -19,10 +21,11 @@
 #include <interfaces/srv/io_set.hpp>
 
 #include "hw_adapter/backend_capabilities.hpp"
+#include "hw_adapter/joint_state_monitor.hpp"
 #include "hw_adapter/motoros2_session_manager.hpp"
 #include "hw_adapter/robot_status_monitor.hpp"
-#include "hw_adapter/tool_state_monitor.hpp"
 #include "hw_adapter/recovery_state_machine.hpp"
+#include "hw_adapter/tool_state_monitor.hpp"
 #include "hw_adapter/trajectory_executor.hpp"
 
 namespace hw_adapter
@@ -46,6 +49,12 @@ struct HwAdapterExecutionReport
   bool fatal_error = false;
   bool stop_motion_attempted = false;
   bool stop_motion_succeeded = false;
+  std::string failure_stage = "none";
+  int32_t controller_error_code = 0;
+  std::string controller_error_name = "SUCCESSFUL";
+  std::string controller_error_string;
+  double max_start_state_abs_delta = 0.0;
+  double start_state_l2_delta = 0.0;
   std::string message = "trajectory not executed";
 };
 
@@ -58,6 +67,7 @@ public:
   using IoSet = interfaces::srv::IoSet;
 
   explicit HwAdapterNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+  ~HwAdapterNode() override;
 
   const BackendCapabilities & backend_capabilities() const;
   const RobotStatusMonitor & robot_status_monitor() const;
@@ -85,11 +95,13 @@ private:
     const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
   void execute_dispatch(
     const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
+  void cleanup_dispatch_workers();
+  void wait_for_dispatch_workers();
   void publish_sim_readiness();
   HwAdapterExecutionReport execute_trajectory_internal(
-    const trajectory_msgs::msg::JointTrajectory & trajectory,
-    std::chrono::milliseconds timeout,
+    const TrajectoryExecutionRequest & request,
     bool dispatch_reservation_expected);
+  ExecutionRuntimeSnapshot build_execution_runtime_snapshot() const;
 
   HwAdapterOrchestrationSnapshot build_snapshot_locked() const;
   bool should_stop_motion_on_failure(const TrajectoryExecutionResult & result) const;
@@ -106,6 +118,7 @@ private:
     std::shared_ptr<IoSet::Response> response);
 
   BackendCapabilities backend_capabilities_;
+  std::unique_ptr<JointStateMonitor> joint_state_monitor_;
   std::unique_ptr<RobotStatusMonitor> robot_status_monitor_;
   std::unique_ptr<Motoros2SessionManager> session_manager_;
   std::unique_ptr<TrajectoryExecutor> trajectory_executor_;
@@ -129,5 +142,8 @@ private:
   std::size_t trajectory_safe_budget_points_ = 180U;
   std::size_t trajectory_hard_limit_points_ = 200U;
   std::string last_status_message_ = "hw_adapter orchestrator initialized";
+  std::atomic<bool> shutdown_requested_{false};
+  std::mutex dispatch_worker_mutex_;
+  std::vector<std::future<void>> dispatch_worker_futures_;
 };
 }  // namespace hw_adapter

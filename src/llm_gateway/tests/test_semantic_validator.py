@@ -1,6 +1,24 @@
 import copy
 
 import pytest
+import yaml
+from pathlib import Path
+
+from llm_gateway.semantic_validator import SemanticValidator
+
+
+def _load_workspace_bounds() -> dict:
+    safety_yaml = Path(__file__).resolve().parents[2] / "safety" / "config" / "safety_rules.yaml"
+    safety_rules = yaml.safe_load(safety_yaml.read_text()) or {}
+    return safety_rules["workspace_bounds"]
+
+
+def test_semantic_validator_fallback_bounds_match_safety_rules():
+    bounds = _load_workspace_bounds()
+    fallback = SemanticValidator._DEFAULT_BOUNDS  # pylint: disable=protected-access
+    assert fallback["x"] == pytest.approx((bounds["x_min"], bounds["x_max"]))
+    assert fallback["y"] == pytest.approx((bounds["y_min"], bounds["y_max"]))
+    assert fallback["z"] == pytest.approx((bounds["z_min"], bounds["z_max"]))
 
 
 def test_semantic_validator_accepts_in_bounds_lin(normalizer, semantic_validator, canonical_command):
@@ -13,8 +31,8 @@ def test_semantic_validator_rejects_out_of_bounds_pose(
     normalizer, semantic_validator, canonical_command
 ):
     invalid = copy.deepcopy(canonical_command)
-    # Must exceed safety_rules.yaml x_max (0.38), not hardcoded _DEFAULT_BOUNDS (0.6)
-    invalid["target_pose"]["position"]["x"] = 0.39
+    x_upper = float(semantic_validator._workspace_bounds["x"][1])  # pylint: disable=protected-access
+    invalid["target_pose"]["position"]["x"] = x_upper + 0.01
     normalized = normalizer.normalize(invalid)
 
     with pytest.raises(ValueError, match="target_pose.position.x"):
@@ -80,11 +98,12 @@ def test_semantic_validator_rejects_move_rel_zero_delta(normalizer, semantic_val
 
 
 def test_semantic_validator_rejects_move_rel_oversized_delta(normalizer, semantic_validator):
-    """MOVE_REL with delta norm > 0.03m is rejected."""
+    """MOVE_REL with delta norm > 0.05 m is rejected."""
+    # norm = sqrt(0.04^2 + 0.04^2) ≈ 0.0566 > 0.05
     cmd = {
         "primitive_type": "MOVE_REL",
-        "delta_x": 0.03,
-        "delta_y": 0.02,
+        "delta_x": 0.04,
+        "delta_y": 0.04,
         "delta_z": 0.0,
         "velocity_scale": 0.06,
     }
@@ -152,14 +171,14 @@ def test_set_speed_valid_at_015(semantic_validator):
 
 def test_set_speed_rejected_above_030(semantic_validator):
     """SET_SPEED with velocity_scale above 0.06 is rejected."""
-    cmd = {"primitive_type": "SET_SPEED", "velocity_scale": 0.08}
+    cmd = {"primitive_type": "SET_SPEED", "velocity_scale": 0.07}
     with pytest.raises(ValueError, match="SET_SPEED.*velocity_scale"):
         semantic_validator.validate(cmd)
 
 
 def test_set_speed_rejected_below_min(semantic_validator):
-    """SET_SPEED with velocity_scale below 0.05 is rejected."""
-    cmd = {"primitive_type": "SET_SPEED", "velocity_scale": 0.01}
+    """SET_SPEED with velocity_scale below 0.01 is rejected."""
+    cmd = {"primitive_type": "SET_SPEED", "velocity_scale": 0.0}
     with pytest.raises(ValueError, match="SET_SPEED.*velocity_scale"):
         semantic_validator.validate(cmd)
 
@@ -303,6 +322,61 @@ def test_move_joints_reject_missing_joint_target(semantic_validator):
     """MOVE_JOINTS without joint_target is rejected."""
     cmd = {"primitive_type": "MOVE_JOINTS"}
     with pytest.raises(ValueError, match="MOVE_JOINTS requires joint_target"):
+        semantic_validator.validate(cmd)
+
+
+# ── CIRC tests ──
+
+
+def test_semantic_validator_accepts_valid_circ(normalizer, semantic_validator):
+    cmd = {
+        "primitive_type": "CIRC",
+        "target_pose": {
+            "position": {"x": 0.30, "y": 0.00, "z": 0.40},
+            "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
+        },
+        "waypoints": [
+            {
+                "position": {"x": 0.32, "y": 0.05, "z": 0.42},
+                "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
+            }
+        ],
+        "velocity_scale": 0.06,
+    }
+    normalized = normalizer.normalize(cmd)
+    assert semantic_validator.validate(normalized) is True
+
+
+def test_semantic_validator_rejects_circ_auxiliary_out_of_workspace(
+    normalizer, semantic_validator
+):
+    cmd = {
+        "primitive_type": "CIRC",
+        "target_pose": {
+            "position": {"x": 0.30, "y": 0.00, "z": 0.40},
+            "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
+        },
+        "waypoints": [
+            # x beyond workspace x_max (currently 0.45 from safety_rules)
+            {
+                "position": {"x": 0.90, "y": 0.00, "z": 0.40},
+                "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
+            }
+        ],
+        "velocity_scale": 0.06,
+    }
+    normalized = normalizer.normalize(cmd)
+    with pytest.raises(ValueError, match="CIRC auxiliary waypoint"):
+        semantic_validator.validate(normalized)
+
+
+def test_semantic_validator_rejects_circ_missing_target_pose_msg(semantic_validator):
+    # Normalizer would fail first; simulate a command that skipped normalization.
+    cmd = {
+        "primitive_type": "CIRC",
+        "waypoints_msg": [object()],  # presence only; target_pose_msg absent
+    }
+    with pytest.raises(ValueError, match="CIRC requires target_pose_msg"):
         semantic_validator.validate(cmd)
 
 

@@ -2,40 +2,42 @@
 
 from __future__ import annotations
 
+import logging
 import math
-import os
 from typing import Any, Dict
-import yaml
-from ament_index_python.packages import get_package_share_directory
+
+from safety.policy_loader import _FAILSAFE_MOTION_LIMITS, load_safety_rules
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class SemanticValidator:
     """Enforce phase-specific primitive, workspace, and scaling constraints."""
 
     _ALLOWED_PRIMITIVES = {
-        "HOME", "PTP", "LIN", "MOVE_REL", "GET_POSE", "CARTESIAN_PATH",
+        "HOME", "PTP", "LIN", "CIRC", "MOVE_REL", "GET_POSE", "CARTESIAN_PATH",
         "SET_SPEED", "WAIT", "STOP", "MOVE_JOINT", "MOVE_JOINTS",
         "IO_SET", "ALARM_RESET",
     }
-    _MIN_VELOCITY_SCALE = 0.05
-    _MAX_VELOCITY_SCALE = 0.06
-
-    # MOVE_REL: max single-command translation norm (meters)
-    _MAX_MOVE_REL_DELTA = 0.03
+    _MIN_VELOCITY_SCALE = 0.01
+    # Fail-safe only — active policy loaded from safety_rules.yaml at construction.
+    _MAX_VELOCITY_SCALE = _FAILSAFE_MOTION_LIMITS["max_velocity_scale"]
+    _MAX_MOVE_REL_DELTA = _FAILSAFE_MOTION_LIMITS["max_move_rel_translation"]
 
     # GP4 has 6 joints (0..5)
     _NUM_JOINTS = 6
 
     # Fallback bounds — overridden by safety_rules.yaml at construction
     _DEFAULT_BOUNDS = {
-        "x": (-0.25, 0.38),
-        "y": (-0.25, 0.34),
-        "z": (0.10, 0.50),
+        "x": (-0.45, 0.45),
+        "y": (-0.16, 0.52),
+        "z": (0.23, 0.56),
     }
 
     def __init__(self, safety_rules: dict | None = None):
         if safety_rules is None:
-            safety_rules = self._load_safety_rules()
+            safety_rules = load_safety_rules()
         motion_limits = safety_rules.get("motion_limits", {})
         legacy_limits = safety_rules.get("joint_limits_override", {})
         self._max_velocity_scale = float(
@@ -66,15 +68,7 @@ class SemanticValidator:
             ),
         }
 
-    @staticmethod
-    def _load_safety_rules() -> dict:
-        try:
-            pkg_share = get_package_share_directory('safety')
-            yaml_path = os.path.join(pkg_share, 'config', 'safety_rules.yaml')
-            with open(yaml_path, 'r') as f:
-                return yaml.safe_load(f) or {}
-        except Exception:
-            return {}
+    # _load_safety_rules() removed — use safety.policy_loader.load_safety_rules()
 
     def validate(self, command: Dict[str, Any]) -> bool:
         if not isinstance(command, dict):
@@ -130,6 +124,22 @@ class SemanticValidator:
                 raise ValueError(
                     f"IO_SET: io_value must be 0 or 1, got {io_val}."
                 )
+            return True
+
+        # ── CIRC: circular motion via Pilz — target_pose + 1 auxiliary waypoint ──
+        if primitive_type == "CIRC":
+            waypoints = command.get("waypoints_msg")
+            if not waypoints:
+                raise ValueError("CIRC requires non-empty waypoints (exactly 1 auxiliary pose).")
+            if len(waypoints) != 1:
+                raise ValueError(f"CIRC requires exactly 1 auxiliary waypoint, got {len(waypoints)}.")
+            if "target_pose_msg" not in command:
+                raise ValueError("CIRC requires target_pose_msg (final pose).")
+            self._validate_pose(command["target_pose_msg"])
+            try:
+                self._validate_pose(waypoints[0])
+            except ValueError as e:
+                raise ValueError(f"CIRC auxiliary waypoint[0]: {e}") from e
             return True
 
         # ── MOVE_JOINT: validate joint_index and joint_angle ──

@@ -10,6 +10,8 @@
 !motoros2_config.yaml
 !hmi/
 !hmi/**
+!docs/
+!docs/**
 
 # 4. (Tùy chọn) Chặn các folder rác bên trong src nếu có
 # Ví dụ: chặn các folder dependency bạn đã liệt kê trong ảnh 

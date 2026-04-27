@@ -102,6 +102,17 @@ Forbidden zones (pre-planning, 30 mm inflation):
 - `right_wall_guard` — station side wall at X = −0.482 m
 - `floor_clearance_guard` — table/floor clearance Z < 0.20 m
 
+### Hardware Validation Status
+
+As of 2026-04-25, hardware telemetry and motion commissioning are
+operator-confirmed OK except IO. Bundle
+`/tmp/gp4_hw_validation_full_20260425_152850` proved gateway/readiness/supervisor
+alerts, `/yaskawa/joint_states`, command interfaces, MotoROS2 FJT action, and
+the HMI read-only gate. Operator follow-up confirmed `robot_status`,
+disconnect/reconnect, active E-stop, active fault, MANUAL/AUTO, real trajectory
+execution, alarm reset, and full test status OK. `IO_SET` remains deferred and
+must not be treated as hardware-validated.
+
 ---
 
 ## Supported Primitives
@@ -128,7 +139,7 @@ Forbidden zones (pre-planning, 30 mm inflation):
 | `STOP`         | Immediate halt; cancels current goals. |
 | `SET_SPEED`    | Apply dynamic velocity scalar to subsequent motions. |
 | `GET_POSE`     | Query current Cartesian XYZ/RPY and joint positions. |
-| `IO_SET`       | Address PLC logical I/O blocks via MotoROS2. |
+| `IO_SET`       | Deferred for hardware; do not treat MotoROS2 IO as validated yet. |
 | `ALARM_RESET`  | Submit fault reset to active MotoROS2 driver. |
 
 ### Internal (not LLM-callable)

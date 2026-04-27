@@ -89,6 +89,18 @@ TEST_F(JointStateMonitorTest, invalid_before_first_message)
   EXPECT_NE(snapshot.status_message.find("unknown"), std::string::npos);
 }
 
+TEST_F(JointStateMonitorTest, subscribes_with_default_reliable_qos)
+{
+  const std::string topic = "/test_hw_adapter/joint_state_qos";
+  auto monitor_node = std::make_shared<rclcpp::Node>("joint_state_monitor_qos_test");
+  hw_adapter::JointStateMonitor monitor(*monitor_node, canonical_joint_names(), topic, 200ms);
+
+  const auto topic_info = monitor_node->get_subscriptions_info_by_topic(topic);
+  ASSERT_EQ(topic_info.size(), 1U);
+  EXPECT_EQ(topic_info.front().qos_profile().reliability(), rclcpp::ReliabilityPolicy::Reliable);
+  EXPECT_EQ(topic_info.front().qos_profile().durability(), rclcpp::DurabilityPolicy::Volatile);
+}
+
 TEST_F(JointStateMonitorTest, reorders_joint_positions_to_canonical_layout)
 {
   const std::string topic = "/test_hw_adapter/joint_state_reordered";

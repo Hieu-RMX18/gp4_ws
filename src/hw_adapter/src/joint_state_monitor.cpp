@@ -27,7 +27,7 @@ JointStateMonitor::JointStateMonitor(
 
   joint_state_sub_ = node.create_subscription<sensor_msgs::msg::JointState>(
     std::move(topic_name),
-    rclcpp::SensorDataQoS(),
+    rclcpp::QoS(10),
     std::bind(&JointStateMonitor::joint_state_callback, this, std::placeholders::_1));
 }
 

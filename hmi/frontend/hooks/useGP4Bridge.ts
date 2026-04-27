@@ -6,6 +6,7 @@ import type {
   GP4BridgeClient,
   HmiStateSnapshot,
   HmiStreamEvent,
+  JogBridgeStatusSnapshot,
   JointPosition,
   LeaseMutationResponse,
   ReplayListItem,
@@ -180,9 +181,21 @@ function applyEvent(snapshot: HmiStateSnapshot, event: HmiStreamEvent): HmiState
   }
 }
 
+export const DEFAULT_JOG_STATUS: JogBridgeStatusSnapshot = {
+  state: 'IDLE',
+  pointsQueued: 0,
+  effectiveHz: 0,
+  robotReady: false,
+  servoActive: false,
+  bridgeActive: false,
+  lastError: '',
+  rejectionReason: '',
+};
+
 export interface UseGp4BridgeResult {
   state: HmiStateSnapshot;
   transportState: TransportState;
+  jogBridgeStatus: JogBridgeStatusSnapshot;
   isController: boolean;
   blockingRuntime: boolean;
   submitCommand: (rawText: string) => Promise<CommandMutationResponse>;
@@ -201,12 +214,17 @@ export function useGP4Bridge(
 ): UseGp4BridgeResult {
   const [state, setState] = useState<HmiStateSnapshot>(createDisconnectedSnapshot);
   const [transportState, setTransportState] = useState<TransportState>('disconnected');
+  const [jogBridgeStatus, setJogBridgeStatus] = useState<JogBridgeStatusSnapshot>(DEFAULT_JOG_STATUS);
 
   useEffect(() => {
     const disconnect = client.connect({
       sessionId,
       operatorId,
       onEvent: (event) => {
+        if (event.type === 'jog_bridge_status') {
+          setJogBridgeStatus(event.jogBridgeStatus);
+          return;
+        }
         setState((current) => applyEvent(current, event));
       },
       onTransportStateChange: (nextState) => {
@@ -355,6 +373,7 @@ export function useGP4Bridge(
   return {
     state,
     transportState,
+    jogBridgeStatus,
     isController: state.lease.ownsControl && !state.capabilities.readOnly,
     blockingRuntime,
     submitCommand,

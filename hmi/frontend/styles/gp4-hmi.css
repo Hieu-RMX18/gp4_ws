@@ -377,6 +377,18 @@ textarea {
   color: var(--color-text-info);
 }
 
+.joint-unavailable {
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-style: italic;
+}
+
+.joint-near-limit {
+  color: var(--color-text-warning, #c98a00);
+  font-size: 10px;
+  font-weight: 600;
+}
+
 .joint-bar {
   height: 4px;
   border: 0.5px solid var(--color-border-tertiary);
@@ -516,20 +528,22 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border: 0.5px solid var(--color-border-tertiary);
+  border: 1.5px solid var(--color-border-tertiary);
   border-radius: var(--border-radius-md);
   background: var(--color-background-secondary);
-  padding: 10px 12px;
+  padding: 12px 14px;
 }
 
 .hardware-gate-panel.locked {
-  border-color: var(--color-border-danger);
+  border-color: var(--color-text-danger);
   background: var(--color-background-danger);
+  box-shadow: inset 3px 0 0 var(--color-text-danger);
 }
 
 .hardware-gate-panel.unlocked {
-  border-color: var(--color-border-success);
+  border-color: var(--color-text-success);
   background: var(--color-background-success);
+  box-shadow: inset 3px 0 0 var(--color-text-success);
 }
 
 .hardware-gate-header {
@@ -560,14 +574,16 @@ textarea {
 
 .hardware-gate-pill.locked {
   color: var(--color-text-danger);
-  border-color: var(--color-border-danger);
+  border-color: var(--color-text-danger);
   background: var(--color-background-danger);
+  font-weight: 700;
 }
 
 .hardware-gate-pill.unlocked {
   color: var(--color-text-success);
-  border-color: var(--color-border-success);
+  border-color: var(--color-text-success);
   background: var(--color-background-success);
+  font-weight: 700;
 }
 
 .hardware-gate-line {
@@ -584,14 +600,17 @@ textarea {
   font-size: 11px;
   line-height: 1.45;
   color: var(--color-text-danger);
+  font-weight: 600;
 }
 
 .hardware-gate-reason.vi {
   color: var(--color-text-secondary);
+  font-weight: 500;
 }
 
 .hardware-gate-reason.ok {
   color: var(--color-text-success);
+  font-weight: 600;
 }
 
 .hardware-gate-json summary {
@@ -1018,15 +1037,26 @@ button:disabled {
 }
 
 .secondary-btn {
-  min-height: 38px;
-  min-width: 160px;
-  padding: 0 14px;
-  border: 0.5px solid var(--color-border-secondary);
+  min-height: 40px;
+  min-width: 170px;
+  padding: 0 16px;
+  border: 0.5px solid #185fa5;
   border-radius: var(--border-radius-sm);
-  background: var(--color-background-primary);
-  color: var(--color-text-primary);
-  font-size: 12px;
+  background: #2574c4;
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 600;
   cursor: pointer;
+}
+
+.secondary-btn:hover {
+  background: #154a82;
+  border-color: #154a82;
+}
+
+.secondary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .lease-actions {

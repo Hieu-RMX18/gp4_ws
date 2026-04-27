@@ -1,13 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { GP4HMI } from './components/GP4HMI';
 import { JogPendant } from './components/JogPendant';
 import { createBridgeClient } from './bridgeClient';
-import type {
-  GP4BridgeClient,
-  JogBridgeStatusSnapshot,
-  JogCommandRequest,
-  JointPosition,
-} from '../shared/contracts';
+import { useGP4Bridge } from './hooks/useGP4Bridge';
+import type { JogCommandRequest } from '../shared/contracts';
 import './styles/gp4-hmi.css';
 
 const bridgeClient = createBridgeClient('/api/hmi');
@@ -29,72 +25,14 @@ function getOperatorId(): string {
   return window.localStorage.getItem('gp4-hmi-operator-id') || 'operator';
 }
 
-// ── Jog Pendant Wrapper ─────────────────────────────────────────────────────
-
-const DEFAULT_JOG_STATUS: JogBridgeStatusSnapshot = {
-  state: 'IDLE',
-  pointsQueued: 0,
-  effectiveHz: 0,
-  robotReady: false,
-  servoActive: false,
-  bridgeActive: false,
-  lastError: '',
-  rejectionReason: '',
-};
-
-const DEFAULT_JOINTS: JointPosition[] = [
-  { name: 'joint_1_s', positionDeg: null, minDeg: -180, maxDeg: 180 },
-  { name: 'joint_2_l', positionDeg: null, minDeg: -180, maxDeg: 180 },
-  { name: 'joint_3_u', positionDeg: null, minDeg: -180, maxDeg: 180 },
-  { name: 'joint_4_r', positionDeg: null, minDeg: -180, maxDeg: 180 },
-  { name: 'joint_5_b', positionDeg: null, minDeg: -180, maxDeg: 180 },
-  { name: 'joint_6_t', positionDeg: null, minDeg: -180, maxDeg: 180 },
-];
-
-interface JogPendantWrapperProps {
-  client: GP4BridgeClient;
-  sessionId: string;
-  operatorId: string;
-}
-
-function JogPendantWrapper({ client, sessionId, operatorId }: JogPendantWrapperProps) {
-  const [jogStatus, setJogStatus] = useState<JogBridgeStatusSnapshot>(DEFAULT_JOG_STATUS);
-  const [jointPositions, setJointPositions] = useState<JointPosition[]>(DEFAULT_JOINTS);
-
-  useEffect(() => {
-    const disconnect = client.connect({
-      sessionId,
-      operatorId,
-      onEvent: (event) => {
-        if (event.type === 'snapshot' && event.snapshot.jointPositions?.length) {
-          setJointPositions(event.snapshot.jointPositions);
-        }
-        if (event.type === 'jog_bridge_status') {
-          setJogStatus(event.jogBridgeStatus);
-        }
-      },
-      onTransportStateChange: () => {},
-    });
-    return disconnect;
-  }, [client, sessionId, operatorId]);
-
-  return (
-    <JogPendant
-      jogBridgeStatus={jogStatus}
-      jointPositions={jointPositions}
-      onActivateBridge={() => client.activateJogBridge()}
-      onDeactivateBridge={() => client.deactivateJogBridge()}
-      onJogCommand={(cmd: JogCommandRequest) => client.sendJogCommand(cmd)}
-    />
-  );
-}
-
-// ── App Root ────────────────────────────────────────────────────────────────
+// ── App Root — single WebSocket owner ───────────────────────────────────────
 
 export function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('command');
   const sessionId = getOrCreateSessionId();
   const operatorId = getOperatorId();
+
+  const bridge = useGP4Bridge(bridgeClient, sessionId, operatorId);
 
   return (
     <div className="app-root">
@@ -115,9 +53,15 @@ export function App() {
         </button>
       </nav>
       {activeTab === 'command' ? (
-        <GP4HMI client={bridgeClient} sessionId={sessionId} operatorId={operatorId} />
+        <GP4HMI client={bridgeClient} bridge={bridge} />
       ) : (
-        <JogPendantWrapper client={bridgeClient} sessionId={sessionId} operatorId={operatorId} />
+        <JogPendant
+          jogBridgeStatus={bridge.jogBridgeStatus}
+          jointPositions={bridge.state.jointPositions}
+          onActivateBridge={() => bridgeClient.activateJogBridge()}
+          onDeactivateBridge={() => bridgeClient.deactivateJogBridge()}
+          onJogCommand={(cmd: JogCommandRequest) => bridgeClient.sendJogCommand(cmd)}
+        />
       )}
     </div>
   );

@@ -6,7 +6,6 @@ float64[] joint_target       # optional, dùng cho PTP joint-space
 float64 velocity_scale       # 0.0 - 1.0
 float64 acceleration_scale   # 0.0 - 1.0
 string planner_id            # "PILZ_LIN", "PILZ_PTP", "OMPL_RRTConnect"
-bool require_approval        # DEPRECATED compatibility field. Direct callers must send false; plan-only is not supported by this action.
 # MOVE_REL: translation-only relative motion (Step 2)
 float64 delta_x              # relative translation in meters (base_link frame)
 float64 delta_y              # relative translation in meters (base_link frame)

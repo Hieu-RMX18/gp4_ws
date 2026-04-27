@@ -6,13 +6,18 @@
 
 namespace
 {
-TEST(ExecuteMotionActionSupportTest, ApprovalRejectionMessageDescribesDeprecatedDirectField)
+TEST(ExecuteMotionActionSupportTest, NormalizePrimitiveUppercases)
 {
-  const std::string message = motion_core::ExecuteMotionActionSupport::approval_rejected_message();
+  EXPECT_EQ(motion_core::ExecuteMotionActionSupport::normalize_primitive("lin"), "LIN");
+  EXPECT_EQ(motion_core::ExecuteMotionActionSupport::normalize_primitive("Home"), "HOME");
+  EXPECT_EQ(motion_core::ExecuteMotionActionSupport::normalize_primitive("PTP"), "PTP");
+}
 
-  EXPECT_NE(message.find("require_approval=true"), std::string::npos);
-  EXPECT_NE(message.find("deprecated unsupported field"), std::string::npos);
-  EXPECT_NE(message.find("direct callers must send require_approval=false"), std::string::npos);
-  EXPECT_NE(message.find("plan-only is not supported by this action"), std::string::npos);
+TEST(ExecuteMotionActionSupportTest, SupportedPrimitivesIncludeCoreSet)
+{
+  EXPECT_TRUE(motion_core::ExecuteMotionActionSupport::is_supported_primitive("LIN"));
+  EXPECT_TRUE(motion_core::ExecuteMotionActionSupport::is_supported_primitive("PTP"));
+  EXPECT_TRUE(motion_core::ExecuteMotionActionSupport::is_supported_primitive("HOME"));
+  EXPECT_FALSE(motion_core::ExecuteMotionActionSupport::is_supported_primitive("UNKNOWN"));
 }
 }  // namespace

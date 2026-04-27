@@ -136,7 +136,6 @@ def test_semantic_validator_rejects_move_rel_missing_delta(semantic_validator):
         "velocity_scale": 0.06,
         "acceleration_scale": 0.06,
         "planner_id": "PILZ_LIN",
-        "require_approval": True,
     }
     with pytest.raises(ValueError, match="MOVE_REL requires delta_y"):
         semantic_validator.validate(cmd)

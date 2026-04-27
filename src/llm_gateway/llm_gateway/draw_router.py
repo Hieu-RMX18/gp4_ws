@@ -183,7 +183,6 @@ class DrawRouterMixin:
                 retract_distance_m=stroke_config["retract_distance_m"],
                 drawing_speed_scale=stroke_config["drawing_speed_scale"],
                 travel_speed_scale=stroke_config["travel_speed_scale"],
-                require_approval=execution_policy["require_approval"],
                 plan_only=execution_policy["plan_only"],
                 max_waypoints_per_chunk=int(policy.get("max_waypoints_per_chunk", 80)),
             )
@@ -312,7 +311,6 @@ class DrawRouterMixin:
                 retract_distance_m=stroke_config["retract_distance_m"],
                 drawing_speed_scale=stroke_config["drawing_speed_scale"],
                 travel_speed_scale=stroke_config["travel_speed_scale"],
-                require_approval=execution_policy["require_approval"],
                 plan_only=execution_policy["plan_only"],
                 max_waypoints_per_chunk=int(policy.get("max_waypoints_per_chunk", 80)),
             )
@@ -407,12 +405,8 @@ class DrawRouterMixin:
         if execution_mode not in {"execute", "plan_only"}:
             raise ValueError("execution_mode must be one of: execute, plan_only")
 
-        explicit_approval = payload.get("require_approval")
-        require_approval = False if explicit_approval is None else bool(explicit_approval)
-
         return {
             "execution_mode": execution_mode,
-            "require_approval": require_approval,
             "plan_only": execution_mode == "plan_only",
         }
 

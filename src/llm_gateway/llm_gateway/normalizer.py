@@ -326,7 +326,4 @@ class Normalizer:
             "planner_id",
             self._PLANNER_DEFAULTS.get(primitive_type, "OMPL_RRTConnect"),
         )
-        # Human approval is owned by HMI/supervisor confirm flow, not by
-        # motion_core. Default to False so direct gateway dispatch works.
-        normalized.setdefault("require_approval", False)
         return normalized

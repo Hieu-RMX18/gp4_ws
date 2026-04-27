@@ -471,7 +471,6 @@ def test_optional_motion_fields_forwarded():
         "velocity_scale": 0.2,
         "acceleration_scale": 0.1,
         "planner_id": "PILZ_PTP",
-        "require_approval": True,
         "linear_unit": "mm",
         "angular_unit": "deg",
     })
@@ -480,7 +479,6 @@ def test_optional_motion_fields_forwarded():
     assert cmd["velocity_scale"] == 0.2
     assert cmd["acceleration_scale"] == 0.1
     assert cmd["planner_id"] == "PILZ_PTP"
-    assert cmd["require_approval"] is True
     assert cmd["linear_unit"] == "mm"
     assert cmd["angular_unit"] == "deg"
 

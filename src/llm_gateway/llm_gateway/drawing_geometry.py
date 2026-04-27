@@ -412,7 +412,6 @@ def compile_strokes_to_commands(
     retract_distance_m: float,
     drawing_speed_scale: float,
     travel_speed_scale: float,
-    require_approval: bool,
     plan_only: bool,
     max_waypoints_per_chunk: int,
 ) -> DrawingCompileResult:
@@ -448,7 +447,6 @@ def compile_strokes_to_commands(
                 target_pose=above_start_pose,
                 reference_frame=reference_frame,
                 speed_scale=travel_speed_scale,
-                require_approval=require_approval,
                 plan_only=plan_only,
             )
         )
@@ -457,7 +455,6 @@ def compile_strokes_to_commands(
                 target_pose=start_pose,
                 reference_frame=reference_frame,
                 speed_scale=drawing_speed_scale,
-                require_approval=require_approval,
                 plan_only=plan_only,
             )
         )
@@ -471,7 +468,6 @@ def compile_strokes_to_commands(
                         target_pose=chunk[0],
                         reference_frame=reference_frame,
                         speed_scale=drawing_speed_scale,
-                        require_approval=require_approval,
                         plan_only=plan_only,
                     )
                 )
@@ -481,7 +477,6 @@ def compile_strokes_to_commands(
                         waypoints=chunk,
                         reference_frame=reference_frame,
                         speed_scale=drawing_speed_scale,
-                        require_approval=require_approval,
                         plan_only=plan_only,
                         chunk_index=chunk_count,
                         stroke_index=stroke_index + 1,
@@ -493,7 +488,6 @@ def compile_strokes_to_commands(
                 target_pose=above_end_pose,
                 reference_frame=reference_frame,
                 speed_scale=travel_speed_scale,
-                require_approval=require_approval,
                 plan_only=plan_only,
             )
         )
@@ -539,7 +533,6 @@ def _ptp_command(
     target_pose: Dict[str, Any],
     reference_frame: str,
     speed_scale: float,
-    require_approval: bool,
     plan_only: bool,
 ) -> Dict[str, Any]:
     return {
@@ -549,7 +542,6 @@ def _ptp_command(
         "velocity_scale": float(speed_scale),
         "acceleration_scale": float(speed_scale),
         "planner_id": "PILZ_PTP",
-        "require_approval": bool(require_approval),
         "plan_only": bool(plan_only),
     }
 
@@ -559,7 +551,6 @@ def _lin_command(
     target_pose: Dict[str, Any],
     reference_frame: str,
     speed_scale: float,
-    require_approval: bool,
     plan_only: bool,
 ) -> Dict[str, Any]:
     return {
@@ -569,7 +560,6 @@ def _lin_command(
         "velocity_scale": float(speed_scale),
         "acceleration_scale": float(speed_scale),
         "planner_id": "PILZ_LIN",
-        "require_approval": bool(require_approval),
         "plan_only": bool(plan_only),
     }
 
@@ -579,7 +569,6 @@ def _cartesian_path_command(
     waypoints: Sequence[Dict[str, Any]],
     reference_frame: str,
     speed_scale: float,
-    require_approval: bool,
     plan_only: bool,
     chunk_index: int,
     stroke_index: int,
@@ -591,7 +580,6 @@ def _cartesian_path_command(
         "velocity_scale": float(speed_scale),
         "acceleration_scale": float(speed_scale),
         "planner_id": "PILZ_LIN",
-        "require_approval": bool(require_approval),
         "plan_only": bool(plan_only),
         "chunk_index": int(chunk_index),
         "stroke_index": int(stroke_index),

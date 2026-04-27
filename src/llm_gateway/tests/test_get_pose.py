@@ -56,7 +56,7 @@ def test_normalizer_get_pose_returns_minimal(normalizer: Normalizer):
     assert "velocity_scale" not in result
     assert "acceleration_scale" not in result
     assert "planner_id" not in result
-    assert "require_approval" not in result
+    assert "require_approval" not in result  # field removed from action
 
 
 def test_normalizer_get_pose_preserves_reference_frame(normalizer: Normalizer):
@@ -276,7 +276,6 @@ def test_gateway_get_pose_does_not_affect_motion_path(ros_integration_context):
         "velocity_scale": 0.06,
         "acceleration_scale": 0.06,
         "planner_id": "PILZ_PTP",
-        "require_approval": False,
     })
     node._validate_client.call_async = MagicMock(
         return_value=ImmediateFuture(

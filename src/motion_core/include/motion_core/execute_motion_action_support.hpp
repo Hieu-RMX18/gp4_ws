@@ -43,7 +43,6 @@ public:
   static std::string normalize_primitive(std::string primitive);
   static bool is_supported_primitive(const std::string & primitive);
   static bool is_non_motion_primitive(const std::string & primitive);
-  static std::string approval_rejected_message();
   static std::string goal_uuid_to_string(const rclcpp_action::GoalUUID & goal_id);
 
 private:

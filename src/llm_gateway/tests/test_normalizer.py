@@ -16,7 +16,6 @@ def test_normalizer_mm_to_m_with_explicit_unit(normalizer):
             },
             "velocity_scale": 0.2,
             "acceleration_scale": 0.3,
-            "require_approval": False,
         }
     )
 
@@ -144,7 +143,6 @@ def test_normalizer_defaults(normalizer):
     assert normalized["velocity_scale"] == 0.06
     assert normalized["acceleration_scale"] == 0.06
     assert normalized["planner_id"] == "PILZ_PTP"
-    assert normalized["require_approval"] is False
 
 
 def test_normalizer_accepts_quaternion_orientation(normalizer):
@@ -307,7 +305,7 @@ def test_normalizer_cartesian_path_normalizes_waypoints(normalizer):
     assert len(normalized["waypoints_msg"]) == 2
 
 
-def test_normalizer_plan_only_does_not_force_require_approval(normalizer):
+def test_normalizer_plan_only_preserves_flag(normalizer):
     normalized = normalizer.normalize(
         {
             "primitive_type": "LIN",
@@ -316,8 +314,6 @@ def test_normalizer_plan_only_does_not_force_require_approval(normalizer):
                 "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
             },
             "plan_only": True,
-            "require_approval": False,
         }
     )
     assert normalized["plan_only"] is True
-    assert normalized["require_approval"] is False

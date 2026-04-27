@@ -23,25 +23,16 @@ from llm_gateway.command_pipeline import (
 
 
 def test_plan_only_is_not_executable():
-    cmd = {"primitive_type": "LIN", "plan_only": True, "require_approval": False}
+    cmd = {"primitive_type": "LIN", "plan_only": True}
     with pytest.raises(ValueError, match="plan_only_not_executable"):
         prepare_execution_command(cmd)
-    # Source dict must not be mutated.
-    assert cmd["require_approval"] is False
 
 
-def test_direct_dispatch_always_clears_require_approval():
-    cmd = {"primitive_type": "PTP", "require_approval": True}
+def test_prepare_returns_shallow_copy_without_mutation():
+    cmd = {"primitive_type": "PTP", "velocity_scale": 0.06}
     out = prepare_execution_command(cmd)
-    assert out["require_approval"] is False
-    # Source dict must not be mutated.
-    assert cmd["require_approval"] is True
-
-
-def test_dispatch_preserves_false_require_approval():
-    cmd = {"primitive_type": "PTP", "require_approval": False}
-    out = prepare_execution_command(cmd)
-    assert out["require_approval"] is False
+    assert out == cmd
+    assert out is not cmd
 
 
 # ──────────────────────────────────────────────────────────────────────

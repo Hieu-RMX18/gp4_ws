@@ -216,7 +216,6 @@ def test_plan_only_marks_segments_without_requiring_approval():
     )
 
     for command in result.commands:
-        assert command["require_approval"] is False
         assert command["plan_only"] is True
 
 

@@ -125,7 +125,6 @@ def test_draw_text_plan_only_marks_commands_without_requiring_approval():
     result = router.route(_draw_text_payload(execution_mode="plan_only"))
 
     for command in result.commands:
-        assert command["require_approval"] is False
         assert command["plan_only"] is True
 
 

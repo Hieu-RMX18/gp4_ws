@@ -26,9 +26,8 @@ def prepare_execution_command(
 ) -> Dict[str, Any]:
     """Return the command payload to dispatch to motion_core.
 
-    Direct gateway dispatch has no human approval state machine. Executable
-    commands are always sent with ``require_approval=false``. ``plan_only`` is
-    metadata only and is rejected instead of being converted into execution.
+    ``plan_only`` is metadata only and is rejected instead of being converted
+    into execution. Human approval is owned by the HMI supervisor layer.
     """
     del logger
 
@@ -39,7 +38,6 @@ def prepare_execution_command(
         )
 
     execution_command = dict(normalized_command)
-    execution_command["require_approval"] = False
     return execution_command
 
 

@@ -181,13 +181,6 @@ bool ExecuteMotionActionSupport::is_non_motion_primitive(const std::string & pri
          primitive == "SET_SPEED";
 }
 
-std::string ExecuteMotionActionSupport::approval_rejected_message()
-{
-  return "require_approval=true: deprecated unsupported field; direct callers must send "
-         "require_approval=false. Human approval is owned by the HMI/supervisor layer "
-         "before dispatch. plan-only is not supported by this action.";
-}
-
 std::string ExecuteMotionActionSupport::goal_uuid_to_string(const rclcpp_action::GoalUUID & goal_id)
 {
   std::ostringstream stream;

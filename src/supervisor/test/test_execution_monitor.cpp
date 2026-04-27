@@ -212,7 +212,6 @@ protected:
     request.goal_id = goal_id;
     request.goal.velocity_scale = velocity_scale;
     request.goal.acceleration_scale = velocity_scale;
-    request.goal.require_approval = false;
     request.goal.primitive_type = "PTP";
     request.goal.target_pose.orientation.w = 1.0;
     send_goal_request_pub_->publish(request);

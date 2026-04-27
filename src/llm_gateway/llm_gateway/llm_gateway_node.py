@@ -86,7 +86,6 @@ class LLMGatewayNode(Node):
         self._goal_mapper = goal_mapper or GoalMapper(
             default_velocity_scale=self._default_velocity_scale,
             default_acceleration_scale=self._default_acceleration_scale,
-            default_require_approval=False,
         )
         runtime_mode = self._resolve_runtime_mode()
         self._intent_router = intent_router or IntentRouter(runtime_mode=runtime_mode)

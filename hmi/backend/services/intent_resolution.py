@@ -100,14 +100,13 @@ _OLD_ACTIONS = {
     "cartesian_path": "CARTESIAN_PATH",
 }
 _ALLOWED_FIELDS_BY_PRIMITIVE = {
-    "HOME": {"velocity_scale", "acceleration_scale", "planner_id", "require_approval", "reference_frame"},
+    "HOME": {"velocity_scale", "acceleration_scale", "planner_id", "reference_frame"},
     "PTP": {
         "target_pose",
         "joint_target",
         "velocity_scale",
         "acceleration_scale",
         "planner_id",
-        "require_approval",
         "reference_frame",
     },
     "LIN": {
@@ -115,7 +114,6 @@ _ALLOWED_FIELDS_BY_PRIMITIVE = {
         "velocity_scale",
         "acceleration_scale",
         "planner_id",
-        "require_approval",
         "reference_frame",
     },
     "CIRC": {
@@ -124,7 +122,6 @@ _ALLOWED_FIELDS_BY_PRIMITIVE = {
         "velocity_scale",
         "acceleration_scale",
         "planner_id",
-        "require_approval",
         "reference_frame",
     },
     "CARTESIAN_PATH": {
@@ -132,7 +129,6 @@ _ALLOWED_FIELDS_BY_PRIMITIVE = {
         "velocity_scale",
         "acceleration_scale",
         "planner_id",
-        "require_approval",
         "reference_frame",
     },
     "MOVE_REL": {
@@ -142,7 +138,6 @@ _ALLOWED_FIELDS_BY_PRIMITIVE = {
         "velocity_scale",
         "acceleration_scale",
         "planner_id",
-        "require_approval",
         "reference_frame",
     },
     "MOVE_JOINT": {
@@ -151,14 +146,12 @@ _ALLOWED_FIELDS_BY_PRIMITIVE = {
         "velocity_scale",
         "acceleration_scale",
         "planner_id",
-        "require_approval",
     },
     "MOVE_JOINTS": {
         "joint_target",
         "velocity_scale",
         "acceleration_scale",
         "planner_id",
-        "require_approval",
     },
     "WAIT": {"wait_duration_sec", "reference_frame"},
     "STOP": {"reference_frame"},
@@ -885,7 +878,6 @@ class IntentResolutionService:
                 )
             normalized["acceleration_scale"] = acceleration_clamped
             normalized["planner_id"] = str(command.get("planner_id") or PLANNER_DEFAULTS.get(primitive, "PILZ_PTP"))
-            normalized["require_approval"] = bool(command.get("require_approval", False))
 
         if primitive in {"HOME", "PTP", "LIN", "CIRC", "CARTESIAN_PATH", "MOVE_REL", "GET_POSE", "WAIT", "STOP", "IO_SET", "ALARM_RESET"}:
             normalized["reference_frame"] = str(command.get("reference_frame") or "base_link")

@@ -127,7 +127,6 @@ def test_compile_strokes_generates_chunk_metadata():
         retract_distance_m=0.01,
         drawing_speed_scale=0.1,
         travel_speed_scale=0.2,
-        require_approval=True,
         plan_only=True,
         max_waypoints_per_chunk=2,
     )

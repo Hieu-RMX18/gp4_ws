@@ -327,9 +327,6 @@ class CommandDispatchMixin:
         normalized_command = parsed_intent.get("normalizedCommand")
         if isinstance(normalized_command, dict) and normalized_command.get("primitive_type"):
             command_payload = dict(normalized_command)
-            # HMI/supervisor owns human confirmation. Once a command crosses this
-            # execution boundary, require_approval must already be satisfied.
-            command_payload["require_approval"] = False
             return command_payload
 
         action = str(parsed_intent.get("action") or "").strip()
@@ -357,7 +354,6 @@ class CommandDispatchMixin:
         }:
             payload = {"primitive_type": primitive_action}
             payload.update(parameters)
-            payload["require_approval"] = False
             return payload
 
         if action == "move_home":
@@ -366,14 +362,12 @@ class CommandDispatchMixin:
                 "velocity_scale": DEFAULT_MOTION_VELOCITY_SCALE,
                 "acceleration_scale": DEFAULT_MOTION_ACCELERATION_SCALE,
                 "planner_id": "PILZ_PTP",
-                "require_approval": False,
                 "reference_frame": "base_link",
             }
 
         if action == "stop":
             return {
                 "primitive_type": "STOP",
-                "require_approval": False,
                 "reference_frame": "base_link",
             }
 
@@ -705,7 +699,6 @@ class CommandDispatchMixin:
         goal.velocity_scale = float(command_payload.get("velocity_scale", 0.0))
         goal.acceleration_scale = float(command_payload.get("acceleration_scale", 0.0))
         goal.planner_id = str(command_payload.get("planner_id", ""))
-        goal.require_approval = bool(command_payload.get("require_approval", False))
         goal.reference_frame = str(command_payload.get("reference_frame", ""))
         goal.delta_x = float(command_payload.get("delta_x", 0.0))
         goal.delta_y = float(command_payload.get("delta_y", 0.0))

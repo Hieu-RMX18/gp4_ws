@@ -269,7 +269,6 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
                     "velocity_scale": 0.06,
                     "acceleration_scale": 0.06,
                     "planner_id": "PILZ_PTP",
-                    "require_approval": False,
                 },
             }
         )
@@ -279,7 +278,6 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertAlmostEqual(move_joint_payload["velocity_scale"], 0.06)
         self.assertAlmostEqual(move_joint_payload["acceleration_scale"], 0.06)
         self.assertEqual(move_joint_payload["planner_id"], "PILZ_PTP")
-        self.assertFalse(move_joint_payload["require_approval"])
 
         lin_payload = adapter._build_command_payload(  # pylint: disable=protected-access
             {
@@ -294,7 +292,6 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
                     "velocity_scale": 0.05,
                     "acceleration_scale": 0.04,
                     "planner_id": "PILZ_LIN",
-                    "require_approval": True,
                 },
             }
         )
@@ -304,7 +301,6 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertAlmostEqual(lin_payload["velocity_scale"], 0.05)
         self.assertAlmostEqual(lin_payload["acceleration_scale"], 0.04)
         self.assertEqual(lin_payload["planner_id"], "PILZ_LIN")
-        self.assertFalse(lin_payload["require_approval"])
 
     def test_cartesian_path_uses_last_waypoint_as_target_pose_for_ros_dispatch(self) -> None:
         adapter = WorkspaceRosAdapter()

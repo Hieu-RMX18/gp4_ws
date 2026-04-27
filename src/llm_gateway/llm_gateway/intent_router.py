@@ -287,7 +287,6 @@ class IntentRouter(DrawRouterMixin):
             "velocity_scale",
             "acceleration_scale",
             "planner_id",
-            "require_approval",
             "linear_unit",
             "angular_unit",
         ):

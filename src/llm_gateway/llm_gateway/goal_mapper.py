@@ -16,11 +16,9 @@ class GoalMapper:
         *,
         default_velocity_scale: float = 0.06,
         default_acceleration_scale: float = 0.06,
-        default_require_approval: bool = False,
     ) -> None:
         self._default_velocity_scale = float(default_velocity_scale)
         self._default_acceleration_scale = float(default_acceleration_scale)
-        self._default_require_approval = bool(default_require_approval)
 
     @staticmethod
     def _pose_to_payload(pose: Pose) -> Dict[str, Any]:
@@ -46,9 +44,6 @@ class GoalMapper:
             command.get("acceleration_scale", self._default_acceleration_scale)
         )
         goal.planner_id = str(command.get("planner_id", ""))
-        goal.require_approval = bool(
-            command.get("require_approval", self._default_require_approval)
-        )
         goal.joint_target = list(command.get("joint_target", []))
         goal.target_pose = command.get("target_pose_msg", Pose())
 
@@ -79,8 +74,6 @@ class GoalMapper:
             payload["acceleration_scale"] = float(command["acceleration_scale"])
         if "planner_id" in command:
             payload["planner_id"] = str(command["planner_id"])
-        if "require_approval" in command:
-            payload["require_approval"] = bool(command["require_approval"])
         if "plan_only" in command:
             payload["plan_only"] = bool(command["plan_only"])
         if "chunk_index" in command:

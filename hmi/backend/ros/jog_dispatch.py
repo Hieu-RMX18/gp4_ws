@@ -29,7 +29,6 @@ class JogDispatchMixin:
             "velocity_scale": 0.06,
             "acceleration_scale": 0.06,
             "planner_id": "PILZ_LIN",
-            "require_approval": False,
         }
 
     def _build_move_joint_delta_payload(self, parameters: dict[str, Any]) -> dict[str, Any]:
@@ -46,7 +45,6 @@ class JogDispatchMixin:
             "velocity_scale": 0.06,
             "acceleration_scale": 0.06,
             "planner_id": "PILZ_PTP",
-            "require_approval": False,
         }
 
     def _resolve_joint_target(

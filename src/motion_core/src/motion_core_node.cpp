@@ -576,14 +576,6 @@ private:
 
     publish_feedback(goal_handle, 0.05, "goal_accepted");
 
-    if (goal->require_approval)
-    {
-      abort_with_message(
-          goal_handle, started_at,
-          ExecuteMotionActionSupport::approval_rejected_message());
-      return;
-    }
-
     if (!ExecuteMotionActionSupport::is_supported_primitive(primitive))
     {
       abort_with_message(

@@ -54,7 +54,7 @@ class ImmediateFuture:
 
 def test_gateway_full_flow_uses_sanitized_json(openai_payload):
     node = LLMGatewayNode()
-    node.set_parameters([Parameter("auto_clear_unimplemented_approval", value=True)])
+    node.set_parameters([Parameter("runtime_mode", value="sim")])
     statuses = []
     debug_messages = []
     command_messages = []
@@ -113,7 +113,7 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
     node.destroy_node()
 
 
-def test_gateway_clears_require_approval_when_auto_clear_disabled(openai_payload):
+def test_gateway_always_clears_require_approval(openai_payload):
     node = LLMGatewayNode()
     debug_messages = []
     node._llm_client.generate_response = MagicMock(return_value=openai_payload)

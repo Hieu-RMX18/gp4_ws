@@ -163,30 +163,12 @@ class LLMGatewayNode(Node):
         self.declare_parameter("default_acceleration_scale", 0.06)
         self.declare_parameter("safety_service_timeout_sec", 2.0)
         self.declare_parameter("status_heartbeat_period_sec", 5.0)
-        # DEPRECATED: compatibility flag for older launch/test files. Direct
-        # gateway dispatch ignores it and always sends executable commands with
-        # require_approval=false. Will be removed in a future release.
-        self.declare_parameter("auto_clear_unimplemented_approval", False)
 
     def _resolve_runtime_mode(self) -> str:
         runtime_mode = (
             self.get_parameter("runtime_mode").get_parameter_value().string_value.strip().lower()
         )
-        if runtime_mode:
-            return runtime_mode
-
-        auto_clear = (
-            self.get_parameter("auto_clear_unimplemented_approval")
-            .get_parameter_value()
-            .bool_value
-        )
-        if auto_clear:
-            self.get_logger().warn(
-                "auto_clear_unimplemented_approval is DEPRECATED/no-op for "
-                "approval dispatch. Direct executable commands dispatch with "
-                "require_approval=false."
-            )
-        return "sim" if auto_clear else "hardware"
+        return runtime_mode or "hardware"
 
     def publish_status(self, status: str) -> None:
         if status != self._last_status:
@@ -753,16 +735,8 @@ class LLMGatewayNode(Node):
                 )
 
     def _prepare_execution_command(self, normalized_command: Dict[str, Any]) -> Dict[str, Any]:
-        # Thin wrapper keeps the deprecated ROS parameter wired for compatibility;
-        # the pure helper treats it as no-op for approval dispatch.
-        auto_clear = (
-            self.get_parameter("auto_clear_unimplemented_approval")
-            .get_parameter_value()
-            .bool_value
-        )
         return _pipeline_prepare_execution_command(
             normalized_command,
-            auto_clear_deprecated_approval=auto_clear,
             logger=self.get_logger(),
         )
 

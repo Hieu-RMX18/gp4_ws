@@ -67,16 +67,13 @@ def generate_launch_description():
         }],
     )
 
-    # Compatibility only: direct llm_gateway dispatch now always sends
-    # require_approval=false for executable commands. The parameter is kept
-    # stable for older launch/test tooling.
     llm_gateway_node = Node(
         package='llm_gateway',
         executable='llm_gateway_node',
         name='llm_gateway',
         output='screen',
         parameters=[{
-            'auto_clear_unimplemented_approval': True,
+            'runtime_mode': 'sim',
         }],
     )
 

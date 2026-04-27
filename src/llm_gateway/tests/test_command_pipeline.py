@@ -6,7 +6,6 @@ These tests run without ROS2 because the helpers have no ROS dependencies.
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any, Dict, Optional
 
 import pytest
@@ -26,60 +25,23 @@ from llm_gateway.command_pipeline import (
 def test_plan_only_is_not_executable():
     cmd = {"primitive_type": "LIN", "plan_only": True, "require_approval": False}
     with pytest.raises(ValueError, match="plan_only_not_executable"):
-        prepare_execution_command(cmd, auto_clear_deprecated_approval=False)
+        prepare_execution_command(cmd)
     # Source dict must not be mutated.
     assert cmd["require_approval"] is False
 
 
-def test_direct_dispatch_clears_explicit_require_approval_when_auto_clear_off():
+def test_direct_dispatch_always_clears_require_approval():
     cmd = {"primitive_type": "PTP", "require_approval": True}
-    out = prepare_execution_command(cmd, auto_clear_deprecated_approval=False)
+    out = prepare_execution_command(cmd)
     assert out["require_approval"] is False
+    # Source dict must not be mutated.
     assert cmd["require_approval"] is True
 
 
-def test_auto_clear_on_clears_require_approval_without_changing_behavior():
-    """The deprecated flag is compatibility-only; direct dispatch always clears."""
-    captured: list[str] = []
-
-    class _CapturingLogger:
-        def warning(self, msg, *args, **kwargs):
-            captured.append(msg % args if args else msg)
-
-    cmd = {"primitive_type": "PTP", "require_approval": True}
-    out = prepare_execution_command(
-        cmd,
-        auto_clear_deprecated_approval=True,
-        logger=_CapturingLogger(),  # type: ignore[arg-type]
-    )
-    assert out["require_approval"] is False
-    # Original dict must not be mutated.
-    assert cmd["require_approval"] is True
-    assert captured == []
-
-
-def test_auto_clear_on_without_approval_is_silent():
-    """When require_approval is already False, auto_clear sets False silently."""
-    captured: list[str] = []
-
-    class _CapturingLogger:
-        def warning(self, msg, *args, **kwargs):
-            captured.append(msg % args if args else msg)
-
+def test_dispatch_preserves_false_require_approval():
     cmd = {"primitive_type": "PTP", "require_approval": False}
-    out = prepare_execution_command(
-        cmd,
-        auto_clear_deprecated_approval=True,
-        logger=_CapturingLogger(),  # type: ignore[arg-type]
-    )
+    out = prepare_execution_command(cmd)
     assert out["require_approval"] is False
-    assert captured == []
-
-
-def test_plan_only_rejected_even_when_auto_clear_enabled():
-    cmd = {"primitive_type": "LIN", "plan_only": True, "require_approval": False}
-    with pytest.raises(ValueError, match="plan_only_not_executable"):
-        prepare_execution_command(cmd, auto_clear_deprecated_approval=True)
 
 
 # ──────────────────────────────────────────────────────────────────────

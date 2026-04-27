@@ -22,7 +22,6 @@ class _SchemaValidatorLike(Protocol):
 
 def prepare_execution_command(
     normalized_command: Dict[str, Any],
-    auto_clear_deprecated_approval: bool,
     logger: Optional[logging.Logger] = None,
 ) -> Dict[str, Any]:
     """Return the command payload to dispatch to motion_core.
@@ -30,10 +29,7 @@ def prepare_execution_command(
     Direct gateway dispatch has no human approval state machine. Executable
     commands are always sent with ``require_approval=false``. ``plan_only`` is
     metadata only and is rejected instead of being converted into execution.
-    ``auto_clear_deprecated_approval`` is retained as a no-op compatibility
-    parameter until the ROS parameter can be removed safely.
     """
-    del auto_clear_deprecated_approval
     del logger
 
     if normalized_command.get("plan_only"):

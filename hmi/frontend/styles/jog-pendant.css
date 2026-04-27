@@ -1,0 +1,499 @@
+/* ── Jog Pendant ─────────────────────────────────────────────────────── */
+.jog-pendant {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  max-width: 600px;
+  margin: 0 auto;
+  padding: 16px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.jog-experimental-banner {
+  background: var(--color-background-warning);
+  border: 1px solid var(--color-border-warning);
+  border-radius: var(--border-radius-md);
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-warning);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.jog-experimental-icon {
+  font-size: 14px;
+}
+
+.jog-experimental-sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+}
+
+.jog-section {
+  background: var(--color-background-primary);
+  border: 1px solid var(--color-border-tertiary);
+  border-radius: var(--border-radius-md);
+  padding: 14px 16px;
+  margin-bottom: 10px;
+}
+
+.jog-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 10px;
+}
+
+.jog-bridge-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.jog-bridge-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--border-radius-xl);
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid currentColor;
+  width: fit-content;
+}
+
+.jog-bridge-pill.green {
+  background: var(--color-background-success);
+  color: var(--color-text-success);
+}
+.jog-bridge-pill.amber {
+  background: var(--color-background-warning);
+  color: var(--color-text-warning);
+}
+.jog-bridge-pill.red {
+  background: var(--color-background-danger);
+  color: var(--color-text-danger);
+}
+.jog-bridge-pill.blue {
+  background: var(--color-background-info);
+  color: var(--color-text-info);
+}
+.jog-bridge-pill.gray {
+  background: var(--color-background-tertiary);
+  color: var(--color-text-secondary);
+}
+
+.jog-status-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.jog-status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.jog-status-label {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.jog-status-val {
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.jog-status-val.green { color: var(--color-text-success); }
+.jog-status-val.red { color: var(--color-text-danger); }
+.jog-status-val.amber { color: var(--color-text-warning); }
+.jog-status-val.blue { color: var(--color-text-info); }
+.jog-status-val.cyan { color: #0ea5a5; }
+
+.jog-bridge-btn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--border-radius-sm);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  margin-top: 4px;
+}
+
+.jog-bridge-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.jog-bridge-activate {
+  background: var(--color-text-success);
+  color: white;
+}
+
+.jog-bridge-deactivate {
+  background: var(--color-text-danger);
+  color: white;
+}
+
+.jog-error {
+  font-size: 11px;
+  color: var(--color-text-danger);
+  background: var(--color-background-danger);
+  border-radius: var(--border-radius-sm);
+  padding: 4px 8px;
+}
+
+/* ── Parameters ─────────────────────────────────────────────────────── */
+.jog-param-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.jog-param-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  min-width: 130px;
+  font-family: var(--font-mono);
+}
+
+.jog-mode-toggle {
+  display: flex;
+  border: 1px solid var(--color-border-tertiary);
+  border-radius: var(--border-radius-sm);
+  overflow: hidden;
+}
+
+.jog-mode-btn {
+  padding: 5px 12px;
+  border: none;
+  background: var(--color-background-tertiary);
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  transition: background 0.15s, color 0.15s;
+}
+
+.jog-mode-btn.active {
+  background: var(--color-background-info);
+  color: var(--color-text-info);
+  font-weight: 600;
+}
+
+.jog-mode-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.jog-slider {
+  flex: 1;
+  height: 4px;
+  cursor: pointer;
+  accent-color: var(--color-text-info);
+}
+
+.jog-slider:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Joint Grid ──────────────────────────────────────────────────────── */
+.jog-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.jog-joint-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.jog-joint-header {
+  min-width: 80px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.jog-joint-label {
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--color-text-primary);
+}
+
+.jog-joint-val {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+}
+
+.jog-btn-pair {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+}
+
+/* ── Teach Pendant Layout (Yaskawa-style S/L/U | R/B/T) ─────────────── */
+.jog-tp-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.jog-tp-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.jog-tp-col-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-tertiary);
+  text-align: center;
+}
+
+.jog-tp-axis {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.jog-tp-axis-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0 4px;
+}
+
+.jog-tp-axis-label {
+  font-size: 16px;
+  font-weight: 800;
+  font-family: var(--font-mono);
+  color: var(--color-text-primary);
+}
+
+.jog-tp-axis-val {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-secondary);
+}
+
+.jog-tp-btn-left {
+  border-radius: 16px 4px 4px 16px;
+  padding: 12px 4px;
+  font-size: 14px;
+}
+
+.jog-tp-btn-right {
+  border-radius: 4px 16px 16px 4px;
+  padding: 12px 4px;
+  font-size: 14px;
+}
+
+/* ── Jog Buttons ─────────────────────────────────────────────────────── */
+.jog-btn {
+  flex: 1;
+  padding: 8px 4px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: var(--border-radius-sm);
+  font-size: 12px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.1s, opacity 0.1s;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.jog-btn:hover:not(:disabled) {
+  border-color: var(--color-border-primary);
+}
+
+.jog-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.jog-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.jog-btn-pos {
+  background: var(--color-background-success);
+  color: var(--color-text-success);
+  border-color: var(--color-border-success);
+}
+
+.jog-btn-pos:hover:not(:disabled) {
+  background: #c8f0e3;
+}
+
+.jog-btn-neg {
+  background: var(--color-background-danger);
+  color: var(--color-text-danger);
+  border-color: var(--color-border-danger);
+}
+
+.jog-btn-neg:hover:not(:disabled) {
+  background: #fcd5d5;
+}
+
+.jog-stop-section {
+  display: flex;
+  justify-content: center;
+}
+
+.jog-stop-btn {
+  width: 100%;
+  padding: 14px;
+  border: 2px solid var(--color-border-danger);
+  border-radius: var(--border-radius-md);
+  background: var(--color-background-danger);
+  color: var(--color-text-danger);
+  font-size: 16px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 0.1s, opacity 0.1s;
+  letter-spacing: 0.1em;
+}
+
+.jog-stop-btn:hover:not(:disabled) {
+  background: #fdd;
+}
+
+.jog-stop-btn:active:not(:disabled) {
+  background: #fcc;
+}
+
+.jog-stop-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.jog-blocked-msg {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  text-align: center;
+  padding: 20px;
+  font-style: italic;
+}
+
+.jog-exclusive-notice {
+  font-size: 11px;
+  color: var(--color-text-warning);
+  background: var(--color-background-warning);
+  border-radius: var(--border-radius-sm);
+  padding: 6px 10px;
+  text-align: center;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .jog-pendant {
+    padding: 8px;
+  }
+
+  .jog-experimental-banner {
+    font-size: 11px;
+  }
+
+  .app-tabs {
+    padding: 0 8px;
+  }
+
+  .app-tab {
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    gap: 10px;
+  }
+
+  .logo {
+    font-size: 13px;
+  }
+
+  .logo-icon {
+    width: 26px;
+    height: 26px;
+  }
+
+  .chat-header,
+  .chat-messages,
+  .chat-input-wrap,
+  .section,
+  .panel-header,
+  .kpi-grid,
+  .log-area {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .chat-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .chat-sub {
+    margin-left: 0;
+  }
+
+  .msg {
+    max-width: 100%;
+  }
+
+  .kpi-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .input-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .send-btn,
+  .secondary-btn,
+  .btn-confirm,
+  .qcmd,
+  .hint,
+  .estop-btn {
+    min-height: 44px;
+  }
+
+  .send-btn,
+  .secondary-btn {
+    width: 100%;
+  }
+
+  .hint {
+    width: 100%;
+    border-radius: var(--border-radius-sm);
+    justify-content: flex-start;
+    text-align: left;
+  }
+}

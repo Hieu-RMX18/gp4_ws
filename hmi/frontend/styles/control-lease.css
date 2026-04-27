@@ -1,0 +1,38 @@
+.secondary-btn {
+  min-height: 40px;
+  min-width: 170px;
+  padding: 0 16px;
+  border: 0.5px solid #185fa5;
+  border-radius: var(--border-radius-sm);
+  background: #2574c4;
+  color: #ffffff;
+  font-size: 18px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.secondary-btn:hover {
+  background: #154a82;
+  border-color: #154a82;
+}
+
+.secondary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.lease-actions {
+  margin-bottom: 8px;
+}
+
+.lease-caption {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--color-text-secondary);
+}
+
+.lease-caption-error {
+  color: var(--color-text-danger);
+}
+

@@ -1,0 +1,57 @@
+/* joint rows */
+.joint-row {
+  margin-bottom: 8px;
+}
+
+.joint-row:last-child {
+  margin-bottom: 0;
+}
+
+.joint-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 3px;
+}
+
+.joint-name,
+.joint-val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.joint-name {
+  color: var(--color-text-secondary);
+}
+
+.joint-val {
+  color: var(--color-text-info);
+}
+
+.joint-unavailable {
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-style: italic;
+}
+
+.joint-near-limit {
+  color: var(--color-text-warning, #c98a00);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.joint-bar {
+  height: 4px;
+  border: 0.5px solid var(--color-border-tertiary);
+  border-radius: var(--border-radius-xl);
+  background: var(--color-background-tertiary);
+  overflow: hidden;
+}
+
+.joint-fill {
+  height: 100%;
+  background: #185fa5;
+  border-radius: var(--border-radius-xl);
+  transition: width 0.2s ease;
+}
+

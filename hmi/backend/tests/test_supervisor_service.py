@@ -294,6 +294,9 @@ class SupervisorServiceTests(unittest.TestCase):
         lease = self.session_lock.acquire_controller(self.session_id, self.operator_id)
         return lease.lease_token
 
+    def test_ros_adapter_property_exposes_constructor_instance(self) -> None:
+        self.assertIs(self.supervisor.ros_adapter, self.adapter)
+
     def test_command_rejected_without_valid_control_lease(self) -> None:
         with self.assertRaises(ForbiddenActionError):
             self.supervisor.submit_intent(

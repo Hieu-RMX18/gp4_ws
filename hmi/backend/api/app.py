@@ -86,7 +86,7 @@ def create_app(
         app.state.telemetry_service = service
         app.state.supervisor_service = supervisor
         app.state.jog_pendant_service = jog_svc
-        app.state.ros_adapter = supervisor._ros
+        app.state.ros_adapter = supervisor.ros_adapter
         try:
             yield
         finally:

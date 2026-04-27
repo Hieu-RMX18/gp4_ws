@@ -85,6 +85,10 @@ class SupervisorService(
         self._messages: deque[ChatMessage] = deque(maxlen=200)
         self._lock = Lock()
 
+    @property
+    def ros_adapter(self) -> Any:
+        return self._ros
+
     def _trace(self, stage: str, **fields: Any) -> None:
         rendered_fields: list[str] = []
         for key, value in fields.items():

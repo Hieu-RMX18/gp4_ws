@@ -148,8 +148,6 @@ properties:
       - PILZ_PTP
       - PILZ_CIRC
       - OMPL_RRTConnect
-  require_approval:
-    type: boolean
   plan_only:
     type: boolean
   chunk_index:

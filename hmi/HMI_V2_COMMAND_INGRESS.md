@@ -110,10 +110,10 @@ Current sim behavior:
 - valid commands stop at `NEEDS_CONFIRMATION` until the operator confirms
 - on confirm, the supervisor records `CONFIRMED` and `EXECUTION_REQUESTED`
 - the sim execution adapter calls `/validate_command` first and fails closed if validation rejects the payload
-- if validation passes, the adapter dispatches `/execute_motion` with `require_approval=false` and the command transitions through `EXECUTING`
+- if validation passes, the adapter dispatches `/execute_motion` and the command transitions through `EXECUTING`
 - the command ends in `SUCCEEDED`, `FAILED`, or `CANCELLED` from the action result
 
-`ExecuteMotion.require_approval` is retained only for ROS wire compatibility. It is not an approval state machine, and raw direct callers must send `require_approval=false`. Plan-only requests are not executable through `/execute_motion`.
+Approval is owned solely by the HMI supervisor lease/confirm flow. The `ExecuteMotion` action no longer carries an approval flag; any plan-only path goes through `ValidateCommand.srv` first.
 
 ## Capability model
 

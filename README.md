@@ -272,7 +272,7 @@ The HMI provides a browser-based operator panel with:
 - **Jog pendant** — real-time joint jogging (requires `jog_pendant` stack running)
 - **Session management** — operator session lock and audit trail
 
-The HMI command path follows the same safety pipeline: `ValidateCommand → ExecuteMotion`. It does **not** bypass to MotoROS2 directly. Human confirmation is owned by the HMI/supervisor before dispatch; `ExecuteMotion.require_approval` is a deprecated wire-compatibility field and confirmed commands are dispatched with `require_approval=false`.
+The HMI command path follows the same safety pipeline: `ValidateCommand → ExecuteMotion`. It does **not** bypass to MotoROS2 directly. Human confirmation is owned by the HMI supervisor lease/confirm flow before dispatch; the `ExecuteMotion` action no longer carries an approval flag.
 
 Full spec: `hmi/HMI_V2_COMMAND_INGRESS.md`
 

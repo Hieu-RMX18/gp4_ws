@@ -58,7 +58,7 @@ forbidden_zones:
     size_z: 0.20
 
 require_human_approval:
-  # Advisory HMI/supervisor review policy only; ExecuteMotion.require_approval
-  # is a deprecated compatibility field and is not enforced by motion_core.
+  # Advisory HMI/supervisor review policy only. Human approval is owned by
+  # the HMI supervisor lease/confirm flow, not by the ExecuteMotion action.
   velocity_scale_threshold: 0.05
   distance_from_home_threshold: 0.30

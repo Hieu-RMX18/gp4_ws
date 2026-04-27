@@ -33,6 +33,8 @@ add_library(${PROJECT_NAME}_components SHARED
   src/tool_state_monitor.cpp
   src/recovery_state_machine.cpp
   src/hw_adapter_node.cpp
+  src/hw_adapter_dispatch.cpp
+  src/hw_adapter_services.cpp
 )
 
 target_include_directories(${PROJECT_NAME}_components PUBLIC

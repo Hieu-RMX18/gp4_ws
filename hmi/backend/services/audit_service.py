@@ -122,7 +122,9 @@ class AuditService:
                 ON telemetry_snapshots(created_at);
                 """
             )
-            self._ensure_column(connection, "commands", "structured_intent_json", "TEXT")
+            self._ensure_column(
+                connection, "commands", "structured_intent_json", "TEXT"
+            )
             self._ensure_column(connection, "commands", "summary_label", "TEXT")
             self._ensure_column(connection, "commands", "lifecycle_state", "TEXT")
             self._ensure_column(connection, "commands", "review_expires_at", "TEXT")
@@ -130,13 +132,29 @@ class AuditService:
             self._ensure_column(connection, "commands", "correlation_id", "TEXT")
             self._ensure_column(connection, "commands", "risk_level", "TEXT")
             self._ensure_column(connection, "commands", "execution_result_json", "TEXT")
-            self._ensure_column(connection, "commands", "command_kind", "TEXT NOT NULL DEFAULT 'command'")
+            self._ensure_column(
+                connection,
+                "commands",
+                "command_kind",
+                "TEXT NOT NULL DEFAULT 'command'",
+            )
             self._ensure_column(connection, "commands", "parent_sequence_id", "TEXT")
-            self._ensure_column(connection, "commands", "sequence_step_index", "INTEGER")
-            self._ensure_column(connection, "commands", "sequence_step_count", "INTEGER")
+            self._ensure_column(
+                connection, "commands", "sequence_step_index", "INTEGER"
+            )
+            self._ensure_column(
+                connection, "commands", "sequence_step_count", "INTEGER"
+            )
             self._ensure_column(connection, "commands", "current_step_index", "INTEGER")
-            self._ensure_column(connection, "commands", "sequence_diagnostics_json", "TEXT")
-            self._ensure_column(connection, "commands", "manual_recovery_required", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(
+                connection, "commands", "sequence_diagnostics_json", "TEXT"
+            )
+            self._ensure_column(
+                connection,
+                "commands",
+                "manual_recovery_required",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
 
     def _ensure_column(
         self,
@@ -233,7 +251,11 @@ class AuditService:
                     record.sequence_step_index,
                     record.sequence_step_count,
                     record.current_step_index,
-                    _json_blob({"diagnostics": record.sequence_diagnostics} if record.sequence_diagnostics else None),
+                    _json_blob(
+                        {"diagnostics": record.sequence_diagnostics}
+                        if record.sequence_diagnostics
+                        else None
+                    ),
                     1 if record.manual_recovery_required else 0,
                     record.raw_text,
                     _json_blob(record.parsed_intent),
@@ -244,7 +266,9 @@ class AuditService:
                     record.summary_label,
                     record.lifecycle_state.value,
                     record.confirm_at.isoformat() if record.confirm_at else None,
-                    record.confirmation_expires_at.isoformat() if record.confirmation_expires_at else None,
+                    record.confirmation_expires_at.isoformat()
+                    if record.confirmation_expires_at
+                    else None,
                     record.execute_at.isoformat() if record.execute_at else None,
                     record.final_state.value if record.final_state else None,
                     record.plan_fingerprint,
@@ -402,7 +426,9 @@ class AuditService:
         }
 
     def _prune_telemetry_snapshots(self) -> None:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=self._telemetry_retention_days)
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            days=self._telemetry_retention_days
+        )
         with self._connect() as connection:
             connection.execute(
                 """

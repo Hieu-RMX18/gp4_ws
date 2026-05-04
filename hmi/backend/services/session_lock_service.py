@@ -48,7 +48,10 @@ class SessionLockService:
             now = utcnow()
             self._purge_if_expired(now)
 
-            if self._active_controller and self._active_controller.session_id != session_id:
+            if (
+                self._active_controller
+                and self._active_controller.session_id != session_id
+            ):
                 if not force_takeover:
                     raise LeaseRejectedError(
                         "controller lease is already held by another session"
@@ -58,7 +61,10 @@ class SessionLockService:
                         "force takeover requires a non-empty takeover reason"
                     )
 
-            if self._active_controller and self._active_controller.session_id == session_id:
+            if (
+                self._active_controller
+                and self._active_controller.session_id == session_id
+            ):
                 self._active_controller = replace(
                     self._active_controller,
                     operator_id=operator_id,
@@ -141,4 +147,3 @@ class SessionLockService:
             if self._active_controller.lease_token != lease_token:
                 raise LeaseNotOwnedError("lease token mismatch")
             return self._active_controller
-

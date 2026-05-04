@@ -417,7 +417,11 @@ def test_surfaces_schema_stage_and_step():
         validator.validate(
             [
                 {"primitive_type": "HOME"},
-                {"primitive_type": "WAIT", "wait_duration_sec": 1.0, "force_schema_error": True},
+                {
+                    "primitive_type": "WAIT",
+                    "wait_duration_sec": 1.0,
+                    "force_schema_error": True,
+                },
             ]
         )
 

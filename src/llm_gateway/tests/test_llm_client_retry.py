@@ -15,7 +15,6 @@ import io
 import random
 import urllib.error
 from dataclasses import replace
-from types import SimpleNamespace
 from typing import List
 from unittest.mock import patch
 
@@ -66,8 +65,11 @@ class _FakeResponse:
 
 def _http_error(status: int, body: str = "err") -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
-        url="http://test", code=status, msg="err",
-        hdrs=None, fp=io.BytesIO(body.encode("utf-8")),
+        url="http://test",
+        code=status,
+        msg="err",
+        hdrs=None,
+        fp=io.BytesIO(body.encode("utf-8")),
     )
 
 

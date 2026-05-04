@@ -27,25 +27,25 @@ class SafetyManager(Node):
     """
 
     def __init__(self):
-        super().__init__('safety_manager')
-        self._sim_mode = bool(self.declare_parameter('sim_mode', False).value)
+        super().__init__("safety_manager")
+        self._sim_mode = bool(self.declare_parameter("sim_mode", False).value)
 
         # V4 H2: Fail-closed — start in blocked state until robot proves ready
         self._lock = threading.Lock()
         self._robot_ready = False
         self._last_error_reason = (
             "no hw_adapter readiness received yet (sim mode)"
-            if self._sim_mode else
-            "no robot status received yet (fail-closed)"
+            if self._sim_mode
+            else "no robot status received yet (fail-closed)"
         )
         self._status_received = False
         self._adapter_ready_received = False
 
         # Load safety rules from config
         try:
-            pkg_share = get_package_share_directory('safety')
-            yaml_path = os.path.join(pkg_share, 'config', 'safety_rules.yaml')
-            with open(yaml_path, 'r') as f:
+            pkg_share = get_package_share_directory("safety")
+            yaml_path = os.path.join(pkg_share, "config", "safety_rules.yaml")
+            with open(yaml_path, "r") as f:
                 self.safety_rules = yaml.safe_load(f)
             self.get_logger().info("Loaded safety rules successfully.")
         except Exception as e:
@@ -58,14 +58,11 @@ class SafetyManager(Node):
         self.gate = ExecutionGate(self, self.validator, self.guard, self)
 
         # Safety status publisher (structured status)
-        self.safety_status_pub = self.create_publisher(String, '/safety_status', 10)
+        self.safety_status_pub = self.create_publisher(String, "/safety_status", 10)
 
         if self._sim_mode:
             self.adapter_ready_sub = self.create_subscription(
-                RobotReadiness,
-                '/hw_adapter/ready',
-                self.adapter_ready_callback,
-                10
+                RobotReadiness, "/hw_adapter/ready", self.adapter_ready_callback, 10
             )
             self.get_logger().info(
                 "safety running in SIM MODE: using /hw_adapter/ready for readiness gate"
@@ -77,11 +74,13 @@ class SafetyManager(Node):
             # V4 J5: Correct subscriber type: industrial_msgs/RobotStatus
             self.status_sub = self.create_subscription(
                 RobotStatus,
-                '/yaskawa/robot_status',
+                "/yaskawa/robot_status",
                 self.status_callback,
-                qos_profile_sensor_data
+                qos_profile_sensor_data,
             )
-            self.get_logger().info("SafetyManager started (fail-closed until robot status received).")
+            self.get_logger().info(
+                "SafetyManager started (fail-closed until robot status received)."
+            )
 
     @property
     def is_robot_ready(self) -> bool:
@@ -107,16 +106,14 @@ class SafetyManager(Node):
             if msg.in_error.val == TriState.TRUE:
                 self._robot_ready = False
                 self._last_error_reason = "robot in_error via /yaskawa/robot_status"
-                self.get_logger().error(
-                    "SAFETY BLOCK: robot reported in_error")
+                self.get_logger().error("SAFETY BLOCK: robot reported in_error")
                 self.publish_status("ERROR: in_error active")
                 return
 
             if msg.e_stopped.val == TriState.TRUE:
                 self._robot_ready = False
                 self._last_error_reason = "robot e_stopped via /yaskawa/robot_status"
-                self.get_logger().error(
-                    "SAFETY BLOCK: robot e_stopped")
+                self.get_logger().error("SAFETY BLOCK: robot e_stopped")
                 self.publish_status("ERROR: E-stop active")
                 return
 
@@ -149,8 +146,8 @@ class SafetyManager(Node):
                 self._robot_ready = False
                 self._last_error_reason = (
                     msg.status_message
-                    if msg.status_message else
-                    "hw_adapter reported not ready (sim mode)"
+                    if msg.status_message
+                    else "hw_adapter reported not ready (sim mode)"
                 )
                 self.publish_status(f"BLOCKED: {self._last_error_reason}")
                 return
@@ -176,5 +173,6 @@ def main(args=None):
         node.destroy_node()
         rclpy.try_shutdown()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

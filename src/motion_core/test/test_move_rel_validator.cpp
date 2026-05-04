@@ -214,7 +214,8 @@ TEST(MoveRelValidatorTest, RejectsTargetBelowXMin) {
 }
 
 TEST(MoveRelValidatorTest, RejectsTargetBeyondFrontWall) {
-  // Position beyond front wall (y < kYMin = -0.16) is rejected by workspace bounds.
+  // Position beyond front wall (y < kYMin = -0.16) is rejected by workspace
+  // bounds.
   geometry_msgs::msg::Pose target;
   target.position.x = 0.0;
   target.position.y = -0.197; // station front wall, below kYMin
@@ -226,7 +227,8 @@ TEST(MoveRelValidatorTest, RejectsTargetBeyondFrontWall) {
 }
 
 TEST(MoveRelValidatorTest, RejectsTargetBeyondRightWall) {
-  // Calibrated side wall is at x=-0.482; this is below kXMin=-0.45 and must be rejected.
+  // Calibrated side wall is at x=-0.482; this is below kXMin=-0.45 and must be
+  // rejected.
   geometry_msgs::msg::Pose target;
   target.position.x = -0.482;
   target.position.y = 0.30;
@@ -250,23 +252,23 @@ TEST(MoveRelValidatorTest, RejectsTargetNearRightWallEdge) {
 }
 
 TEST(MoveRelValidatorTest, ForbiddenZoneCentersAreRejectedByWorkspaceFirst) {
-  struct Case
-  {
-    const char * name;
+  struct Case {
+    const char *name;
     double x;
     double y;
     double z;
   };
 
   const Case cases[] = {
-    {"front_wall_guard", MoveRelLimits::kFrontWallX, MoveRelLimits::kFrontWallY, 0.35},
-    {"right_wall_guard", MoveRelLimits::kRightWallX, MoveRelLimits::kRightWallY, 0.35},
-    {"floor_clearance_guard", MoveRelLimits::kFloorClearanceX, MoveRelLimits::kFloorClearanceY,
-      MoveRelLimits::kFloorClearanceZ},
+      {"front_wall_guard", MoveRelLimits::kFrontWallX,
+       MoveRelLimits::kFrontWallY, 0.35},
+      {"right_wall_guard", MoveRelLimits::kRightWallX,
+       MoveRelLimits::kRightWallY, 0.35},
+      {"floor_clearance_guard", MoveRelLimits::kFloorClearanceX,
+       MoveRelLimits::kFloorClearanceY, MoveRelLimits::kFloorClearanceZ},
   };
 
-  for (const auto & test_case : cases)
-  {
+  for (const auto &test_case : cases) {
     geometry_msgs::msg::Pose target;
     target.position.x = test_case.x;
     target.position.y = test_case.y;
@@ -274,11 +276,11 @@ TEST(MoveRelValidatorTest, ForbiddenZoneCentersAreRejectedByWorkspaceFirst) {
 
     std::string reason;
     EXPECT_FALSE(validate_move_rel_target_bounds(target, reason))
-      << "case: " << test_case.name;
+        << "case: " << test_case.name;
     EXPECT_NE(reason.find("outside workspace bounds"), std::string::npos)
-      << "case: " << test_case.name;
+        << "case: " << test_case.name;
     EXPECT_EQ(reason.find("intersects forbidden zone"), std::string::npos)
-      << "case: " << test_case.name;
+        << "case: " << test_case.name;
   }
 }
 
@@ -313,7 +315,7 @@ TEST(MoveRelValidatorTest, FullFlowDeltaPushesTargetOutOfBounds) {
   geometry_msgs::msg::Pose current;
   current.position.x = 0.0;
   current.position.y = 0.0;
-  current.position.z = 0.54;  // just below kZMax = 0.56
+  current.position.z = 0.54; // just below kZMax = 0.56
   current.orientation.w = 1.0;
 
   std::string reason;

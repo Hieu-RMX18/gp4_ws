@@ -28,7 +28,7 @@ class _FakeTime:
         self.nanoseconds = int(seconds * 1_000_000_000)
 
     def to_msg(self) -> dict[str, int]:
-        return {'sec': int(self.nanoseconds // 1_000_000_000)}
+        return {"sec": int(self.nanoseconds // 1_000_000_000)}
 
 
 class _FakeClock:
@@ -64,18 +64,18 @@ class _FakePublisher:
 
 
 def _install_stub_modules() -> None:
-    if 'rclpy' not in sys.modules:
-        rclpy_module = types.ModuleType('rclpy')
+    if "rclpy" not in sys.modules:
+        rclpy_module = types.ModuleType("rclpy")
         rclpy_module.init = lambda *args, **kwargs: None
         rclpy_module.shutdown = lambda *args, **kwargs: None
         rclpy_module.spin = lambda *args, **kwargs: None
-        sys.modules['rclpy'] = rclpy_module
+        sys.modules["rclpy"] = rclpy_module
 
-    node_module = types.ModuleType('rclpy.node')
+    node_module = types.ModuleType("rclpy.node")
     node_module.Node = object
-    sys.modules['rclpy.node'] = node_module
+    sys.modules["rclpy.node"] = node_module
 
-    qos_module = types.ModuleType('rclpy.qos')
+    qos_module = types.ModuleType("rclpy.qos")
 
     class QoSProfile:
         def __init__(self, depth: int, reliability: object) -> None:
@@ -83,13 +83,13 @@ def _install_stub_modules() -> None:
             self.reliability = reliability
 
     class Reliability:
-        RELIABLE = 'reliable'
+        RELIABLE = "reliable"
 
     qos_module.QoSProfile = QoSProfile
     qos_module.Reliability = Reliability
-    sys.modules['rclpy.qos'] = qos_module
+    sys.modules["rclpy.qos"] = qos_module
 
-    control_msgs_module = types.ModuleType('control_msgs.msg')
+    control_msgs_module = types.ModuleType("control_msgs.msg")
 
     class JointJog:
         def __init__(self) -> None:
@@ -100,16 +100,16 @@ def _install_stub_modules() -> None:
             self.duration: float = 0.0
 
     control_msgs_module.JointJog = JointJog
-    sys.modules['control_msgs.msg'] = control_msgs_module
+    sys.modules["control_msgs.msg"] = control_msgs_module
 
-    interfaces_module = types.ModuleType('interfaces.msg')
+    interfaces_module = types.ModuleType("interfaces.msg")
     interfaces_module.JogCommand = object
-    sys.modules['interfaces.msg'] = interfaces_module
+    sys.modules["interfaces.msg"] = interfaces_module
 
 
 _install_stub_modules()
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / 'scripts' / 'jog_input_node.py'
-SPEC = importlib.util.spec_from_file_location('jog_input_node', SCRIPT_PATH)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "jog_input_node.py"
+SPEC = importlib.util.spec_from_file_location("jog_input_node", SCRIPT_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC is not None and SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
@@ -121,8 +121,7 @@ def _build_fake_self(*, now_sec: float = 10.0):
     fake_self = SimpleNamespace(
         _joint_names=list(MODULE.GP4_JOINT_NAMES),
         _joint_max_velocity=[
-            MODULE.GP4_JOINT_MAX_VELOCITY_RAD_S[name]
-            for name in MODULE.GP4_JOINT_NAMES
+            MODULE.GP4_JOINT_MAX_VELOCITY_RAD_S[name] for name in MODULE.GP4_JOINT_NAMES
         ],
         _max_velocity_scale=0.3,
         _min_velocity_scale=0.01,
@@ -130,12 +129,12 @@ def _build_fake_self(*, now_sec: float = 10.0):
         _min_step_degrees=0.01,
         _watchdog_timeout_ms=200,
         _default_velocity_scale=0.05,
-        _servo_cmd_topic='delta_joint_cmds',
-        _state='IDLE',
+        _servo_cmd_topic="delta_joint_cmds",
+        _state="IDLE",
         _active_joint_index=None,
         _active_direction=0,
         _active_velocity_scale=0.05,
-        _active_mode='continuous',
+        _active_mode="continuous",
         _last_heartbeat_sec=now_sec,
         _state_lock=threading.Lock(),
         _jog_pub=publisher,
@@ -159,7 +158,7 @@ def test_invalid_joint_index_is_rejected_without_publish() -> None:
     message = SimpleNamespace(
         joint_index=99,
         direction=1,
-        mode='continuous',
+        mode="continuous",
         velocity_scale=0.05,
         step_degrees=1.0,
     )
@@ -168,7 +167,7 @@ def test_invalid_joint_index_is_rejected_without_publish() -> None:
 
     assert publisher.messages == []
     assert logger.warns
-    assert fake_self._state == 'IDLE'
+    assert fake_self._state == "IDLE"
 
 
 def test_continuous_command_clamps_velocity_scale_to_safe_max() -> None:
@@ -176,7 +175,7 @@ def test_continuous_command_clamps_velocity_scale_to_safe_max() -> None:
     message = SimpleNamespace(
         joint_index=0,
         direction=1,
-        mode='continuous',
+        mode="continuous",
         velocity_scale=99.0,
         step_degrees=1.0,
     )
@@ -185,14 +184,14 @@ def test_continuous_command_clamps_velocity_scale_to_safe_max() -> None:
 
     assert len(publisher.messages) == 1
     published = publisher.messages[0]
-    assert published.joint_names == ['joint_1_s']
+    assert published.joint_names == ["joint_1_s"]
     assert math.isclose(
         published.velocities[0],
-        MODULE.GP4_JOINT_MAX_VELOCITY_RAD_S['joint_1_s'] * 0.3,
+        MODULE.GP4_JOINT_MAX_VELOCITY_RAD_S["joint_1_s"] * 0.3,
         rel_tol=1e-9,
     )
     assert published.duration == 0.0
-    assert fake_self._state == 'ACTIVE'
+    assert fake_self._state == "ACTIVE"
     assert fake_self._active_joint_index == 0
     assert fake_self._active_direction == 1
 
@@ -202,7 +201,7 @@ def test_discrete_command_clamps_step_and_returns_to_idle() -> None:
     message = SimpleNamespace(
         joint_index=2,
         direction=-1,
-        mode='discrete',
+        mode="discrete",
         velocity_scale=0.0,
         step_degrees=999.0,
     )
@@ -211,22 +210,22 @@ def test_discrete_command_clamps_step_and_returns_to_idle() -> None:
 
     assert len(publisher.messages) == 1
     published = publisher.messages[0]
-    assert published.joint_names == ['joint_3_u']
+    assert published.joint_names == ["joint_3_u"]
     assert math.isclose(published.displacements[0], -math.radians(10.0), rel_tol=1e-9)
     assert math.isclose(
         published.velocities[0],
-        -MODULE.GP4_JOINT_MAX_VELOCITY_RAD_S['joint_3_u'] * 0.05,
+        -MODULE.GP4_JOINT_MAX_VELOCITY_RAD_S["joint_3_u"] * 0.05,
         rel_tol=1e-9,
     )
     assert 0.05 <= published.duration <= 5.0
-    assert fake_self._state == 'IDLE'
+    assert fake_self._state == "IDLE"
     assert fake_self._active_joint_index is None
     assert fake_self._active_direction == 0
 
 
 def test_watchdog_halts_active_motion_after_timeout() -> None:
     fake_self, publisher, _logger = _build_fake_self(now_sec=1.0)
-    fake_self._state = 'ACTIVE'
+    fake_self._state = "ACTIVE"
     fake_self._active_joint_index = 1
     fake_self._active_direction = 1
     fake_self._last_heartbeat_sec = 0.0
@@ -235,9 +234,9 @@ def test_watchdog_halts_active_motion_after_timeout() -> None:
 
     assert len(publisher.messages) == 1
     published = publisher.messages[0]
-    assert published.joint_names == ['joint_2_l']
+    assert published.joint_names == ["joint_2_l"]
     assert published.velocities == [0.0]
     assert published.duration == 0.0
-    assert fake_self._state == 'IDLE'
+    assert fake_self._state == "IDLE"
     assert fake_self._active_joint_index is None
     assert fake_self._active_direction == 0

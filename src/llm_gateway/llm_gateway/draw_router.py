@@ -6,6 +6,8 @@ from copy import deepcopy
 import math
 from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
+from safety.policy_loader import load_safety_rules as _load_safety_rules
+
 from llm_gateway.drawing_geometry import (
     DrawingGeometryError,
     compile_strokes_to_commands,
@@ -38,6 +40,7 @@ def _build_route_result(*args: Any, **kwargs: Any) -> Any:
 
 class DrawRouterMixin:
     """Mixin providing draw shape/text routing for IntentRouter."""
+
     def _route_draw_shape(self, payload: Dict[str, Any]) -> RouteResult:
         policy = self._macro_policy["macros"].get("draw_shape")
         if not isinstance(policy, dict):
@@ -45,7 +48,9 @@ class DrawRouterMixin:
 
         availability = str(policy.get("availability", "all")).strip().lower()
         if availability == "sim_only" and self._runtime_mode != "sim":
-            raise ValueError("draw_shape is sim-only and is unavailable in hardware mode.")
+            raise ValueError(
+                "draw_shape is sim-only and is unavailable in hardware mode."
+            )
         if availability == "disabled":
             raise ValueError("draw_shape capability_unavailable")
 
@@ -58,13 +63,17 @@ class DrawRouterMixin:
                 f"unsupported_shape_type: '{shape}'; supported: {sorted(supported_shapes)}"
             )
 
-        reference_frame = payload.get("frame_id", payload.get("reference_frame", _FRAME_BASE_LINK))
+        reference_frame = payload.get(
+            "frame_id", payload.get("reference_frame", _FRAME_BASE_LINK)
+        )
         self._validate_reference_frame(
             reference_frame,
             allowed_frames={str(item) for item in policy.get("supported_frames", [])},
         )
 
-        units = str(payload.get("units", policy.get("default_units", "m"))).strip().lower()
+        units = (
+            str(payload.get("units", policy.get("default_units", "m"))).strip().lower()
+        )
         params = payload.get("params") or {}
         if not isinstance(params, dict):
             raise ValueError("draw_shape params must be an object.")
@@ -78,7 +87,9 @@ class DrawRouterMixin:
             execution_policy = self._resolve_execution_policy(payload, policy)
             stroke_config = self._resolve_stroke_config(payload, policy, units=units)
             max_chord_error_m = float(policy.get("max_chord_error_m", 0.0005))
-            max_segment_angle_rad = math.radians(float(policy.get("max_segment_angle_deg", 10.0)))
+            max_segment_angle_rad = math.radians(
+                float(policy.get("max_segment_angle_deg", 10.0))
+            )
 
             if shape == "square":
                 side_m = self._extract_positive_length(
@@ -114,7 +125,9 @@ class DrawRouterMixin:
                     required=False,
                 )
                 if explicit_points is not None:
-                    strokes = generate_triangle_path(side_m=1.0, points_2d=explicit_points)
+                    strokes = generate_triangle_path(
+                        side_m=1.0, points_2d=explicit_points
+                    )
                 else:
                     side_m = self._extract_positive_length(
                         payload=payload,
@@ -125,7 +138,9 @@ class DrawRouterMixin:
                     )
                     strokes = generate_triangle_path(side_m=side_m)
             elif shape == "circle":
-                radius_m = self._extract_circle_radius_m(payload=payload, params=params, units=units)
+                radius_m = self._extract_circle_radius_m(
+                    payload=payload, params=params, units=units
+                )
                 strokes = generate_circle_path(
                     radius_m=radius_m,
                     max_chord_error_m=max_chord_error_m,
@@ -147,7 +162,9 @@ class DrawRouterMixin:
                     max_segment_angle_rad=max_segment_angle_rad,
                 )
             elif shape == "polygon":
-                n_sides = self._extract_polygon_sides(payload=payload, params=params, policy=policy)
+                n_sides = self._extract_polygon_sides(
+                    payload=payload, params=params, policy=policy
+                )
                 radius_candidate = self._extract_optional_positive_length(
                     payload=payload,
                     params=params,
@@ -175,6 +192,7 @@ class DrawRouterMixin:
                 )
                 strokes = generate_polyline_path(points_2d=points_2d)
 
+            drawing_cfg = _load_safety_rules().get("drawing", {})
             compiled = compile_strokes_to_commands(
                 strokes=strokes,
                 workplane=workplane,
@@ -185,6 +203,10 @@ class DrawRouterMixin:
                 travel_speed_scale=stroke_config["travel_speed_scale"],
                 plan_only=execution_policy["plan_only"],
                 max_waypoints_per_chunk=int(policy.get("max_waypoints_per_chunk", 80)),
+                use_blended_sequence=bool(
+                    drawing_cfg.get("use_blended_sequence", True)
+                ),
+                blend_radius_m=float(drawing_cfg.get("blend_radius_m", 0.008)),
             )
         except DrawingGeometryError as exc:
             raise ValueError(str(exc)) from exc
@@ -195,7 +217,9 @@ class DrawRouterMixin:
             metadata={
                 "source": "semantic_ir",
                 "macro_name": "draw_shape",
-                "requires_current_pose": bool(policy.get("requires_current_pose", False)),
+                "requires_current_pose": bool(
+                    policy.get("requires_current_pose", False)
+                ),
                 "shape_type": shape,
                 "execution_mode": execution_policy["execution_mode"],
                 "summary": dict(compiled.summary),
@@ -209,11 +233,15 @@ class DrawRouterMixin:
 
         availability = str(policy.get("availability", "all")).strip().lower()
         if availability == "sim_only" and self._runtime_mode != "sim":
-            raise ValueError("draw_text is sim-only and is unavailable in hardware mode.")
+            raise ValueError(
+                "draw_text is sim-only and is unavailable in hardware mode."
+            )
         if availability == "disabled":
             raise ValueError("draw_text capability_unavailable")
 
-        reference_frame = payload.get("frame_id", payload.get("reference_frame", _FRAME_BASE_LINK))
+        reference_frame = payload.get(
+            "frame_id", payload.get("reference_frame", _FRAME_BASE_LINK)
+        )
         self._validate_reference_frame(
             reference_frame,
             allowed_frames={str(item) for item in policy.get("supported_frames", [])},
@@ -224,11 +252,17 @@ class DrawRouterMixin:
             raise ValueError("draw_text requires a non-empty text string.")
         normalized_text = text.upper()
 
-        supported_characters = {str(item) for item in policy.get("supported_characters", [])}
+        supported_characters = {
+            str(item) for item in policy.get("supported_characters", [])
+        }
         if not supported_characters:
             supported_characters = set(supported_glyphs())
         unsupported_characters = sorted(
-            {character for character in normalized_text if character not in supported_characters and character != "\n"}
+            {
+                character
+                for character in normalized_text
+                if character not in supported_characters and character != "\n"
+            }
         )
         if unsupported_characters:
             raise ValueError(
@@ -236,13 +270,17 @@ class DrawRouterMixin:
                 f"{unsupported_characters}; supported: {sorted(supported_characters)}"
             )
 
-        units = str(payload.get("units", policy.get("default_units", "m"))).strip().lower()
+        units = (
+            str(payload.get("units", policy.get("default_units", "m"))).strip().lower()
+        )
         font = payload.get("font") or {}
         if not isinstance(font, dict):
             raise ValueError("draw_text font must be an object.")
         font_type = str(font.get("type", "single_stroke_builtin")).strip().lower()
         if font_type != "single_stroke_builtin":
-            raise ValueError("capability_unavailable: only single_stroke_builtin font is supported.")
+            raise ValueError(
+                "capability_unavailable: only single_stroke_builtin font is supported."
+            )
 
         try:
             workplane = self._resolve_draw_workplane(
@@ -264,8 +302,12 @@ class DrawRouterMixin:
             if height_m <= 0.0:
                 raise DrawingGeometryError("invalid_size: text height must be > 0")
 
-            default_char_spacing = float(policy.get("default_char_spacing_ratio", 0.20)) * height_m
-            default_line_spacing = float(policy.get("default_line_spacing_ratio", 0.50)) * height_m
+            default_char_spacing = (
+                float(policy.get("default_char_spacing_ratio", 0.20)) * height_m
+            )
+            default_line_spacing = (
+                float(policy.get("default_line_spacing_ratio", 0.50)) * height_m
+            )
 
             char_spacing_raw = self._extract_any(
                 payload=payload,
@@ -288,10 +330,20 @@ class DrawRouterMixin:
                 else to_meters(line_spacing_raw, units, field_name="font.line_spacing")
             )
 
-            alignment = str(font.get("alignment", payload.get("alignment", "left"))).strip().lower()
-            direction = str(font.get("direction", payload.get("direction", "+x"))).strip().lower()
+            alignment = (
+                str(font.get("alignment", payload.get("alignment", "left")))
+                .strip()
+                .lower()
+            )
+            direction = (
+                str(font.get("direction", payload.get("direction", "+x")))
+                .strip()
+                .lower()
+            )
             if direction not in {"+x", "x", "local+x"}:
-                raise DrawingGeometryError("capability_unavailable: only +X text direction is supported")
+                raise DrawingGeometryError(
+                    "capability_unavailable: only +X text direction is supported"
+                )
 
             stroke_segments = generate_text_stroke_segments(
                 text=normalized_text,
@@ -301,8 +353,11 @@ class DrawRouterMixin:
                 alignment=alignment,
             )
             if not any(segment.kind == "draw" for segment in stroke_segments):
-                raise DrawingGeometryError("unsupported_font_glyph: text has no drawable glyphs")
+                raise DrawingGeometryError(
+                    "unsupported_font_glyph: text has no drawable glyphs"
+                )
 
+            drawing_cfg = _load_safety_rules().get("drawing", {})
             compiled = compile_strokes_to_commands(
                 strokes=stroke_segments,
                 workplane=workplane,
@@ -313,6 +368,10 @@ class DrawRouterMixin:
                 travel_speed_scale=stroke_config["travel_speed_scale"],
                 plan_only=execution_policy["plan_only"],
                 max_waypoints_per_chunk=int(policy.get("max_waypoints_per_chunk", 80)),
+                use_blended_sequence=bool(
+                    drawing_cfg.get("use_blended_sequence", True)
+                ),
+                blend_radius_m=float(drawing_cfg.get("blend_radius_m", 0.008)),
             )
         except DrawingGeometryError as exc:
             raise ValueError(str(exc)) from exc
@@ -323,7 +382,9 @@ class DrawRouterMixin:
             metadata={
                 "source": "semantic_ir",
                 "macro_name": "draw_text",
-                "requires_current_pose": bool(policy.get("requires_current_pose", False)),
+                "requires_current_pose": bool(
+                    policy.get("requires_current_pose", False)
+                ),
                 "text": normalized_text,
                 "execution_mode": execution_policy["execution_mode"],
                 "summary": dict(compiled.summary),
@@ -342,11 +403,21 @@ class DrawRouterMixin:
             raise ValueError("workplane must be an object.")
 
         supported_modes = {
-            str(item).strip().lower() for item in policy.get("supported_workplane_modes", ["base"])
+            str(item).strip().lower()
+            for item in policy.get("supported_workplane_modes", ["base"])
         }
-        mode = str(
-            workplane_payload.get("mode", payload.get("plane_mode", policy.get("default_workplane_mode", "base")))
-        ).strip().lower()
+        mode = (
+            str(
+                workplane_payload.get(
+                    "mode",
+                    payload.get(
+                        "plane_mode", policy.get("default_workplane_mode", "base")
+                    ),
+                )
+            )
+            .strip()
+            .lower()
+        )
         if mode not in supported_modes:
             raise ValueError(
                 f"missing_workplane: unsupported mode '{mode}'; supported: {sorted(supported_modes)}"
@@ -354,9 +425,13 @@ class DrawRouterMixin:
 
         start_pose = payload.get("start_pose")
         anchor_position: Tuple[float, float, float] | None = None
-        if isinstance(start_pose, dict) and isinstance(start_pose.get("position"), dict):
+        if isinstance(start_pose, dict) and isinstance(
+            start_pose.get("position"), dict
+        ):
             try:
-                anchor_position = parse_position_dict(start_pose["position"], field_name="start_pose.position")
+                anchor_position = parse_position_dict(
+                    start_pose["position"], field_name="start_pose.position"
+                )
             except DrawingGeometryError as exc:
                 raise ValueError(str(exc)) from exc
 
@@ -364,13 +439,17 @@ class DrawRouterMixin:
         if origin_pose is None and mode == "tool" and isinstance(start_pose, dict):
             origin_pose = start_pose
         if origin_pose is None and mode == "explicit_pose":
-            raise ValueError("missing_workplane: explicit_pose requires workplane.origin")
+            raise ValueError(
+                "missing_workplane: explicit_pose requires workplane.origin"
+            )
 
         normal = None
         x_axis_hint = None
         if isinstance(workplane_payload.get("normal"), dict):
             try:
-                normal = parse_vector_dict(workplane_payload["normal"], field_name="workplane.normal")
+                normal = parse_vector_dict(
+                    workplane_payload["normal"], field_name="workplane.normal"
+                )
             except DrawingGeometryError as exc:
                 raise ValueError(str(exc)) from exc
         if isinstance(workplane_payload.get("x_axis_hint"), dict):
@@ -398,10 +477,18 @@ class DrawRouterMixin:
         except DrawingGeometryError as exc:
             raise ValueError(str(exc)) from exc
 
-    def _resolve_execution_policy(self, payload: Dict[str, Any], policy: Dict[str, Any]) -> Dict[str, Any]:
-        execution_mode = str(
-            payload.get("execution_mode", policy.get("default_execution_mode", "execute"))
-        ).strip().lower()
+    def _resolve_execution_policy(
+        self, payload: Dict[str, Any], policy: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        execution_mode = (
+            str(
+                payload.get(
+                    "execution_mode", policy.get("default_execution_mode", "execute")
+                )
+            )
+            .strip()
+            .lower()
+        )
         if execution_mode not in {"execute", "plan_only"}:
             raise ValueError("execution_mode must be one of: execute, plan_only")
 
@@ -432,31 +519,34 @@ class DrawRouterMixin:
         try:
             approach_raw = _field("approach_distance_m", "approach_distance")
             retract_raw = _field("retract_distance_m", "retract_distance")
-            approach_distance_m = (
-                to_meters(
-                    approach_raw if approach_raw is not None else policy.get("approach_distance_m", 0.01),
-                    units,
-                    field_name="stroke.approach_distance",
-                )
+            approach_distance_m = to_meters(
+                approach_raw
+                if approach_raw is not None
+                else policy.get("approach_distance_m", 0.01),
+                units,
+                field_name="stroke.approach_distance",
             )
-            retract_distance_m = (
-                to_meters(
-                    retract_raw if retract_raw is not None else policy.get("retract_distance_m", 0.01),
-                    units,
-                    field_name="stroke.retract_distance",
-                )
+            retract_distance_m = to_meters(
+                retract_raw
+                if retract_raw is not None
+                else policy.get("retract_distance_m", 0.01),
+                units,
+                field_name="stroke.retract_distance",
             )
         except DrawingGeometryError as exc:
             raise ValueError(str(exc)) from exc
 
         drawing_speed_scale = float(
-            _field("drawing_speed_scale") or policy.get("drawing_speed_scale", payload.get("velocity_scale", 0.06))
+            _field("drawing_speed_scale")
+            or policy.get("drawing_speed_scale", payload.get("velocity_scale", 0.06))
         )
         travel_speed_scale = float(
             _field("travel_speed_scale") or policy.get("travel_speed_scale", 0.06)
         )
         if drawing_speed_scale <= 0.0 or travel_speed_scale <= 0.0:
-            raise ValueError("invalid_size: drawing_speed_scale and travel_speed_scale must be > 0")
+            raise ValueError(
+                "invalid_size: drawing_speed_scale and travel_speed_scale must be > 0"
+            )
 
         return {
             "approach_distance_m": approach_distance_m,
@@ -488,7 +578,9 @@ class DrawRouterMixin:
         candidates: Sequence[str],
         error_label: str,
     ) -> float:
-        raw_value = self._extract_any(payload=payload, params=params, candidates=candidates)
+        raw_value = self._extract_any(
+            payload=payload, params=params, candidates=candidates
+        )
         if raw_value is None:
             raise ValueError(f"missing_size: {error_label} is required")
         try:
@@ -507,7 +599,9 @@ class DrawRouterMixin:
         units: str,
         candidates: Sequence[str],
     ) -> float | None:
-        raw_value = self._extract_any(payload=payload, params=params, candidates=candidates)
+        raw_value = self._extract_any(
+            payload=payload, params=params, candidates=candidates
+        )
         if raw_value is None:
             return None
         try:
@@ -544,15 +638,25 @@ class DrawRouterMixin:
             raise ValueError("missing_size: circle radius is required")
         return diameter_m * 0.5
 
-    def _extract_sweep_radians(self, *, payload: Dict[str, Any], params: Mapping[str, Any]) -> float:
-        sweep_rad_raw = self._extract_any(payload=payload, params=params, candidates=("sweep_rad",))
-        sweep_deg_raw = self._extract_any(payload=payload, params=params, candidates=("sweep_deg", "sweep"))
+    def _extract_sweep_radians(
+        self, *, payload: Dict[str, Any], params: Mapping[str, Any]
+    ) -> float:
+        sweep_rad_raw = self._extract_any(
+            payload=payload, params=params, candidates=("sweep_rad",)
+        )
+        sweep_deg_raw = self._extract_any(
+            payload=payload, params=params, candidates=("sweep_deg", "sweep")
+        )
 
         try:
             if sweep_rad_raw is not None:
-                sweep_rad = to_radians(sweep_rad_raw, field_name="arc sweep_rad", units="rad")
+                sweep_rad = to_radians(
+                    sweep_rad_raw, field_name="arc sweep_rad", units="rad"
+                )
             elif sweep_deg_raw is not None:
-                sweep_rad = to_radians(sweep_deg_raw, field_name="arc sweep_deg", units="deg")
+                sweep_rad = to_radians(
+                    sweep_deg_raw, field_name="arc sweep_deg", units="deg"
+                )
             else:
                 sweep_rad = math.radians(180.0)
         except DrawingGeometryError as exc:
@@ -569,13 +673,17 @@ class DrawRouterMixin:
         params: Mapping[str, Any],
         policy: Mapping[str, Any],
     ) -> int:
-        raw_value = self._extract_any(payload=payload, params=params, candidates=("n_sides", "sides"))
+        raw_value = self._extract_any(
+            payload=payload, params=params, candidates=("n_sides", "sides")
+        )
         if raw_value is None:
             raw_value = policy.get("polygon_default_sides", 6)
         try:
             n_sides = int(raw_value)
         except (TypeError, ValueError) as exc:
-            raise ValueError("invalid_polygon_sides: n_sides must be an integer") from exc
+            raise ValueError(
+                "invalid_polygon_sides: n_sides must be an integer"
+            ) from exc
 
         min_sides = int(policy.get("polygon_min_sides", 3))
         max_sides = int(policy.get("polygon_max_sides", 12))
@@ -594,7 +702,9 @@ class DrawRouterMixin:
         candidates: Sequence[str],
         required: bool,
     ) -> List[Tuple[float, float]] | None:
-        raw_points = self._extract_any(payload=payload, params=params, candidates=candidates)
+        raw_points = self._extract_any(
+            payload=payload, params=params, candidates=candidates
+        )
         if raw_points is None:
             if required:
                 raise ValueError("invalid_size: points are required")
@@ -631,7 +741,11 @@ class DrawRouterMixin:
         points = [
             {"x": position["x"], "y": position["y"], "z": position["z"]},
             {"x": position["x"] + size_m, "y": position["y"], "z": position["z"]},
-            {"x": position["x"] + size_m, "y": position["y"] + size_m, "z": position["z"]},
+            {
+                "x": position["x"] + size_m,
+                "y": position["y"] + size_m,
+                "z": position["z"],
+            },
             {"x": position["x"], "y": position["y"] + size_m, "z": position["z"]},
             {"x": position["x"], "y": position["y"], "z": position["z"]},
         ]
@@ -688,11 +802,13 @@ class DrawRouterMixin:
         points: List[Dict[str, float]] = []
         for i in range(segments + 1):
             theta = 2.0 * math.pi * i / segments
-            points.append({
-                "x": center_x - radius * math.cos(theta),
-                "y": center_y + radius * math.sin(theta),
-                "z": sz,
-            })
+            points.append(
+                {
+                    "x": center_x - radius * math.cos(theta),
+                    "y": center_y + radius * math.sin(theta),
+                    "z": sz,
+                }
+            )
         return self._build_cartesian_path_sequence(
             points=points,
             orientation=orientation,
@@ -721,11 +837,13 @@ class DrawRouterMixin:
         points: List[Dict[str, float]] = []
         for i in range(sides + 1):  # +1 to close path
             theta = 2.0 * math.pi * i / sides
-            points.append({
-                "x": center_x - radius * math.cos(theta),
-                "y": center_y + radius * math.sin(theta),
-                "z": sz,
-            })
+            points.append(
+                {
+                    "x": center_x - radius * math.cos(theta),
+                    "y": center_y + radius * math.sin(theta),
+                    "z": sz,
+                }
+            )
         return self._build_cartesian_path_sequence(
             points=points,
             orientation=orientation,
@@ -747,7 +865,11 @@ class DrawRouterMixin:
         points = [
             {"x": position["x"], "y": position["y"], "z": position["z"]},
             {"x": position["x"] + width_m, "y": position["y"], "z": position["z"]},
-            {"x": position["x"] + width_m, "y": position["y"] + height_m, "z": position["z"]},
+            {
+                "x": position["x"] + width_m,
+                "y": position["y"] + height_m,
+                "z": position["z"],
+            },
             {"x": position["x"], "y": position["y"] + height_m, "z": position["z"]},
             {"x": position["x"], "y": position["y"], "z": position["z"]},
         ]
@@ -858,7 +980,9 @@ class DrawRouterMixin:
         return {
             "primitive_type": "CARTESIAN_PATH",
             "reference_frame": reference_frame,
-            "waypoints": [self._pose_from_position(point, orientation) for point in points],
+            "waypoints": [
+                self._pose_from_position(point, orientation) for point in points
+            ],
             **deepcopy(motion_fields),
         }
 

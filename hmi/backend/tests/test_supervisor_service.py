@@ -63,56 +63,62 @@ class FakeSupervisorAdapter:
         self._runtime = RuntimeSnapshot(
             system_state=SystemRuntimeState.NORMAL,
             blocking=False,
-            status_text='Sim telemetry fresh and runtime clear.',
+            status_text="Sim telemetry fresh and runtime clear.",
             mode=RuntimeMode.SIM,
-            robot_status=RobotStatusSnapshot(readiness_message='Sim ready'),
+            robot_status=RobotStatusSnapshot(readiness_message="Sim ready"),
         )
         self._connections = [
-            BridgeConnection(name='ros2', label='ROS 2', health=ConnectionHealth.HEALTHY),
-            BridgeConnection(name='moveit2', label='MoveIt 2', health=ConnectionHealth.HEALTHY),
-            BridgeConnection(name='llm', label='LLM', health=ConnectionHealth.HEALTHY),
-            BridgeConnection(name='motoros2', label='MotoROS2', health=ConnectionHealth.DOWN),
+            BridgeConnection(
+                name="ros2", label="ROS 2", health=ConnectionHealth.HEALTHY
+            ),
+            BridgeConnection(
+                name="moveit2", label="MoveIt 2", health=ConnectionHealth.HEALTHY
+            ),
+            BridgeConnection(name="llm", label="LLM", health=ConnectionHealth.HEALTHY),
+            BridgeConnection(
+                name="motoros2", label="MotoROS2", health=ConnectionHealth.DOWN
+            ),
         ]
         self._joints = [
-            JointPosition(name='joint_1_s', position_deg=0.0),
-            JointPosition(name='joint_2_l', position_deg=5.0),
-            JointPosition(name='joint_3_u', position_deg=10.0),
-            JointPosition(name='joint_4_r', position_deg=15.0),
-            JointPosition(name='joint_5_b', position_deg=20.0),
-            JointPosition(name='joint_6_t', position_deg=25.0),
+            JointPosition(name="joint_1_s", position_deg=0.0),
+            JointPosition(name="joint_2_l", position_deg=5.0),
+            JointPosition(name="joint_3_u", position_deg=10.0),
+            JointPosition(name="joint_4_r", position_deg=15.0),
+            JointPosition(name="joint_5_b", position_deg=20.0),
+            JointPosition(name="joint_6_t", position_deg=25.0),
         ]
         self._source_statuses = [
             TelemetrySourceSnapshot(
-                name='gateway_status',
-                label='Gateway status',
-                topic='/gateway_status',
+                name="gateway_status",
+                label="Gateway status",
+                topic="/gateway_status",
                 last_seen_at=None,
                 freshness_threshold_sec=30.0,
                 freshness_state=TelemetryFreshnessState.FRESH,
                 active=True,
             ),
             TelemetrySourceSnapshot(
-                name='readiness',
-                label='HW readiness',
-                topic='/hw_adapter/ready',
+                name="readiness",
+                label="HW readiness",
+                topic="/hw_adapter/ready",
                 last_seen_at=None,
                 freshness_threshold_sec=3.0,
                 freshness_state=TelemetryFreshnessState.FRESH,
                 active=True,
             ),
             TelemetrySourceSnapshot(
-                name='supervisor_alerts',
-                label='Supervisor alerts',
-                topic='/supervisor/alerts',
+                name="supervisor_alerts",
+                label="Supervisor alerts",
+                topic="/supervisor/alerts",
                 last_seen_at=None,
                 freshness_threshold_sec=5.0,
                 freshness_state=TelemetryFreshnessState.FRESH,
                 active=True,
             ),
             TelemetrySourceSnapshot(
-                name='joint_states_fallback',
-                label='Joint states fallback',
-                topic='/joint_states',
+                name="joint_states_fallback",
+                label="Joint states fallback",
+                topic="/joint_states",
                 last_seen_at=None,
                 freshness_threshold_sec=3.0,
                 freshness_state=TelemetryFreshnessState.FRESH,
@@ -120,28 +126,28 @@ class FakeSupervisorAdapter:
                 active=True,
             ),
             TelemetrySourceSnapshot(
-                name='robot_status',
-                label='Robot status',
-                topic='/yaskawa/robot_status',
+                name="robot_status",
+                label="Robot status",
+                topic="/yaskawa/robot_status",
                 last_seen_at=None,
                 freshness_threshold_sec=3.0,
                 freshness_state=TelemetryFreshnessState.STALE,
                 active=False,
-                detail='SIM mode uses /hw_adapter/ready instead.',
+                detail="SIM mode uses /hw_adapter/ready instead.",
             ),
             TelemetrySourceSnapshot(
-                name='llm_debug',
-                label='LLM debug',
-                topic='/llm_debug',
+                name="llm_debug",
+                label="LLM debug",
+                topic="/llm_debug",
                 last_seen_at=None,
                 freshness_threshold_sec=30.0,
                 freshness_state=TelemetryFreshnessState.STALE,
                 active=False,
             ),
             TelemetrySourceSnapshot(
-                name='llm_command',
-                label='LLM command echo',
-                topic='/llm_command',
+                name="llm_command",
+                label="LLM command echo",
+                topic="/llm_command",
                 last_seen_at=None,
                 freshness_threshold_sec=30.0,
                 freshness_state=TelemetryFreshnessState.STALE,
@@ -149,23 +155,23 @@ class FakeSupervisorAdapter:
             ),
         ]
         self._confirm_result = {
-            'accepted': True,
-            'adapter': 'workspace_ros_adapter',
-            'status': 'succeeded',
-            'summary': 'Sim execution completed successfully.',
-            'dispatchedToRos': True,
+            "accepted": True,
+            "adapter": "workspace_ros_adapter",
+            "status": "succeeded",
+            "summary": "Sim execution completed successfully.",
+            "dispatchedToRos": True,
         }
         self._preflight_result = {
-            'accepted': True,
-            'mode': 'sim',
-            'reasons': [],
-            'requiredSources': [],
-            'sourceStatuses': [],
-            'runtimeState': 'NORMAL',
+            "accepted": True,
+            "mode": "sim",
+            "reasons": [],
+            "requiredSources": [],
+            "sourceStatuses": [],
+            "runtimeState": "NORMAL",
         }
         self._current_pose: dict[str, Any] | None = {
-            'position': {'x': 0.30, 'y': 0.00, 'z': 0.30},
-            'orientation': {'x': 0.0, 'y': 1.0, 'z': 0.0, 'w': 0.0},
+            "position": {"x": 0.30, "y": 0.00, "z": 0.30},
+            "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
         }
 
     def start(self) -> None:
@@ -188,46 +194,53 @@ class FakeSupervisorAdapter:
 
     def submit_text_for_review(self, **kwargs):
         self.submit_calls.append(kwargs)
-        return {'accepted': True, 'adapter': 'fake-review'}
+        return {"accepted": True, "adapter": "fake-review"}
 
     def confirm_command(self, **kwargs):
         self.confirm_calls.append(kwargs)
         response = dict(self._confirm_result)
-        response.update({
-            'commandId': kwargs['command_id'],
-            'planFingerprint': kwargs['plan_fingerprint'],
-            'correlationId': kwargs['correlation_id'],
-        })
+        response.update(
+            {
+                "commandId": kwargs["command_id"],
+                "planFingerprint": kwargs["plan_fingerprint"],
+                "correlationId": kwargs["correlation_id"],
+            }
+        )
         return response
 
     def evaluate_execution_preflight(self, *, target_mode: str | None = None):
         result = dict(self._preflight_result)
         if target_mode is not None:
-            result['mode'] = target_mode
+            result["mode"] = target_mode
         return result
 
     def abort_command(self, **kwargs):
         self.abort_calls.append(kwargs)
-        return True, 'cancelled before ROS dispatch'
+        return True, "cancelled before ROS dispatch"
 
-    def get_current_pose(self, *, reference_frame: str = 'base_link') -> dict[str, Any] | None:
-        self.get_pose_calls.append({'reference_frame': reference_frame})
+    def get_current_pose(
+        self, *, reference_frame: str = "base_link"
+    ) -> dict[str, Any] | None:
+        self.get_pose_calls.append({"reference_frame": reference_frame})
         if self._current_pose is None:
             return None
         return deepcopy(self._current_pose)
 
-    def set_runtime(self, system_state: SystemRuntimeState, *, mode: RuntimeMode = RuntimeMode.SIM) -> None:
+    def set_runtime(
+        self, system_state: SystemRuntimeState, *, mode: RuntimeMode = RuntimeMode.SIM
+    ) -> None:
         self._runtime = RuntimeSnapshot(
             system_state=system_state,
-            blocking=system_state in {
+            blocking=system_state
+            in {
                 SystemRuntimeState.FAULT,
                 SystemRuntimeState.ESTOP,
                 SystemRuntimeState.LOST_CONN,
                 SystemRuntimeState.SAFETY_BLOCKED,
             },
-            status_text=f'Runtime set to {system_state.value}.',
+            status_text=f"Runtime set to {system_state.value}.",
             mode=mode,
-            robot_status=RobotStatusSnapshot(readiness_message='fixture'),
+            robot_status=RobotStatusSnapshot(readiness_message="fixture"),
         )
 
     def set_source_freshness(self, *, stale_names: set[str]) -> None:
@@ -241,7 +254,9 @@ class FakeSupervisorAdapter:
                     last_seen_at=source.last_seen_at,
                     freshness_threshold_sec=source.freshness_threshold_sec,
                     freshness_state=(
-                        TelemetryFreshnessState.STALE if source.name in stale_names else source.freshness_state
+                        TelemetryFreshnessState.STALE
+                        if source.name in stale_names
+                        else source.freshness_state
                     ),
                     preferred=source.preferred,
                     active=source.active,
@@ -255,12 +270,12 @@ class FakeSupervisorAdapter:
 
     def set_preflight(self, *, accepted: bool, reasons: list[str]) -> None:
         self._preflight_result = {
-            'accepted': accepted,
-            'mode': self._runtime.mode.value,
-            'reasons': list(reasons),
-            'requiredSources': [],
-            'sourceStatuses': [],
-            'runtimeState': self._runtime.system_state.value,
+            "accepted": accepted,
+            "mode": self._runtime.mode.value,
+            "reasons": list(reasons),
+            "requiredSources": [],
+            "sourceStatuses": [],
+            "runtimeState": self._runtime.system_state.value,
         }
 
     def set_current_pose(self, pose: dict[str, Any] | None) -> None:
@@ -271,7 +286,7 @@ class SupervisorServiceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
-        self.audit = AuditService(Path(self.temp_dir.name) / 'audit.sqlite3')
+        self.audit = AuditService(Path(self.temp_dir.name) / "audit.sqlite3")
         self.session_lock = SessionLockService()
         self.adapter = FakeSupervisorAdapter()
         self.telemetry = TelemetryBridgeService(
@@ -287,8 +302,8 @@ class SupervisorServiceTests(unittest.TestCase):
             confirmation_window_sec=5.0,
         )
         self.supervisor.bind_telemetry_service(self.telemetry)
-        self.session_id = 'session-a'
-        self.operator_id = 'operator-a'
+        self.session_id = "session-a"
+        self.operator_id = "operator-a"
 
     def _acquire_lease(self) -> str:
         lease = self.session_lock.acquire_controller(self.session_id, self.operator_id)
@@ -303,8 +318,8 @@ class SupervisorServiceTests(unittest.TestCase):
                 session_id=self.session_id,
                 operator_id=self.operator_id,
                 lease_token=None,
-                raw_text='home',
-                mode='sim',
+                raw_text="home",
+                mode="sim",
             )
 
     def test_command_rejected_for_blocking_runtime_states(self) -> None:
@@ -321,12 +336,12 @@ class SupervisorServiceTests(unittest.TestCase):
                     session_id=self.session_id,
                     operator_id=self.operator_id,
                     lease_token=lease_token,
-                    raw_text='home',
-                    mode='sim',
+                    raw_text="home",
+                    mode="sim",
                 )
-                self.assertFalse(response['accepted'])
-                self.assertEqual(response['command']['lifecycleState'], 'REJECTED')
-                self.assertIn(runtime_state.value, response['reason'])
+                self.assertFalse(response["accepted"])
+                self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
+                self.assertIn(runtime_state.value, response["reason"])
                 self.assertEqual(self.adapter.confirm_calls, [])
                 self.adapter.set_runtime(SystemRuntimeState.NORMAL)
 
@@ -336,11 +351,11 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='draw a dragon on the table',
-            mode='sim',
+            raw_text="draw a dragon on the table",
+            mode="sim",
         )
-        self.assertFalse(response['accepted'])
-        self.assertEqual(response['command']['lifecycleState'], 'REJECTED')
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
         self.assertEqual(self.adapter.confirm_calls, [])
 
     def test_cartesian_text_intent_uses_base_link_for_sim_move_rel(self) -> None:
@@ -349,12 +364,15 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='move up 10 cm',
-            mode='sim',
+            raw_text="move up 10 cm",
+            mode="sim",
         )
-        self.assertTrue(response['accepted'])
-        self.assertEqual(response['command']['parsedIntent']['action'], 'MOVE_REL')
-        self.assertEqual(response['command']['parsedIntent']['normalizedCommand']['reference_frame'], 'base_link')
+        self.assertTrue(response["accepted"])
+        self.assertEqual(response["command"]["parsedIntent"]["action"], "MOVE_REL")
+        self.assertEqual(
+            response["command"]["parsedIntent"]["normalizedCommand"]["reference_frame"],
+            "base_link",
+        )
 
     def test_cartesian_text_intent_accepts_meters_but_summarizes_mm(self) -> None:
         lease_token = self._acquire_lease()
@@ -362,15 +380,17 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='move up 0.1 m',
-            mode='sim',
+            raw_text="move up 0.1 m",
+            mode="sim",
         )
 
-        self.assertTrue(response['accepted'])
-        normalized_command = response['command']['parsedIntent']['normalizedCommand']
-        self.assertEqual(normalized_command['primitive_type'], 'MOVE_REL')
-        self.assertAlmostEqual(normalized_command['delta_z'], 0.1)
-        self.assertIn('dz=100.0 mm', response['command']['parsedIntent']['targetSummary'])
+        self.assertTrue(response["accepted"])
+        normalized_command = response["command"]["parsedIntent"]["normalizedCommand"]
+        self.assertEqual(normalized_command["primitive_type"], "MOVE_REL")
+        self.assertAlmostEqual(normalized_command["delta_z"], 0.1)
+        self.assertIn(
+            "dz=100.0 mm", response["command"]["parsedIntent"]["targetSummary"]
+        )
 
     def test_joint_text_intent_maps_to_absolute_joint_target(self) -> None:
         lease_token = self._acquire_lease()
@@ -378,14 +398,16 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='move joint 2 5 deg',
-            mode='sim',
+            raw_text="move joint 2 5 deg",
+            mode="sim",
         )
-        self.assertTrue(response['accepted'])
-        normalized_command = response['command']['parsedIntent']['normalizedCommand']
-        self.assertEqual(normalized_command['primitive_type'], 'MOVE_JOINT')
-        self.assertEqual(normalized_command['joint_index'], 1)
-        self.assertAlmostEqual(normalized_command['joint_angle'], 5.0 * 3.141592653589793 / 180.0)
+        self.assertTrue(response["accepted"])
+        normalized_command = response["command"]["parsedIntent"]["normalizedCommand"]
+        self.assertEqual(normalized_command["primitive_type"], "MOVE_JOINT")
+        self.assertEqual(normalized_command["joint_index"], 1)
+        self.assertAlmostEqual(
+            normalized_command["joint_angle"], 5.0 * 3.141592653589793 / 180.0
+        )
 
     def test_signed_joint_text_intent_maps_to_relative_joint_target(self) -> None:
         lease_token = self._acquire_lease()
@@ -393,26 +415,30 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='move joint 2 +5 deg',
-            mode='sim',
+            raw_text="move joint 2 +5 deg",
+            mode="sim",
         )
-        self.assertTrue(response['accepted'])
-        normalized_command = response['command']['parsedIntent']['normalizedCommand']
-        self.assertEqual(normalized_command['primitive_type'], 'MOVE_JOINT')
-        self.assertEqual(normalized_command['joint_index'], 1)
-        self.assertAlmostEqual(normalized_command['joint_angle'], 10.0 * 3.141592653589793 / 180.0)
+        self.assertTrue(response["accepted"])
+        normalized_command = response["command"]["parsedIntent"]["normalizedCommand"]
+        self.assertEqual(normalized_command["primitive_type"], "MOVE_JOINT")
+        self.assertEqual(normalized_command["joint_index"], 1)
+        self.assertAlmostEqual(
+            normalized_command["joint_angle"], 10.0 * 3.141592653589793 / 180.0
+        )
 
-    def test_confirmation_required_command_stops_before_execution_boundary(self) -> None:
+    def test_confirmation_required_command_stops_before_execution_boundary(
+        self,
+    ) -> None:
         lease_token = self._acquire_lease()
         response = self.supervisor.submit_intent(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='sim',
+            raw_text="home",
+            mode="sim",
         )
-        self.assertTrue(response['accepted'])
-        self.assertEqual(response['command']['lifecycleState'], 'NEEDS_CONFIRMATION')
+        self.assertTrue(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "NEEDS_CONFIRMATION")
         self.assertEqual(self.adapter.confirm_calls, [])
 
     def test_sim_auto_confirm_executes_immediately_when_enabled(self) -> None:
@@ -429,27 +455,27 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='sim',
+            raw_text="home",
+            mode="sim",
         )
-        self.assertTrue(response['accepted'])
-        self.assertEqual(response['command']['lifecycleState'], 'SUCCEEDED')
-        self.assertEqual(response['command']['finalState'], 'SUCCEEDED')
+        self.assertTrue(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "SUCCEEDED")
+        self.assertEqual(response["command"]["finalState"], "SUCCEEDED")
         self.assertEqual(len(self.adapter.confirm_calls), 1)
 
     def test_stale_critical_telemetry_rejects_execution_path(self) -> None:
         lease_token = self._acquire_lease()
-        self.adapter.set_source_freshness(stale_names={'joint_states_fallback'})
+        self.adapter.set_source_freshness(stale_names={"joint_states_fallback"})
         response = self.supervisor.submit_intent(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='sim',
+            raw_text="home",
+            mode="sim",
         )
-        self.assertFalse(response['accepted'])
-        self.assertEqual(response['command']['lifecycleState'], 'REJECTED')
-        self.assertIn('joint_states_fallback', response['reason'])
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
+        self.assertIn("joint_states_fallback", response["reason"])
 
     def test_hardware_mode_requires_dual_gate_before_command_ingress(self) -> None:
         lease_token = self._acquire_lease()
@@ -458,12 +484,12 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='hardware',
+            raw_text="home",
+            mode="hardware",
         )
-        self.assertFalse(response['accepted'])
-        self.assertEqual(response['command']['lifecycleState'], 'REJECTED')
-        self.assertIn('HMI_ENABLE_HARDWARE_COMMANDS', response['reason'])
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
+        self.assertIn("HMI_ENABLE_HARDWARE_COMMANDS", response["reason"])
 
     def test_hardware_mode_allows_command_when_gate_and_preflight_pass(self) -> None:
         supervisor = SupervisorService(
@@ -481,45 +507,47 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='hardware',
+            raw_text="home",
+            mode="hardware",
         )
-        self.assertTrue(response['accepted'])
-        self.assertEqual(response['command']['lifecycleState'], 'NEEDS_CONFIRMATION')
-        self.assertEqual(response['command']['mode'], 'hardware')
+        self.assertTrue(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "NEEDS_CONFIRMATION")
+        self.assertEqual(response["command"]["mode"], "hardware")
 
-    def test_missing_structured_fields_fail_closed_with_operator_visible_reason(self) -> None:
+    def test_missing_structured_fields_fail_closed_with_operator_visible_reason(
+        self,
+    ) -> None:
         lease_token = self._acquire_lease()
         response = self.supervisor.submit_intent(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='',
+            raw_text="",
             structured_intent={
-                'primitive_type': 'MOVE_JOINT',
-                'joint_index': 1,
+                "primitive_type": "MOVE_JOINT",
+                "joint_index": 1,
             },
-            mode='sim',
+            mode="sim",
         )
-        self.assertFalse(response['accepted'])
-        self.assertEqual(response['command']['lifecycleState'], 'REJECTED')
-        self.assertIn('joint_angle', response['reason'])
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
+        self.assertIn("joint_angle", response["reason"])
 
     def test_preflight_failures_reject_command_with_explicit_reason(self) -> None:
         lease_token = self._acquire_lease()
         self.adapter.set_preflight(
             accepted=False,
-            reasons=['required telemetry source joint_states_fallback is stale.'],
+            reasons=["required telemetry source joint_states_fallback is stale."],
         )
         response = self.supervisor.submit_intent(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='sim',
+            raw_text="home",
+            mode="sim",
         )
-        self.assertFalse(response['accepted'])
-        self.assertIn('joint_states_fallback', response['reason'])
+        self.assertFalse(response["accepted"])
+        self.assertIn("joint_states_fallback", response["reason"])
 
     def test_confirmation_expires_correctly(self) -> None:
         lease_token = self._acquire_lease()
@@ -527,14 +555,14 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='sim',
+            raw_text="home",
+            mode="sim",
         )
-        command_id = response['commandId']
+        command_id = response["commandId"]
         command = self.supervisor._commands[command_id]
         command.confirmation_expires_at = command.created_at
         expired = self.supervisor.get_command(command_id)
-        self.assertEqual(expired['lifecycleState'], 'EXPIRED')
+        self.assertEqual(expired["lifecycleState"], "EXPIRED")
 
     def test_mismatched_plan_fingerprint_and_session_fail_closed(self) -> None:
         lease_token = self._acquire_lease()
@@ -542,48 +570,52 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='sim',
+            raw_text="home",
+            mode="sim",
         )
-        command_id = response['commandId']
+        command_id = response["commandId"]
         with self.assertRaises(ConflictError):
             self.supervisor.confirm_command(
                 session_id=self.session_id,
                 operator_id=self.operator_id,
                 lease_token=lease_token,
                 command_id=command_id,
-                plan_fingerprint='wrong-fingerprint',
+                plan_fingerprint="wrong-fingerprint",
             )
-        other_lease = self.session_lock.acquire_controller('session-b', 'operator-b', force_takeover=True, takeover_reason='test')
+        other_lease = self.session_lock.acquire_controller(
+            "session-b", "operator-b", force_takeover=True, takeover_reason="test"
+        )
         with self.assertRaises(ForbiddenActionError):
             self.supervisor.cancel_command(
-                session_id='session-b',
-                operator_id='operator-b',
+                session_id="session-b",
+                operator_id="operator-b",
                 lease_token=other_lease.lease_token,
                 command_id=command_id,
-                reason='forbidden',
+                reason="forbidden",
             )
 
-    def test_confirmed_command_reaches_execution_boundary_only_after_checks(self) -> None:
+    def test_confirmed_command_reaches_execution_boundary_only_after_checks(
+        self,
+    ) -> None:
         lease_token = self._acquire_lease()
         response = self.supervisor.submit_intent(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='move up 10 cm',
-            mode='sim',
+            raw_text="move up 10 cm",
+            mode="sim",
         )
         confirm_response = self.supervisor.confirm_command(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            command_id=response['commandId'],
-            plan_fingerprint=response['command']['planFingerprint'],
+            command_id=response["commandId"],
+            plan_fingerprint=response["command"]["planFingerprint"],
         )
-        self.assertTrue(confirm_response['accepted'])
+        self.assertTrue(confirm_response["accepted"])
         self.assertEqual(len(self.adapter.confirm_calls), 1)
-        self.assertEqual(confirm_response['command']['lifecycleState'], 'SUCCEEDED')
-        self.assertEqual(confirm_response['command']['finalState'], 'SUCCEEDED')
+        self.assertEqual(confirm_response["command"]["lifecycleState"], "SUCCEEDED")
+        self.assertEqual(confirm_response["command"]["finalState"], "SUCCEEDED")
 
     def test_get_pose_uses_query_service_without_motion_execution(self) -> None:
         lease_token = self._acquire_lease()
@@ -591,31 +623,33 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='get pose',
-            mode='sim',
+            raw_text="get pose",
+            mode="sim",
         )
 
-        self.assertTrue(response['accepted'])
-        self.assertEqual(response['command']['lifecycleState'], 'SUCCEEDED')
-        self.assertEqual(response['command']['finalState'], 'SUCCEEDED')
+        self.assertTrue(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "SUCCEEDED")
+        self.assertEqual(response["command"]["finalState"], "SUCCEEDED")
         self.assertEqual(self.adapter.confirm_calls, [])
-        self.assertEqual(self.adapter.get_pose_calls, [{'reference_frame': 'base_link'}])
-        self.assertTrue(response['command']['executionResult']['queryOnly'])
         self.assertEqual(
-            response['command']['executionResult']['pose'],
+            self.adapter.get_pose_calls, [{"reference_frame": "base_link"}]
+        )
+        self.assertTrue(response["command"]["executionResult"]["queryOnly"])
+        self.assertEqual(
+            response["command"]["executionResult"]["pose"],
             {
-                'position': {'x': 0.30, 'y': 0.00, 'z': 0.30},
-                'orientation': {'x': 0.0, 'y': 1.0, 'z': 0.0, 'w': 0.0},
+                "position": {"x": 0.30, "y": 0.00, "z": 0.30},
+                "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
             },
         )
         self.assertEqual(
-            response['command']['executionResult']['poseMm'],
+            response["command"]["executionResult"]["poseMm"],
             {
-                'position': {'x': 300.0, 'y': 0.0, 'z': 300.0},
-                'orientation': {'x': 0.0, 'y': 1.0, 'z': 0.0, 'w': 0.0},
+                "position": {"x": 300.0, "y": 0.0, "z": 300.0},
+                "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
             },
         )
-        self.assertIn('x=300.0 mm', response['command']['executionResult']['summary'])
+        self.assertIn("x=300.0 mm", response["command"]["executionResult"]["summary"])
 
     def test_get_pose_completes_as_read_only_query_during_submit(self) -> None:
         lease_token = self._acquire_lease()
@@ -623,36 +657,38 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='get pose',
-            mode='sim',
+            raw_text="get pose",
+            mode="sim",
         )
 
-        self.assertTrue(response['accepted'])
-        self.assertEqual(response['command']['lifecycleState'], 'SUCCEEDED')
-        self.assertEqual(response['command']['finalState'], 'SUCCEEDED')
-        self.assertIsNone(response['command']['confirmationExpiresAt'])
+        self.assertTrue(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "SUCCEEDED")
+        self.assertEqual(response["command"]["finalState"], "SUCCEEDED")
+        self.assertIsNone(response["command"]["confirmationExpiresAt"])
         self.assertEqual(self.adapter.confirm_calls, [])
-        self.assertEqual(self.adapter.get_pose_calls, [{'reference_frame': 'base_link'}])
-        self.assertTrue(response['command']['executionResult']['queryOnly'])
-        self.assertEqual(response['command']['executionResult']['status'], 'succeeded')
+        self.assertEqual(
+            self.adapter.get_pose_calls, [{"reference_frame": "base_link"}]
+        )
+        self.assertTrue(response["command"]["executionResult"]["queryOnly"])
+        self.assertEqual(response["command"]["executionResult"]["status"], "succeeded")
 
     def test_pose_query_execution_result_matches_api_contract(self) -> None:
         CommandExecutionResultModel.model_validate(
             {
-                'accepted': True,
-                'adapter': 'workspace_ros_adapter',
-                'status': 'succeeded',
-                'summary': 'GET_POSE result: x=300.0 mm, y=0.0 mm, z=300.0 mm in base_link.',
-                'dispatchedToRos': False,
-                'queryOnly': True,
-                'referenceFrame': 'base_link',
-                'pose': {
-                    'position': {'x': 0.30, 'y': 0.00, 'z': 0.30},
-                    'orientation': {'x': 0.0, 'y': 1.0, 'z': 0.0, 'w': 0.0},
+                "accepted": True,
+                "adapter": "workspace_ros_adapter",
+                "status": "succeeded",
+                "summary": "GET_POSE result: x=300.0 mm, y=0.0 mm, z=300.0 mm in base_link.",
+                "dispatchedToRos": False,
+                "queryOnly": True,
+                "referenceFrame": "base_link",
+                "pose": {
+                    "position": {"x": 0.30, "y": 0.00, "z": 0.30},
+                    "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
                 },
-                'poseMm': {
-                    'position': {'x': 300.0, 'y': 0.0, 'z': 300.0},
-                    'orientation': {'x': 0.0, 'y': 1.0, 'z': 0.0, 'w': 0.0},
+                "poseMm": {
+                    "position": {"x": 300.0, "y": 0.0, "z": 300.0},
+                    "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
                 },
             }
         )
@@ -663,13 +699,13 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='draw a dragon on the table',
-            mode='sim',
+            raw_text="draw a dragon on the table",
+            mode="sim",
         )
-        self.assertFalse(response['accepted'])
-        self.assertEqual(response['command']['lifecycleState'], 'REJECTED')
-        self.assertEqual(response['command']['finalState'], 'REJECTED')
-        self.assertIsNotNone(response['command']['rejectReason'])
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
+        self.assertEqual(response["command"]["finalState"], "REJECTED")
+        self.assertIsNotNone(response["command"]["rejectReason"])
 
     def test_expired_command_event_carries_terminal_fields(self) -> None:
         lease_token = self._acquire_lease()
@@ -677,16 +713,16 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='sim',
+            raw_text="home",
+            mode="sim",
         )
-        command_id = response['commandId']
+        command_id = response["commandId"]
         command = self.supervisor._commands[command_id]
         command.confirmation_expires_at = command.created_at
         expired = self.supervisor.get_command(command_id)
-        self.assertEqual(expired['lifecycleState'], 'EXPIRED')
-        self.assertEqual(expired['finalState'], 'EXPIRED')
-        self.assertEqual(expired['rejectReason'], 'confirmation window expired')
+        self.assertEqual(expired["lifecycleState"], "EXPIRED")
+        self.assertEqual(expired["finalState"], "EXPIRED")
+        self.assertEqual(expired["rejectReason"], "confirmation window expired")
 
     def test_cancelled_command_event_carries_terminal_fields(self) -> None:
         lease_token = self._acquire_lease()
@@ -694,74 +730,82 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='sim',
+            raw_text="home",
+            mode="sim",
         )
         cancel_response = self.supervisor.cancel_command(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            command_id=response['commandId'],
-            reason='operator cancelled review',
+            command_id=response["commandId"],
+            reason="operator cancelled review",
         )
-        self.assertTrue(cancel_response['accepted'])
-        self.assertEqual(cancel_response['command']['lifecycleState'], 'CANCELLED')
-        self.assertEqual(cancel_response['command']['finalState'], 'CANCELLED')
-        self.assertEqual(cancel_response['command']['rejectReason'], 'operator cancelled review')
+        self.assertTrue(cancel_response["accepted"])
+        self.assertEqual(cancel_response["command"]["lifecycleState"], "CANCELLED")
+        self.assertEqual(cancel_response["command"]["finalState"], "CANCELLED")
+        self.assertEqual(
+            cancel_response["command"]["rejectReason"], "operator cancelled review"
+        )
 
     def test_failed_command_event_carries_terminal_fields(self) -> None:
         lease_token = self._acquire_lease()
         self.adapter.set_confirm_result(
             accepted=False,
-            status='failed',
-            summary='ExecuteMotion failed inside fake adapter.',
+            status="failed",
+            summary="ExecuteMotion failed inside fake adapter.",
             dispatchedToRos=True,
         )
         response = self.supervisor.submit_intent(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='move up 10 cm',
-            mode='sim',
+            raw_text="move up 10 cm",
+            mode="sim",
         )
         confirm_response = self.supervisor.confirm_command(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            command_id=response['commandId'],
-            plan_fingerprint=response['command']['planFingerprint'],
+            command_id=response["commandId"],
+            plan_fingerprint=response["command"]["planFingerprint"],
         )
-        self.assertFalse(confirm_response['accepted'])
-        self.assertEqual(confirm_response['command']['lifecycleState'], 'FAILED')
-        self.assertEqual(confirm_response['command']['finalState'], 'FAILED')
-        self.assertEqual(confirm_response['command']['rejectReason'], 'ExecuteMotion failed inside fake adapter.')
+        self.assertFalse(confirm_response["accepted"])
+        self.assertEqual(confirm_response["command"]["lifecycleState"], "FAILED")
+        self.assertEqual(confirm_response["command"]["finalState"], "FAILED")
+        self.assertEqual(
+            confirm_response["command"]["rejectReason"],
+            "ExecuteMotion failed inside fake adapter.",
+        )
 
     def test_cancelled_execution_event_carries_terminal_fields(self) -> None:
         lease_token = self._acquire_lease()
         self.adapter.set_confirm_result(
             accepted=False,
-            status='cancelled',
-            summary='Execution was cancelled by operator.',
+            status="cancelled",
+            summary="Execution was cancelled by operator.",
             dispatchedToRos=True,
         )
         response = self.supervisor.submit_intent(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='move up 10 cm',
-            mode='sim',
+            raw_text="move up 10 cm",
+            mode="sim",
         )
         confirm_response = self.supervisor.confirm_command(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            command_id=response['commandId'],
-            plan_fingerprint=response['command']['planFingerprint'],
+            command_id=response["commandId"],
+            plan_fingerprint=response["command"]["planFingerprint"],
         )
-        self.assertFalse(confirm_response['accepted'])
-        self.assertEqual(confirm_response['command']['lifecycleState'], 'CANCELLED')
-        self.assertEqual(confirm_response['command']['finalState'], 'CANCELLED')
-        self.assertEqual(confirm_response['command']['rejectReason'], 'Execution was cancelled by operator.')
+        self.assertFalse(confirm_response["accepted"])
+        self.assertEqual(confirm_response["command"]["lifecycleState"], "CANCELLED")
+        self.assertEqual(confirm_response["command"]["finalState"], "CANCELLED")
+        self.assertEqual(
+            confirm_response["command"]["rejectReason"],
+            "Execution was cancelled by operator.",
+        )
 
     def test_succeeded_terminal_event_carries_final_state(self) -> None:
         lease_token = self._acquire_lease()
@@ -769,66 +813,70 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='sim',
+            raw_text="home",
+            mode="sim",
         )
         confirm_response = self.supervisor.confirm_command(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            command_id=response['commandId'],
-            plan_fingerprint=response['command']['planFingerprint'],
+            command_id=response["commandId"],
+            plan_fingerprint=response["command"]["planFingerprint"],
         )
-        self.assertTrue(confirm_response['accepted'])
-        self.assertEqual(confirm_response['command']['lifecycleState'], 'SUCCEEDED')
-        self.assertEqual(confirm_response['command']['finalState'], 'SUCCEEDED')
-        self.assertIsNone(confirm_response['command']['rejectReason'])
+        self.assertTrue(confirm_response["accepted"])
+        self.assertEqual(confirm_response["command"]["lifecycleState"], "SUCCEEDED")
+        self.assertEqual(confirm_response["command"]["finalState"], "SUCCEEDED")
+        self.assertIsNone(confirm_response["command"]["rejectReason"])
 
-    def test_nonaccepted_confirmation_gate_does_not_expose_false_terminal_state(self) -> None:
+    def test_nonaccepted_confirmation_gate_does_not_expose_false_terminal_state(
+        self,
+    ) -> None:
         lease_token = self._acquire_lease()
         response = self.supervisor.submit_intent(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='sim',
+            raw_text="home",
+            mode="sim",
         )
-        self.adapter.set_source_freshness(stale_names={'joint_states_fallback'})
+        self.adapter.set_source_freshness(stale_names={"joint_states_fallback"})
         confirm_response = self.supervisor.confirm_command(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            command_id=response['commandId'],
-            plan_fingerprint=response['command']['planFingerprint'],
+            command_id=response["commandId"],
+            plan_fingerprint=response["command"]["planFingerprint"],
         )
-        self.assertFalse(confirm_response['accepted'])
-        self.assertEqual(confirm_response['command']['lifecycleState'], 'NEEDS_CONFIRMATION')
-        self.assertIsNone(confirm_response['command']['finalState'])
+        self.assertFalse(confirm_response["accepted"])
+        self.assertEqual(
+            confirm_response["command"]["lifecycleState"], "NEEDS_CONFIRMATION"
+        )
+        self.assertIsNone(confirm_response["command"]["finalState"])
 
     def test_execution_adapter_failure_marks_command_failed(self) -> None:
         lease_token = self._acquire_lease()
         self.adapter.set_confirm_result(
             accepted=False,
-            status='failed',
-            summary='ExecuteMotion failed inside fake adapter.',
+            status="failed",
+            summary="ExecuteMotion failed inside fake adapter.",
             dispatchedToRos=True,
         )
         response = self.supervisor.submit_intent(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='move up 10 cm',
-            mode='sim',
+            raw_text="move up 10 cm",
+            mode="sim",
         )
         confirm_response = self.supervisor.confirm_command(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            command_id=response['commandId'],
-            plan_fingerprint=response['command']['planFingerprint'],
+            command_id=response["commandId"],
+            plan_fingerprint=response["command"]["planFingerprint"],
         )
-        self.assertFalse(confirm_response['accepted'])
-        self.assertEqual(confirm_response['command']['lifecycleState'], 'FAILED')
+        self.assertFalse(confirm_response["accepted"])
+        self.assertEqual(confirm_response["command"]["lifecycleState"], "FAILED")
 
     def test_cancel_works_for_pending_commands(self) -> None:
         lease_token = self._acquire_lease()
@@ -836,18 +884,18 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='sim',
+            raw_text="home",
+            mode="sim",
         )
         cancel_response = self.supervisor.cancel_command(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            command_id=response['commandId'],
-            reason='operator cancelled review',
+            command_id=response["commandId"],
+            reason="operator cancelled review",
         )
-        self.assertTrue(cancel_response['accepted'])
-        self.assertEqual(cancel_response['command']['lifecycleState'], 'CANCELLED')
+        self.assertTrue(cancel_response["accepted"])
+        self.assertEqual(cancel_response["command"]["lifecycleState"], "CANCELLED")
         self.assertEqual(self.adapter.abort_calls, [])
 
     def test_audit_trail_records_major_transitions(self) -> None:
@@ -856,35 +904,35 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='sim',
+            raw_text="home",
+            mode="sim",
         )
         self.supervisor.confirm_command(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            command_id=response['commandId'],
-            plan_fingerprint=response['command']['planFingerprint'],
+            command_id=response["commandId"],
+            plan_fingerprint=response["command"]["planFingerprint"],
         )
-        detail = self.audit.get_command_detail(response['commandId'])
+        detail = self.audit.get_command_detail(response["commandId"])
         self.assertIsNotNone(detail)
-        transitions = [row['to_state'] for row in detail['timeline']]
+        transitions = [row["to_state"] for row in detail["timeline"]]
         self.assertEqual(
             transitions,
             [
-                'RECEIVED',
-                'PARSING',
-                'VALIDATING',
-                'NEEDS_CONFIRMATION',
-                'CONFIRMED',
-                'EXECUTION_REQUESTED',
-                'EXECUTING',
-                'SUCCEEDED',
+                "RECEIVED",
+                "PARSING",
+                "VALIDATING",
+                "NEEDS_CONFIRMATION",
+                "CONFIRMED",
+                "EXECUTION_REQUESTED",
+                "EXECUTING",
+                "SUCCEEDED",
             ],
         )
-        runtime_messages = [row['message'] for row in detail['runtime_events']]
-        self.assertIn('validation result recorded', runtime_messages)
-        self.assertIn('execution boundary response recorded', runtime_messages)
+        runtime_messages = [row["message"] for row in detail["runtime_events"]]
+        self.assertIn("validation result recorded", runtime_messages)
+        self.assertIn("execution boundary response recorded", runtime_messages)
 
     def test_step_messages_exist_for_parse_validate_confirm_and_result(self) -> None:
         lease_token = self._acquire_lease()
@@ -892,68 +940,76 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home',
-            mode='sim',
+            raw_text="home",
+            mode="sim",
         )
-        self.assertTrue(submit_response['accepted'])
-        submit_messages = [msg['text'] for msg in submit_response['snapshot']['messages']]
-        self.assertTrue(any('Step 1/6 PARSING' in text for text in submit_messages))
-        self.assertTrue(any('Step 2/6 VALIDATING' in text for text in submit_messages))
-        self.assertTrue(any('Step 3/6 NEEDS_CONFIRMATION' in text for text in submit_messages))
+        self.assertTrue(submit_response["accepted"])
+        submit_messages = [
+            msg["text"] for msg in submit_response["snapshot"]["messages"]
+        ]
+        self.assertTrue(any("Step 1/6 PARSING" in text for text in submit_messages))
+        self.assertTrue(any("Step 2/6 VALIDATING" in text for text in submit_messages))
+        self.assertTrue(
+            any("Step 3/6 NEEDS_CONFIRMATION" in text for text in submit_messages)
+        )
 
         confirm_response = self.supervisor.confirm_command(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            command_id=submit_response['commandId'],
-            plan_fingerprint=submit_response['command']['planFingerprint'],
+            command_id=submit_response["commandId"],
+            plan_fingerprint=submit_response["command"]["planFingerprint"],
         )
-        confirm_messages = [msg['text'] for msg in confirm_response['snapshot']['messages']]
-        self.assertTrue(any('Step 4/6 CONFIRMED' in text for text in confirm_messages))
-        self.assertTrue(any('Step 5/6 EXECUTION_REQUESTED' in text for text in confirm_messages))
-        self.assertTrue(any('Step 6/6 RESULT' in text for text in confirm_messages))
+        confirm_messages = [
+            msg["text"] for msg in confirm_response["snapshot"]["messages"]
+        ]
+        self.assertTrue(any("Step 4/6 CONFIRMED" in text for text in confirm_messages))
+        self.assertTrue(
+            any("Step 5/6 EXECUTION_REQUESTED" in text for text in confirm_messages)
+        )
+        self.assertTrue(any("Step 6/6 RESULT" in text for text in confirm_messages))
 
     def test_terminal_command_trace_logs_are_human_readable(self) -> None:
         lease_token = self._acquire_lease()
-        with self.assertLogs('uvicorn.error', level='INFO') as captured:
+        with self.assertLogs("uvicorn.error", level="INFO") as captured:
             response = self.supervisor.submit_intent(
                 session_id=self.session_id,
                 operator_id=self.operator_id,
                 lease_token=lease_token,
-                raw_text='home',
-                mode='sim',
+                raw_text="home",
+                mode="sim",
             )
             self.supervisor.confirm_command(
                 session_id=self.session_id,
                 operator_id=self.operator_id,
                 lease_token=lease_token,
-                command_id=response['commandId'],
-                plan_fingerprint=response['command']['planFingerprint'],
+                command_id=response["commandId"],
+                plan_fingerprint=response["command"]["planFingerprint"],
             )
 
-        output = '\n'.join(captured.output)
-        self.assertIn('[HMI CMD] request.received', output)
-        self.assertIn('[HMI CMD] parse.accepted', output)
-        self.assertIn('[HMI CMD] validation.accepted', output)
-        self.assertIn('[HMI CMD] confirmation.accepted', output)
-        self.assertIn('[HMI CMD] execution.requested', output)
-        self.assertIn('[HMI CMD] terminal.succeeded', output)
+        output = "\n".join(captured.output)
+        self.assertIn("[HMI CMD] request.received", output)
+        self.assertIn("[HMI CMD] parse.accepted", output)
+        self.assertIn("[HMI CMD] validation.accepted", output)
+        self.assertIn("[HMI CMD] confirmation.accepted", output)
+        self.assertIn("[HMI CMD] execution.requested", output)
+        self.assertIn("[HMI CMD] terminal.succeeded", output)
 
     def test_rejection_trace_logs_include_reason(self) -> None:
         lease_token = self._acquire_lease()
-        with self.assertLogs('uvicorn.error', level='INFO') as captured:
+        with self.assertLogs("uvicorn.error", level="INFO") as captured:
             self.supervisor.submit_intent(
                 session_id=self.session_id,
                 operator_id=self.operator_id,
                 lease_token=lease_token,
-                raw_text='draw a dragon on the table',
-                mode='sim',
+                raw_text="draw a dragon on the table",
+                mode="sim",
             )
 
-        output = '\n'.join(captured.output)
-        self.assertIn('[HMI CMD] parse.rejected', output)
-        self.assertIn('[HMI CMD] terminal.rejected', output)
-        self.assertIn('reason=intent is ambiguous or unsupported', output)
+        output = "\n".join(captured.output)
+        self.assertIn("[HMI CMD] parse.rejected", output)
+        self.assertIn("[HMI CMD] terminal.rejected", output)
+        self.assertIn("reason=intent is ambiguous or unsupported", output)
 
     def test_text_sequence_creates_parent_and_child_steps(self) -> None:
         lease_token = self._acquire_lease()
@@ -961,20 +1017,22 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home, wait 1 s, then move up 1 cm',
-            mode='sim',
+            raw_text="home, wait 1 s, then move up 1 cm",
+            mode="sim",
         )
-        self.assertTrue(response['accepted'])
-        self.assertEqual(response['jobType'], 'sequence')
-        self.assertIsNotNone(response['sequence'])
-        self.assertEqual(response['sequence']['stepCount'], 3)
-        self.assertEqual(response['sequence']['lifecycleState'], 'NEEDS_CONFIRMATION')
+        self.assertTrue(response["accepted"])
+        self.assertEqual(response["jobType"], "sequence")
+        self.assertIsNotNone(response["sequence"])
+        self.assertEqual(response["sequence"]["stepCount"], 3)
+        self.assertEqual(response["sequence"]["lifecycleState"], "NEEDS_CONFIRMATION")
         self.assertEqual(
-            [step['parsedIntent']['action'] for step in response['sequence']['steps']],
-            ['HOME', 'WAIT', 'MOVE_REL'],
+            [step["parsedIntent"]["action"] for step in response["sequence"]["steps"]],
+            ["HOME", "WAIT", "MOVE_REL"],
         )
-        self.assertIsNotNone(response['snapshot']['activeSequence'])
-        self.assertEqual(response['snapshot']['activeSequence']['sequenceId'], response['sequenceId'])
+        self.assertIsNotNone(response["snapshot"]["activeSequence"])
+        self.assertEqual(
+            response["snapshot"]["activeSequence"]["sequenceId"], response["sequenceId"]
+        )
 
     def test_sequence_confirm_executes_child_steps_in_order(self) -> None:
         lease_token = self._acquire_lease()
@@ -982,24 +1040,24 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home, wait 1 s, then move up 1 cm',
-            mode='sim',
+            raw_text="home, wait 1 s, then move up 1 cm",
+            mode="sim",
         )
         confirm_response = self.supervisor.confirm_sequence(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            sequence_id=response['sequenceId'],
-            plan_fingerprint=response['sequence']['planFingerprint'],
+            sequence_id=response["sequenceId"],
+            plan_fingerprint=response["sequence"]["planFingerprint"],
         )
-        self.assertTrue(confirm_response['accepted'])
-        self.assertEqual(confirm_response['jobType'], 'sequence')
-        self.assertEqual(confirm_response['sequence']['finalState'], 'SUCCEEDED')
-        self.assertEqual(confirm_response['sequence']['currentStepIndex'], 2)
+        self.assertTrue(confirm_response["accepted"])
+        self.assertEqual(confirm_response["jobType"], "sequence")
+        self.assertEqual(confirm_response["sequence"]["finalState"], "SUCCEEDED")
+        self.assertEqual(confirm_response["sequence"]["currentStepIndex"], 2)
         self.assertEqual(len(self.adapter.confirm_calls), 3)
         self.assertEqual(
-            [call['parsed_intent']['action'] for call in self.adapter.confirm_calls],
-            ['HOME', 'WAIT', 'MOVE_REL'],
+            [call["parsed_intent"]["action"] for call in self.adapter.confirm_calls],
+            ["HOME", "WAIT", "MOVE_REL"],
         )
 
     def test_sequence_blocks_new_submission_until_terminal(self) -> None:
@@ -1008,45 +1066,47 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='home, wait 1 s, then move up 1 cm',
-            mode='sim',
+            raw_text="home, wait 1 s, then move up 1 cm",
+            mode="sim",
         )
         with self.assertRaises(ConflictError):
             self.supervisor.submit_intent(
                 session_id=self.session_id,
                 operator_id=self.operator_id,
                 lease_token=lease_token,
-                raw_text='stop',
-                mode='sim',
+                raw_text="stop",
+                mode="sim",
             )
 
-    def test_structured_draw_shape_enters_sequence_path_and_preserves_macro_summary(self) -> None:
+    def test_structured_draw_shape_enters_sequence_path_and_preserves_macro_summary(
+        self,
+    ) -> None:
         lease_token = self._acquire_lease()
         response = self.supervisor.submit_intent(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
             structured_intent={
-                'intent': 'draw_shape',
-                'shape_type': 'circle',
-                'units': 'mm',
-                'frame_id': 'base_link',
-                'params': {'radius': 20},
+                "intent": "draw_shape",
+                "shape_type": "circle",
+                "units": "mm",
+                "frame_id": "base_link",
+                "params": {"radius": 20},
             },
-            mode='sim',
+            mode="sim",
         )
 
-        self.assertTrue(response['accepted'], msg=response)
-        self.assertEqual(response['jobType'], 'sequence')
-        self.assertEqual(response['sequence']['planSummary']['macroName'], 'draw_shape')
-        self.assertEqual(response['sequence']['planSummary']['shapeType'], 'circle')
-        self.assertIn('Draw circle', response['sequence']['summaryLabel'])
-        self.assertGreater(response['sequence']['stepCount'], 1)
-        for step in response['sequence']['steps']:
-            normalized = step['parsedIntent']['normalizedCommand']
-            self.assertNotIn('plan_only', normalized)
-            self.assertNotIn('chunk_index', normalized)
-            self.assertNotIn('stroke_index', normalized)
+        self.assertTrue(response["accepted"], msg=response)
+        self.assertEqual(response["jobType"], "sequence")
+        self.assertEqual(response["sequence"]["planSummary"]["macroName"], "draw_shape")
+        self.assertEqual(response["sequence"]["planSummary"]["shapeType"], "circle")
+        self.assertIn("Draw circle", response["sequence"]["summaryLabel"])
+        self.assertGreater(response["sequence"]["stepCount"], 1)
+        for step in response["sequence"]["steps"]:
+            normalized = step["parsedIntent"]["normalizedCommand"]
+            self.assertNotIn("plan_only", normalized)
+            self.assertNotIn("chunk_index", normalized)
+            self.assertNotIn("stroke_index", normalized)
 
     def test_text_draw_request_uses_current_pose_default_tool_workplane(self) -> None:
         lease_token = self._acquire_lease()
@@ -1054,19 +1114,21 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='write GP4',
-            mode='sim',
+            raw_text="write GP4",
+            mode="sim",
         )
 
-        self.assertTrue(response['accepted'], msg=response)
-        self.assertEqual(response['jobType'], 'sequence')
-        self.assertEqual(response['sequence']['planSummary']['macroName'], 'draw_text')
-        self.assertEqual(response['sequence']['planSummary']['text'], 'GP4')
-        self.assertIn('Draw text', response['sequence']['summaryLabel'])
-        hydrated_origin = response['sequence']['structuredIntent']['workplane']['origin']
-        self.assertAlmostEqual(hydrated_origin['position']['x'], 0.30)
-        self.assertAlmostEqual(hydrated_origin['position']['y'], 0.00)
-        self.assertAlmostEqual(hydrated_origin['position']['z'], 0.30)
+        self.assertTrue(response["accepted"], msg=response)
+        self.assertEqual(response["jobType"], "sequence")
+        self.assertEqual(response["sequence"]["planSummary"]["macroName"], "draw_text")
+        self.assertEqual(response["sequence"]["planSummary"]["text"], "GP4")
+        self.assertIn("Draw text", response["sequence"]["summaryLabel"])
+        hydrated_origin = response["sequence"]["structuredIntent"]["workplane"][
+            "origin"
+        ]
+        self.assertAlmostEqual(hydrated_origin["position"]["x"], 0.30)
+        self.assertAlmostEqual(hydrated_origin["position"]["y"], 0.00)
+        self.assertAlmostEqual(hydrated_origin["position"]["z"], 0.30)
 
     def test_vietnamese_draw_text_routes_to_sequence(self) -> None:
         lease_token = self._acquire_lease()
@@ -1074,14 +1136,14 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='vẽ chữ gp4',
-            mode='sim',
+            raw_text="vẽ chữ gp4",
+            mode="sim",
         )
 
-        self.assertTrue(response['accepted'], msg=response)
-        self.assertEqual(response['jobType'], 'sequence')
-        self.assertEqual(response['sequence']['planSummary']['macroName'], 'draw_text')
-        self.assertEqual(response['sequence']['planSummary']['text'], 'GP4')
+        self.assertTrue(response["accepted"], msg=response)
+        self.assertEqual(response["jobType"], "sequence")
+        self.assertEqual(response["sequence"]["planSummary"]["macroName"], "draw_text")
+        self.assertEqual(response["sequence"]["planSummary"]["text"], "GP4")
 
     def test_draw_plan_only_is_rejected_as_sequence(self) -> None:
         lease_token = self._acquire_lease()
@@ -1090,20 +1152,20 @@ class SupervisorServiceTests(unittest.TestCase):
             operator_id=self.operator_id,
             lease_token=lease_token,
             structured_intent={
-                'intent': 'draw_text',
-                'text': 'GP4',
-                'units': 'mm',
-                'frame_id': 'base_link',
-                'execution_mode': 'plan_only',
-                'font': {'type': 'single_stroke_builtin', 'height': 20},
+                "intent": "draw_text",
+                "text": "GP4",
+                "units": "mm",
+                "frame_id": "base_link",
+                "execution_mode": "plan_only",
+                "font": {"type": "single_stroke_builtin", "height": 20},
             },
-            mode='sim',
+            mode="sim",
         )
 
-        self.assertFalse(response['accepted'])
-        self.assertEqual(response['jobType'], 'sequence')
-        self.assertEqual(response['sequence']['finalState'], 'REJECTED')
-        self.assertIn('plan_only', response['reason'])
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["jobType"], "sequence")
+        self.assertEqual(response["sequence"]["finalState"], "REJECTED")
+        self.assertIn("plan_only", response["reason"])
 
     def test_draw_rejects_when_current_pose_is_unavailable(self) -> None:
         self.adapter.set_current_pose(None)
@@ -1112,14 +1174,15 @@ class SupervisorServiceTests(unittest.TestCase):
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            raw_text='write GP4',
-            mode='sim',
+            raw_text="write GP4",
+            mode="sim",
         )
 
-        self.assertFalse(response['accepted'])
-        self.assertEqual(response['jobType'], 'sequence')
-        self.assertEqual(response['sequence']['finalState'], 'REJECTED')
-        self.assertIn('/get_current_pose', response['reason'])
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["jobType"], "sequence")
+        self.assertEqual(response["sequence"]["finalState"], "REJECTED")
+        self.assertIn("/get_current_pose", response["reason"])
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

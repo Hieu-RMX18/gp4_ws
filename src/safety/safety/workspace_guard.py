@@ -130,7 +130,11 @@ class WorkspaceGuard:
             min_z = zz - sz / 2.0
             max_z = zz + sz / 2.0
 
-            if (min_x <= x <= max_x) and (min_y <= y <= max_y) and (min_z <= z <= max_z):
+            if (
+                (min_x <= x <= max_x)
+                and (min_y <= y <= max_y)
+                and (min_z <= z <= max_z)
+            ):
                 return False, f"collision with {name}"
 
         return True, ""

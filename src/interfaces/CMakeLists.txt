@@ -20,6 +20,8 @@ set(msg_files
   # Experimental jog pendant interfaces
   "msg/JogCommand.msg"
   "msg/ServoBridgeStatus.msg"
+  # BLENDED_SEQUENCE typed step (W2.T0)
+  "msg/SequenceStep.msg"
 )
 
 set(srv_files

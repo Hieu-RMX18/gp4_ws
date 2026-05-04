@@ -10,7 +10,9 @@ from ..domain.models import HardwareGateChecklistSnapshot, HardwareGateStatusSna
 
 
 HARDWARE_GATE_ENV = "HMI_ENABLE_HARDWARE_COMMANDS"
-DEFAULT_HARDWARE_GATE_PATH = Path(__file__).resolve().parents[2] / "data" / "hardware_gate.json"
+DEFAULT_HARDWARE_GATE_PATH = (
+    Path(__file__).resolve().parents[2] / "data" / "hardware_gate.json"
+)
 
 
 class HardwareGateEvaluator:
@@ -24,7 +26,12 @@ class HardwareGateEvaluator:
         self._evidence_path = Path(evidence_path)
 
     def evaluate(self) -> HardwareGateStatusSnapshot:
-        flag_enabled = os.getenv(self._env_name, "").strip().lower() in {"1", "true", "yes", "on"}
+        flag_enabled = os.getenv(self._env_name, "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         reasons: list[str] = []
         payload, payload_error = self._load_payload()
 
@@ -33,10 +40,18 @@ class HardwareGateEvaluator:
         if payload_error is not None:
             reasons.append(payload_error)
 
-        approved_by = self._string_or_none(payload.get("approvedBy") if payload else None)
-        approved_at = self._string_or_none(payload.get("approvedAt") if payload else None)
-        report_path = self._string_or_none(payload.get("reportPath") if payload else None)
-        report_sha256 = self._string_or_none(payload.get("reportSha256") if payload else None)
+        approved_by = self._string_or_none(
+            payload.get("approvedBy") if payload else None
+        )
+        approved_at = self._string_or_none(
+            payload.get("approvedAt") if payload else None
+        )
+        report_path = self._string_or_none(
+            payload.get("reportPath") if payload else None
+        )
+        report_sha256 = self._string_or_none(
+            payload.get("reportSha256") if payload else None
+        )
         checklist = self._parse_checklist(payload.get("checklist") if payload else None)
         report_sha256_match = self._report_sha256_matches(report_path, report_sha256)
 
@@ -56,7 +71,9 @@ class HardwareGateEvaluator:
             if not report_sha256:
                 reasons.append("hardware gate evidence is missing reportSha256.")
             if report_path and report_sha256 and not report_sha256_match:
-                reasons.append("hardware gate report SHA256 does not match the referenced report.")
+                reasons.append(
+                    "hardware gate report SHA256 does not match the referenced report."
+                )
 
         return HardwareGateStatusSnapshot(
             unlocked=not reasons,
@@ -77,13 +94,22 @@ class HardwareGateEvaluator:
         except FileNotFoundError:
             return None, f"hardware gate evidence missing at {self._evidence_path}."
         except OSError:
-            return None, f"hardware gate evidence could not be read at {self._evidence_path}."
+            return (
+                None,
+                f"hardware gate evidence could not be read at {self._evidence_path}.",
+            )
         try:
             loaded = json.loads(raw)
         except json.JSONDecodeError:
-            return None, f"hardware gate evidence at {self._evidence_path} is not valid JSON."
+            return (
+                None,
+                f"hardware gate evidence at {self._evidence_path} is not valid JSON.",
+            )
         if not isinstance(loaded, dict):
-            return None, f"hardware gate evidence at {self._evidence_path} must be a JSON object."
+            return (
+                None,
+                f"hardware gate evidence at {self._evidence_path} must be a JSON object.",
+            )
         return loaded, None
 
     def _parse_checklist(self, payload: Any) -> HardwareGateChecklistSnapshot | None:
@@ -108,7 +134,9 @@ class HardwareGateEvaluator:
             )
         )
 
-    def _report_sha256_matches(self, report_path: str | None, expected_sha256: str | None) -> bool:
+    def _report_sha256_matches(
+        self, report_path: str | None, expected_sha256: str | None
+    ) -> bool:
         if not report_path or not expected_sha256:
             return False
         candidate = Path(report_path)

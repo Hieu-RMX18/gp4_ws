@@ -87,7 +87,9 @@ def to_radians(value: Any, *, field_name: str, units: str = "deg") -> float:
         return numeric
     if normalized_units in {"deg", "degree", "degrees"}:
         return math.radians(numeric)
-    raise DrawingGeometryError(f"invalid_angle_units: unsupported angle units '{units}'")
+    raise DrawingGeometryError(
+        f"invalid_angle_units: unsupported angle units '{units}'"
+    )
 
 
 def parse_position_dict(value: Any, *, field_name: str) -> Vector3:
@@ -105,7 +107,9 @@ def parse_vector_dict(value: Any, *, field_name: str) -> Vector3:
     return parse_position_dict(value, field_name=field_name)
 
 
-def orientation_to_quaternion(orientation: Mapping[str, Any], *, field_name: str) -> Dict[str, float]:
+def orientation_to_quaternion(
+    orientation: Mapping[str, Any], *, field_name: str
+) -> Dict[str, float]:
     try:
         qx = float(orientation["x"])
         qy = float(orientation["y"])
@@ -114,7 +118,9 @@ def orientation_to_quaternion(orientation: Mapping[str, Any], *, field_name: str
     except KeyError as exc:
         raise DrawingGeometryError(f"{field_name}.{exc.args[0]} is required") from exc
     except (TypeError, ValueError) as exc:
-        raise DrawingGeometryError(f"{field_name} quaternion values must be numeric") from exc
+        raise DrawingGeometryError(
+            f"{field_name} quaternion values must be numeric"
+        ) from exc
 
     norm = math.sqrt((qx * qx) + (qy * qy) + (qz * qz) + (qw * qw))
     if not math.isfinite(norm) or norm <= 1e-12:
@@ -139,20 +145,26 @@ def resolve_workplane(
 ) -> WorkplaneAxes:
     normalized_mode = str(mode).strip().lower()
     if normalized_mode not in {"base", "tool", "explicit_pose"}:
-        raise DrawingGeometryError(f"missing_workplane: unsupported workplane mode '{mode}'")
+        raise DrawingGeometryError(
+            f"missing_workplane: unsupported workplane mode '{mode}'"
+        )
 
     if origin_pose is not None:
         if not isinstance(origin_pose, dict):
             raise DrawingGeometryError("workplane.origin must be an object")
         if "position" not in origin_pose:
             raise DrawingGeometryError("workplane.origin.position is required")
-        origin = parse_position_dict(origin_pose["position"], field_name="workplane.origin.position")
+        origin = parse_position_dict(
+            origin_pose["position"], field_name="workplane.origin.position"
+        )
     elif anchor_position is not None:
         origin = anchor_position
     else:
         raise DrawingGeometryError("missing_workplane: origin is required")
 
-    orientation = orientation_to_quaternion(default_orientation, field_name="workplane.default_orientation")
+    orientation = orientation_to_quaternion(
+        default_orientation, field_name="workplane.default_orientation"
+    )
     if origin_pose is not None and isinstance(origin_pose.get("orientation"), dict):
         orientation = orientation_to_quaternion(
             origin_pose["orientation"], field_name="workplane.origin.orientation"
@@ -160,17 +172,24 @@ def resolve_workplane(
 
     basis_x, basis_y, basis_z = _quaternion_basis(orientation)
 
-    normal_axis = _normalize(normal if normal is not None else basis_z, field_name="workplane.normal")
+    normal_axis = _normalize(
+        normal if normal is not None else basis_z, field_name="workplane.normal"
+    )
     if normalized_mode == "base" and normal is None:
         normal_axis = (0.0, 0.0, 1.0)
 
-    x_axis = _normalize(x_axis_hint if x_axis_hint is not None else basis_x, field_name="workplane.x_axis_hint")
+    x_axis = _normalize(
+        x_axis_hint if x_axis_hint is not None else basis_x,
+        field_name="workplane.x_axis_hint",
+    )
     if normalized_mode == "base" and x_axis_hint is None:
         x_axis = (1.0, 0.0, 0.0)
 
     cross_mag = _norm(_cross(normal_axis, x_axis))
     if cross_mag <= 1e-9:
-        raise DrawingGeometryError("missing_workplane: x_axis_hint is parallel to normal")
+        raise DrawingGeometryError(
+            "missing_workplane: x_axis_hint is parallel to normal"
+        )
 
     y_axis = _normalize(_cross(normal_axis, x_axis), field_name="workplane.y_axis")
     x_axis = _normalize(_cross(y_axis, normal_axis), field_name="workplane.x_axis")
@@ -192,7 +211,9 @@ def generate_square_path(*, side_m: float) -> Tuple[StrokeSegment, ...]:
     return generate_rectangle_path(width_m=side_m, height_m=side_m)
 
 
-def generate_rectangle_path(*, width_m: float, height_m: float) -> Tuple[StrokeSegment, ...]:
+def generate_rectangle_path(
+    *, width_m: float, height_m: float
+) -> Tuple[StrokeSegment, ...]:
     if width_m <= 0.0 or height_m <= 0.0:
         raise DrawingGeometryError("invalid_size: rectangle width/height must be > 0")
     points = (
@@ -202,15 +223,30 @@ def generate_rectangle_path(*, width_m: float, height_m: float) -> Tuple[StrokeS
         (0.0, height_m),
         (0.0, 0.0),
     )
-    return (StrokeSegment(kind="draw", points_2d=points, closed=True, metadata={"shape": "rectangle"}),)
+    return (
+        StrokeSegment(
+            kind="draw", points_2d=points, closed=True, metadata={"shape": "rectangle"}
+        ),
+    )
 
 
-def generate_triangle_path(*, side_m: float, points_2d: Sequence[Point2D] | None = None) -> Tuple[StrokeSegment, ...]:
+def generate_triangle_path(
+    *, side_m: float, points_2d: Sequence[Point2D] | None = None
+) -> Tuple[StrokeSegment, ...]:
     if points_2d is not None:
         if len(points_2d) != 3:
-            raise DrawingGeometryError("triangle explicit points require exactly 3 vertices")
+            raise DrawingGeometryError(
+                "triangle explicit points require exactly 3 vertices"
+            )
         closed_points = tuple(points_2d) + (tuple(points_2d[0]),)
-        return (StrokeSegment(kind="draw", points_2d=closed_points, closed=True, metadata={"shape": "triangle"}),)
+        return (
+            StrokeSegment(
+                kind="draw",
+                points_2d=closed_points,
+                closed=True,
+                metadata={"shape": "triangle"},
+            ),
+        )
 
     if side_m <= 0.0:
         raise DrawingGeometryError("invalid_size: triangle side must be > 0")
@@ -221,7 +257,11 @@ def generate_triangle_path(*, side_m: float, points_2d: Sequence[Point2D] | None
         (side_m / 2.0, height),
         (0.0, 0.0),
     )
-    return (StrokeSegment(kind="draw", points_2d=points, closed=True, metadata={"shape": "triangle"}),)
+    return (
+        StrokeSegment(
+            kind="draw", points_2d=points, closed=True, metadata={"shape": "triangle"}
+        ),
+    )
 
 
 def generate_polygon_path(
@@ -240,15 +280,29 @@ def generate_polygon_path(
         resolved_radius = side_m / (2.0 * math.sin(math.pi / float(n_sides)))
 
     if resolved_radius is None or resolved_radius <= 0.0:
-        raise DrawingGeometryError("invalid_size: polygon radius or side length is required")
+        raise DrawingGeometryError(
+            "invalid_size: polygon radius or side length is required"
+        )
 
     points: List[Point2D] = []
     center_x = resolved_radius
     center_y = 0.0
     for idx in range(n_sides + 1):
         theta = (2.0 * math.pi * float(idx)) / float(n_sides)
-        points.append((center_x - resolved_radius * math.cos(theta), center_y + resolved_radius * math.sin(theta)))
-    return (StrokeSegment(kind="draw", points_2d=tuple(points), closed=True, metadata={"shape": "polygon"}),)
+        points.append(
+            (
+                center_x - resolved_radius * math.cos(theta),
+                center_y + resolved_radius * math.sin(theta),
+            )
+        )
+    return (
+        StrokeSegment(
+            kind="draw",
+            points_2d=tuple(points),
+            closed=True,
+            metadata={"shape": "polygon"},
+        ),
+    )
 
 
 def generate_circle_path(
@@ -274,8 +328,20 @@ def generate_circle_path(
     center_y = 0.0
     for idx in range(segments + 1):
         theta = (2.0 * math.pi * float(idx)) / float(segments)
-        points.append((center_x - radius_m * math.cos(theta), center_y + radius_m * math.sin(theta)))
-    return (StrokeSegment(kind="draw", points_2d=tuple(points), closed=True, metadata={"shape": "circle"}),)
+        points.append(
+            (
+                center_x - radius_m * math.cos(theta),
+                center_y + radius_m * math.sin(theta),
+            )
+        )
+    return (
+        StrokeSegment(
+            kind="draw",
+            points_2d=tuple(points),
+            closed=True,
+            metadata={"shape": "circle"},
+        ),
+    )
 
 
 def generate_arc_path(
@@ -305,14 +371,35 @@ def generate_arc_path(
     center_y = 0.0
     for idx in range(segments + 1):
         theta = sweep_rad * float(idx) / float(segments)
-        points.append((center_x - radius_m * math.cos(theta), center_y + radius_m * math.sin(theta)))
-    return (StrokeSegment(kind="draw", points_2d=tuple(points), closed=False, metadata={"shape": "arc"}),)
+        points.append(
+            (
+                center_x - radius_m * math.cos(theta),
+                center_y + radius_m * math.sin(theta),
+            )
+        )
+    return (
+        StrokeSegment(
+            kind="draw",
+            points_2d=tuple(points),
+            closed=False,
+            metadata={"shape": "arc"},
+        ),
+    )
 
 
-def generate_polyline_path(*, points_2d: Sequence[Point2D]) -> Tuple[StrokeSegment, ...]:
+def generate_polyline_path(
+    *, points_2d: Sequence[Point2D]
+) -> Tuple[StrokeSegment, ...]:
     if len(points_2d) < 2:
         raise DrawingGeometryError("invalid_size: polyline requires at least 2 points")
-    return (StrokeSegment(kind="draw", points_2d=tuple(points_2d), closed=False, metadata={"shape": "polyline"}),)
+    return (
+        StrokeSegment(
+            kind="draw",
+            points_2d=tuple(points_2d),
+            closed=False,
+            metadata={"shape": "polyline"},
+        ),
+    )
 
 
 def generate_text_stroke_segments(
@@ -334,7 +421,9 @@ def generate_text_stroke_segments(
 
     normalized_align = str(alignment).strip().lower() or "left"
     if normalized_align not in {"left", "center", "right"}:
-        raise DrawingGeometryError("invalid_alignment: alignment must be left|center|right")
+        raise DrawingGeometryError(
+            "invalid_alignment: alignment must be left|center|right"
+        )
 
     lines = text.split("\n")
     output: List[StrokeSegment] = []
@@ -342,7 +431,9 @@ def generate_text_stroke_segments(
 
     for line_index, line in enumerate(lines):
         baseline_y = -float(line_index) * (height_m + line_spacing_m)
-        line_width = _line_advance_width(line, height_m=height_m, char_spacing_m=char_spacing_m)
+        line_width = _line_advance_width(
+            line, height_m=height_m, char_spacing_m=char_spacing_m
+        )
 
         if normalized_align == "left":
             x_shift = 0.0
@@ -355,9 +446,13 @@ def generate_text_stroke_segments(
             previous_end = None
             continue
 
-        raw_segments = generate_text_strokes(line, height_m=height_m, char_spacing_m=char_spacing_m)
+        raw_segments = generate_text_strokes(
+            line, height_m=height_m, char_spacing_m=char_spacing_m
+        )
         for raw_segment in raw_segments:
-            shifted_points = tuple((x + x_shift, y + baseline_y) for x, y in raw_segment.points_2d)
+            shifted_points = tuple(
+                (x + x_shift, y + baseline_y) for x, y in raw_segment.points_2d
+            )
 
             if raw_segment.kind == "draw" and previous_end is not None:
                 if _point_distance(previous_end, shifted_points[0]) > 1e-9:
@@ -383,12 +478,17 @@ def generate_text_stroke_segments(
     return tuple(output)
 
 
-def lift_points_to_poses(points_2d: Sequence[Point2D], workplane: WorkplaneAxes) -> Tuple[Dict[str, Any], ...]:
+def lift_points_to_poses(
+    points_2d: Sequence[Point2D], workplane: WorkplaneAxes
+) -> Tuple[Dict[str, Any], ...]:
     poses: List[Dict[str, Any]] = []
     for point_x, point_y in points_2d:
         position = _vector_add(
             workplane.origin,
-            _vector_add(_vector_scale(workplane.x_axis, point_x), _vector_scale(workplane.y_axis, point_y)),
+            _vector_add(
+                _vector_scale(workplane.x_axis, point_x),
+                _vector_scale(workplane.y_axis, point_y),
+            ),
         )
         poses.append(
             {
@@ -414,11 +514,17 @@ def compile_strokes_to_commands(
     travel_speed_scale: float,
     plan_only: bool,
     max_waypoints_per_chunk: int,
+    use_blended_sequence: bool = True,
+    blend_radius_m: float = 0.008,
 ) -> DrawingCompileResult:
     if approach_distance_m < 0.0 or retract_distance_m < 0.0:
-        raise DrawingGeometryError("invalid_size: approach/retract distance must be >= 0")
+        raise DrawingGeometryError(
+            "invalid_size: approach/retract distance must be >= 0"
+        )
     if drawing_speed_scale <= 0.0 or travel_speed_scale <= 0.0:
-        raise DrawingGeometryError("invalid_size: drawing/travel speed scales must be > 0")
+        raise DrawingGeometryError(
+            "invalid_size: drawing/travel speed scales must be > 0"
+        )
     if max_waypoints_per_chunk < 1:
         raise DrawingGeometryError("max_waypoints_per_chunk must be >= 1")
 
@@ -431,7 +537,9 @@ def compile_strokes_to_commands(
         if stroke.kind != "draw":
             continue
         if len(stroke.points_2d) < 2:
-            raise DrawingGeometryError("invalid_size: draw stroke must contain at least 2 points")
+            raise DrawingGeometryError(
+                "invalid_size: draw stroke must contain at least 2 points"
+            )
 
         draw_stroke_count += 1
         lifted_poses = list(lift_points_to_poses(stroke.points_2d, workplane))
@@ -439,8 +547,12 @@ def compile_strokes_to_commands(
 
         start_pose = lifted_poses[0]
         end_pose = lifted_poses[-1]
-        above_start_pose = _offset_pose_along_normal(start_pose, workplane.normal, approach_distance_m)
-        above_end_pose = _offset_pose_along_normal(end_pose, workplane.normal, retract_distance_m)
+        above_start_pose = _offset_pose_along_normal(
+            start_pose, workplane.normal, approach_distance_m
+        )
+        above_end_pose = _offset_pose_along_normal(
+            end_pose, workplane.normal, retract_distance_m
+        )
 
         commands.append(
             _ptp_command(
@@ -459,29 +571,44 @@ def compile_strokes_to_commands(
             )
         )
 
-        draw_targets = lifted_poses[1:]
-        for chunk in _chunk_sequence(draw_targets, max_waypoints_per_chunk):
+        if use_blended_sequence and len(lifted_poses) >= 3:
+            # LIN pen-down already moved to lifted_poses[0]; BLENDED covers [0:]
+            # to give the planner the full chain (start → intermediates → end).
             chunk_count += 1
-            if len(chunk) == 1:
-                commands.append(
-                    _lin_command(
-                        target_pose=chunk[0],
-                        reference_frame=reference_frame,
-                        speed_scale=drawing_speed_scale,
-                        plan_only=plan_only,
-                    )
+            commands.append(
+                _blended_sequence_command(
+                    waypoints=lifted_poses[1:],
+                    reference_frame=reference_frame,
+                    speed_scale=drawing_speed_scale,
+                    plan_only=plan_only,
+                    blend_radius_m=blend_radius_m,
+                    stroke_index=stroke_index + 1,
                 )
-            else:
-                commands.append(
-                    _cartesian_path_command(
-                        waypoints=chunk,
-                        reference_frame=reference_frame,
-                        speed_scale=drawing_speed_scale,
-                        plan_only=plan_only,
-                        chunk_index=chunk_count,
-                        stroke_index=stroke_index + 1,
+            )
+        else:
+            draw_targets = lifted_poses[1:]
+            for chunk in _chunk_sequence(draw_targets, max_waypoints_per_chunk):
+                chunk_count += 1
+                if len(chunk) == 1:
+                    commands.append(
+                        _lin_command(
+                            target_pose=chunk[0],
+                            reference_frame=reference_frame,
+                            speed_scale=drawing_speed_scale,
+                            plan_only=plan_only,
+                        )
                     )
-                )
+                else:
+                    commands.append(
+                        _cartesian_path_command(
+                            waypoints=chunk,
+                            reference_frame=reference_frame,
+                            speed_scale=drawing_speed_scale,
+                            plan_only=plan_only,
+                            chunk_index=chunk_count,
+                            stroke_index=stroke_index + 1,
+                        )
+                    )
 
         commands.append(
             _lin_command(
@@ -564,6 +691,41 @@ def _lin_command(
     }
 
 
+def _blended_sequence_command(
+    *,
+    waypoints: Sequence[Dict[str, Any]],
+    reference_frame: str,
+    speed_scale: float,
+    plan_only: bool,
+    blend_radius_m: float,
+    stroke_index: int,
+) -> Dict[str, Any]:
+    steps = []
+    for i, wp in enumerate(waypoints):
+        br = 0.0 if (i == 0 or i == len(waypoints) - 1) else blend_radius_m
+        steps.append(
+            {
+                "primitive_type": "LIN",
+                "target_pose": wp,
+                "blend_radius_m": br,
+                "planner_id": "PILZ_LIN",
+                "velocity_scale": float(speed_scale),
+                "acceleration_scale": float(speed_scale),
+            }
+        )
+    return {
+        "primitive_type": "BLENDED_SEQUENCE",
+        "sequence_steps": steps,
+        "reference_frame": reference_frame,
+        "velocity_scale": float(speed_scale),
+        "acceleration_scale": float(speed_scale),
+        "planner_id": "PILZ_LIN",
+        "plan_only": bool(plan_only),
+        "stroke_index": int(stroke_index),
+    }
+
+
+# DEPRECATED: removal_date=2026-06-01, reason=replaced_by_BLENDED_SEQUENCE_in_W2
 def _cartesian_path_command(
     *,
     waypoints: Sequence[Dict[str, Any]],
@@ -586,7 +748,9 @@ def _cartesian_path_command(
     }
 
 
-def _offset_pose_along_normal(pose: Mapping[str, Any], normal: Vector3, distance_m: float) -> Dict[str, Any]:
+def _offset_pose_along_normal(
+    pose: Mapping[str, Any], normal: Vector3, distance_m: float
+) -> Dict[str, Any]:
     if distance_m == 0.0:
         return {
             "position": dict(pose["position"]),
@@ -607,10 +771,14 @@ def _offset_pose_along_normal(pose: Mapping[str, Any], normal: Vector3, distance
     }
 
 
-def _chunk_sequence(items: Sequence[Dict[str, Any]], chunk_size: int) -> Iterable[Sequence[Dict[str, Any]]]:
+def _chunk_sequence(
+    items: Sequence[Dict[str, Any]], chunk_size: int
+) -> Iterable[Sequence[Dict[str, Any]]]:
     if not items:
         return []
-    return [items[index:index + chunk_size] for index in range(0, len(items), chunk_size)]
+    return [
+        items[index : index + chunk_size] for index in range(0, len(items), chunk_size)
+    ]
 
 
 def _line_advance_width(text: str, *, height_m: float, char_spacing_m: float) -> float:

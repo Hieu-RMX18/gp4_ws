@@ -121,7 +121,9 @@ class IntentRouter(DrawRouterMixin):
             routed_step = self.route(step)
             if routed_step.route_type == "error":
                 error_code = routed_step.error_payload.get("error", "unknown_error")
-                raise ValueError(f"sequence step {index} is an error payload: {error_code}")
+                raise ValueError(
+                    f"sequence step {index} is an error payload: {error_code}"
+                )
             commands.extend(deepcopy(routed_step.commands))
 
         return RouteResult(
@@ -146,9 +148,15 @@ class IntentRouter(DrawRouterMixin):
         if intent == "move_joints":
             return self._route_move_joints(payload)
         if intent == "set_speed":
-            return {"primitive_type": "SET_SPEED", "velocity_scale": float(payload["velocity_scale"])}
+            return {
+                "primitive_type": "SET_SPEED",
+                "velocity_scale": float(payload["velocity_scale"]),
+            }
         if intent == "wait":
-            return {"primitive_type": "WAIT", "wait_duration_sec": float(payload["wait_duration_sec"])}
+            return {
+                "primitive_type": "WAIT",
+                "wait_duration_sec": float(payload["wait_duration_sec"]),
+            }
         if intent == "stop":
             return {"primitive_type": "STOP"}
         if intent == "io_set":
@@ -170,7 +178,9 @@ class IntentRouter(DrawRouterMixin):
 
         raise ValueError(f"unsupported semantic intent '{intent}'")
 
-    def _route_absolute_move(self, payload: Dict[str, Any], *, primitive_type: str) -> Dict[str, Any]:
+    def _route_absolute_move(
+        self, payload: Dict[str, Any], *, primitive_type: str
+    ) -> Dict[str, Any]:
         target_pose = payload.get("target_pose")
         if not isinstance(target_pose, dict):
             raise ValueError(f"{payload['intent']} requires target_pose.")
@@ -256,8 +266,9 @@ class IntentRouter(DrawRouterMixin):
             **self._optional_motion_fields(payload),
         }
 
-
-    def _resolve_position(self, raw_position: Any, *, field_prefix: str) -> Dict[str, float]:
+    def _resolve_position(
+        self, raw_position: Any, *, field_prefix: str
+    ) -> Dict[str, float]:
         if not isinstance(raw_position, dict):
             raise ValueError(f"{field_prefix} must be an object with x/y/z.")
         resolved_position: Dict[str, float] = {}
@@ -278,8 +289,13 @@ class IntentRouter(DrawRouterMixin):
             raise ValueError(error_message)
         return value
 
-    def _base_command(self, primitive_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return {"primitive_type": primitive_type, **self._optional_motion_fields(payload)}
+    def _base_command(
+        self, primitive_type: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return {
+            "primitive_type": primitive_type,
+            **self._optional_motion_fields(payload),
+        }
 
     def _optional_motion_fields(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         command: Dict[str, Any] = {}
@@ -308,17 +324,23 @@ class IntentRouter(DrawRouterMixin):
             raise ValueError("target_pose.position must be an object.")
 
         if "orientation" in resolved_pose and orientation_preset is not None:
-            raise ValueError("Provide either target_pose.orientation or orientation_preset, not both.")
+            raise ValueError(
+                "Provide either target_pose.orientation or orientation_preset, not both."
+            )
 
         if "orientation" in resolved_pose:
             return resolved_pose
 
         if orientation_preset is not None:
-            resolved_pose["orientation"] = self._orientation_from_preset(orientation_preset)
+            resolved_pose["orientation"] = self._orientation_from_preset(
+                orientation_preset
+            )
             return resolved_pose
 
         if keep_current_orientation not in (None, True, False):
-            raise ValueError("keep_current_orientation must be a boolean when provided.")
+            raise ValueError(
+                "keep_current_orientation must be a boolean when provided."
+            )
 
         if allow_orientation_default:
             return resolved_pose

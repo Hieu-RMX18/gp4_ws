@@ -226,9 +226,13 @@ def build_command_argument_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("home", parents=[common, motion], help="Send HOME primitive.")
     subparsers.add_parser("stop", parents=[common], help="Send STOP primitive.")
     subparsers.add_parser("get-pose", parents=[common], help="Send GET_POSE primitive.")
-    subparsers.add_parser("alarm-reset", parents=[common], help="Send ALARM_RESET primitive.")
+    subparsers.add_parser(
+        "alarm-reset", parents=[common], help="Send ALARM_RESET primitive."
+    )
 
-    wait_parser = subparsers.add_parser("wait", parents=[common], help="Send WAIT primitive.")
+    wait_parser = subparsers.add_parser(
+        "wait", parents=[common], help="Send WAIT primitive."
+    )
     wait_parser.add_argument("seconds", type=float, help="Wait duration in seconds.")
 
     set_speed_parser = subparsers.add_parser(
@@ -247,9 +251,15 @@ def build_command_argument_parser() -> argparse.ArgumentParser:
         parents=[common, motion],
         help="Send MOVE_REL primitive.",
     )
-    move_rel_parser.add_argument("--x", type=float, default=0.0, help="delta_x in meters.")
-    move_rel_parser.add_argument("--y", type=float, default=0.0, help="delta_y in meters.")
-    move_rel_parser.add_argument("--z", type=float, default=0.0, help="delta_z in meters.")
+    move_rel_parser.add_argument(
+        "--x", type=float, default=0.0, help="delta_x in meters."
+    )
+    move_rel_parser.add_argument(
+        "--y", type=float, default=0.0, help="delta_y in meters."
+    )
+    move_rel_parser.add_argument(
+        "--z", type=float, default=0.0, help="delta_z in meters."
+    )
     move_rel_parser.add_argument(
         "--frame",
         default="base_link",
@@ -262,7 +272,9 @@ def build_command_argument_parser() -> argparse.ArgumentParser:
         parents=[common, motion],
         help="Send MOVE_JOINT primitive.",
     )
-    move_joint_parser.add_argument("--index", type=int, required=True, help="Zero-based joint index [0..5].")
+    move_joint_parser.add_argument(
+        "--index", type=int, required=True, help="Zero-based joint index [0..5]."
+    )
     move_joint_parser.add_argument(
         "--angle",
         type=float,
@@ -283,13 +295,19 @@ def build_command_argument_parser() -> argparse.ArgumentParser:
         help="Six target joint values in radians or degrees.",
     )
 
-    ptp_parser = subparsers.add_parser("ptp", parents=[common, motion], help="Send PTP primitive.")
+    ptp_parser = subparsers.add_parser(
+        "ptp", parents=[common, motion], help="Send PTP primitive."
+    )
     _add_pose_options(ptp_parser)
 
-    lin_parser = subparsers.add_parser("lin", parents=[common, motion], help="Send LIN primitive.")
+    lin_parser = subparsers.add_parser(
+        "lin", parents=[common, motion], help="Send LIN primitive."
+    )
     _add_pose_options(lin_parser)
 
-    circ_parser = subparsers.add_parser("circ", parents=[common, motion], help="Send CIRC primitive.")
+    circ_parser = subparsers.add_parser(
+        "circ", parents=[common, motion], help="Send CIRC primitive."
+    )
     _add_pose_options(circ_parser)
     circ_parser.add_argument(
         "--mid",
@@ -305,7 +323,9 @@ def build_command_argument_parser() -> argparse.ArgumentParser:
         parents=[common],
         help="Load a raw command from YAML/JSON file, or '-' for stdin.",
     )
-    from_file_parser.add_argument("path", help="Path to YAML/JSON file, or '-' for stdin.")
+    from_file_parser.add_argument(
+        "path", help="Path to YAML/JSON file, or '-' for stdin."
+    )
 
     return parser
 
@@ -322,7 +342,9 @@ def _pose_from_args(parsed: argparse.Namespace) -> Dict[str, Any]:
     return pose
 
 
-def _inject_motion_options(command: Dict[str, Any], parsed: argparse.Namespace) -> Dict[str, Any]:
+def _inject_motion_options(
+    command: Dict[str, Any], parsed: argparse.Namespace
+) -> Dict[str, Any]:
     if getattr(parsed, "velocity_scale", None) is not None:
         command["velocity_scale"] = parsed.velocity_scale
     if getattr(parsed, "acceleration_scale", None) is not None:
@@ -333,7 +355,11 @@ def _inject_motion_options(command: Dict[str, Any], parsed: argparse.Namespace) 
 
 
 def _load_payload_from_file(path_str: str) -> Dict[str, Any]:
-    content = sys.stdin.read() if path_str == "-" else Path(path_str).read_text(encoding="utf-8")
+    content = (
+        sys.stdin.read()
+        if path_str == "-"
+        else Path(path_str).read_text(encoding="utf-8")
+    )
     loaded = yaml.safe_load(content)
     if not isinstance(loaded, dict):
         raise ValueError("Command file must decode to a mapping/object.")
@@ -383,9 +409,13 @@ def build_command_from_args(parsed: argparse.Namespace) -> Dict[str, Any]:
             parsed,
         )
     if command_name == "ptp":
-        return _inject_motion_options({"primitive_type": "PTP", "target_pose": _pose_from_args(parsed)}, parsed)
+        return _inject_motion_options(
+            {"primitive_type": "PTP", "target_pose": _pose_from_args(parsed)}, parsed
+        )
     if command_name == "lin":
-        return _inject_motion_options({"primitive_type": "LIN", "target_pose": _pose_from_args(parsed)}, parsed)
+        return _inject_motion_options(
+            {"primitive_type": "LIN", "target_pose": _pose_from_args(parsed)}, parsed
+        )
     if command_name == "circ":
         return _inject_motion_options(
             {
@@ -430,7 +460,9 @@ def _wait_for_action_server(client, timeout_sec: float) -> bool:
     return client.server_is_ready()
 
 
-def _send_action_goal(action_name: str, normalized_command: Dict[str, Any], timeout_sec: float) -> None:
+def _send_action_goal(
+    action_name: str, normalized_command: Dict[str, Any], timeout_sec: float
+) -> None:
     from rclpy.action import ActionClient
     from interfaces.action import ExecuteMotion
     from llm_gateway.goal_mapper import GoalMapper
@@ -439,7 +471,9 @@ def _send_action_goal(action_name: str, normalized_command: Dict[str, Any], time
     client = ActionClient(node, ExecuteMotion, action_name)
     try:
         if not _wait_for_action_server(client, timeout_sec):
-            raise RuntimeError(f"ExecuteMotion action server unavailable: {action_name}")
+            raise RuntimeError(
+                f"ExecuteMotion action server unavailable: {action_name}"
+            )
 
         goal = GoalMapper().to_execute_motion_goal(normalized_command)
         send_future = client.send_goal_async(goal)
@@ -497,7 +531,9 @@ def main_raw(args: Sequence[str] | None = None) -> None:
             return
 
         if parsed.transport == "action" and command.get("primitive_type") == "GET_POSE":
-            raise ValueError("GET_POSE is query-only; use llm_text_cli/raw gateway path instead of direct action.")
+            raise ValueError(
+                "GET_POSE is query-only; use llm_text_cli/raw gateway path instead of direct action."
+            )
 
         if parsed.transport == "raw":
             _publish_string_message(

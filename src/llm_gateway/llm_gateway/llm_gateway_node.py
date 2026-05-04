@@ -60,21 +60,32 @@ class LLMGatewayNode(Node):
         super().__init__("llm_gateway_node")
         self._declare_parameters()
 
-        schema_path = self.get_parameter("schema_path").get_parameter_value().string_value or None
+        schema_path = (
+            self.get_parameter("schema_path").get_parameter_value().string_value or None
+        )
         llm_config_path = (
-            self.get_parameter("llm_config_path").get_parameter_value().string_value or None
+            self.get_parameter("llm_config_path").get_parameter_value().string_value
+            or None
         )
         self._default_velocity_scale = (
-            self.get_parameter("default_velocity_scale").get_parameter_value().double_value
+            self.get_parameter("default_velocity_scale")
+            .get_parameter_value()
+            .double_value
         )
         self._default_acceleration_scale = (
-            self.get_parameter("default_acceleration_scale").get_parameter_value().double_value
+            self.get_parameter("default_acceleration_scale")
+            .get_parameter_value()
+            .double_value
         )
         self._safety_service_timeout_sec = (
-            self.get_parameter("safety_service_timeout_sec").get_parameter_value().double_value
+            self.get_parameter("safety_service_timeout_sec")
+            .get_parameter_value()
+            .double_value
         )
         self._status_heartbeat_period_sec = (
-            self.get_parameter("status_heartbeat_period_sec").get_parameter_value().double_value
+            self.get_parameter("status_heartbeat_period_sec")
+            .get_parameter_value()
+            .double_value
         )
 
         self._parser = parser or LLMParser()
@@ -165,7 +176,10 @@ class LLMGatewayNode(Node):
 
     def _resolve_runtime_mode(self) -> str:
         runtime_mode = (
-            self.get_parameter("runtime_mode").get_parameter_value().string_value.strip().lower()
+            self.get_parameter("runtime_mode")
+            .get_parameter_value()
+            .string_value.strip()
+            .lower()
         )
         return runtime_mode or "hardware"
 
@@ -184,7 +198,9 @@ class LLMGatewayNode(Node):
     def raw_command_callback(self, msg: String) -> None:
         self.process_raw_command(msg.data)
 
-    def raw_command_cb(self, msg: String) -> None:  # pragma: no cover - compatibility shim
+    def raw_command_cb(
+        self, msg: String
+    ) -> None:  # pragma: no cover - compatibility shim
         self.raw_command_callback(msg)
 
     def process_intent(self, intent_text: str) -> None:
@@ -206,7 +222,12 @@ class LLMGatewayNode(Node):
         try:
             parsed_command = self._parser.parse(raw_payload)
         except Exception as exc:
-            self._reject("llm_parse_failed", str(exc), intent_text=intent_text, raw_llm_output=raw_payload)
+            self._reject(
+                "llm_parse_failed",
+                str(exc),
+                intent_text=intent_text,
+                raw_llm_output=raw_payload,
+            )
             return
 
         try:
@@ -236,7 +257,11 @@ class LLMGatewayNode(Node):
 
         if routed_result.route_type == "error":
             error_payload = routed_result.error_payload or {}
-            reason = error_payload.get("message") or error_payload.get("error") or "LLM returned an error payload."
+            reason = (
+                error_payload.get("message")
+                or error_payload.get("error")
+                or "LLM returned an error payload."
+            )
             self._reject(
                 "unsupported_or_ambiguous",
                 str(reason),
@@ -259,7 +284,9 @@ class LLMGatewayNode(Node):
             )
             return
 
-        self._process_single_command(intent_text, parsed_command, routed_result.commands[0])
+        self._process_single_command(
+            intent_text, parsed_command, routed_result.commands[0]
+        )
 
     def _normalize_and_validate(self, command: Dict[str, Any]) -> Dict[str, Any]:
         normalized_command = self._normalizer.normalize(command)
@@ -355,8 +382,12 @@ class LLMGatewayNode(Node):
             return
 
         current_step_number = sequence_state.current_step_index + 1
-        self.publish_status(f"sequence_step:{current_step_number}/{sequence_state.step_count}")
-        normalized_command = sequence_state.normalized_commands[sequence_state.current_step_index]
+        self.publish_status(
+            f"sequence_step:{current_step_number}/{sequence_state.step_count}"
+        )
+        normalized_command = sequence_state.normalized_commands[
+            sequence_state.current_step_index
+        ]
         self._dispatch_normalized_command(
             normalized_command,
             sequence_state.intent_text,
@@ -394,7 +425,9 @@ class LLMGatewayNode(Node):
             return
 
         if sequence_state is None and self._is_query_command(primitive_type):
-            self._publish_command(self._goal_mapper.to_command_payload(normalized_command))
+            self._publish_command(
+                self._goal_mapper.to_command_payload(normalized_command)
+            )
             self._handle_get_pose_query(normalized_command, intent_text)
             return
 
@@ -402,13 +435,17 @@ class LLMGatewayNode(Node):
             self._reject_sequence_step(
                 sequence_state,
                 "GET_POSE is query-only and cannot execute inside sequences.",
-                validated_command=self._goal_mapper.to_command_payload(normalized_command),
+                validated_command=self._goal_mapper.to_command_payload(
+                    normalized_command
+                ),
             )
             return
 
         command_payload = self._goal_mapper.to_command_payload(normalized_command)
 
-        if not self._validate_client.wait_for_service(timeout_sec=self._safety_service_timeout_sec):
+        if not self._validate_client.wait_for_service(
+            timeout_sec=self._safety_service_timeout_sec
+        ):
             if sequence_state is None:
                 self._reject(
                     "validate_service_unavailable",
@@ -429,7 +466,10 @@ class LLMGatewayNode(Node):
             self.publish_status("safety_validation_requested")
         validation_future = self._validate_client.call_async(request)
         validation_future.add_done_callback(
-            lambda future, intent=intent_text, payload=command_payload, sequence=sequence_state: (
+            lambda future,
+            intent=intent_text,
+            payload=command_payload,
+            sequence=sequence_state: (
                 self._on_validation_done(future, intent, payload, sequence)
             )
         )
@@ -442,7 +482,9 @@ class LLMGatewayNode(Node):
         self, normalized_command: Dict[str, Any], intent_text: str
     ) -> None:
         """Route GET_POSE to the dedicated query service — NO motion action path."""
-        if not self._get_pose_client.wait_for_service(timeout_sec=self._safety_service_timeout_sec):
+        if not self._get_pose_client.wait_for_service(
+            timeout_sec=self._safety_service_timeout_sec
+        ):
             self._reject(
                 "get_pose_service_unavailable",
                 "GetCurrentPose service unavailable",
@@ -451,7 +493,9 @@ class LLMGatewayNode(Node):
             return
 
         request = GetCurrentPose.Request()
-        request.reference_frame = str(normalized_command.get("reference_frame", "base_link"))
+        request.reference_frame = str(
+            normalized_command.get("reference_frame", "base_link")
+        )
 
         self.publish_status("get_pose_requested")
         future = self._get_pose_client.call_async(request)
@@ -500,20 +544,24 @@ class LLMGatewayNode(Node):
             f"orient=({pose.orientation.x:.4f}, {pose.orientation.y:.4f}, "
             f"{pose.orientation.z:.4f}, {pose.orientation.w:.4f})"
         )
-        self._publish_debug({
-            "status": "query_result",
-            "stage": "get_pose",
-            "intent": intent_text,
-            "message": response.message,
-            "current_pose": pose_data,
-        })
+        self._publish_debug(
+            {
+                "status": "query_result",
+                "stage": "get_pose",
+                "intent": intent_text,
+                "message": response.message,
+                "current_pose": pose_data,
+            }
+        )
         self.publish_status("query_succeeded")
 
     def _build_validate_request(
         self, normalized_command: Dict[str, Any], command_payload: Dict[str, Any]
     ) -> ValidateCommand.Request:
         request = ValidateCommand.Request()
-        request.command_json = json.dumps(command_payload, ensure_ascii=True, separators=(",", ":"))
+        request.command_json = json.dumps(
+            command_payload, ensure_ascii=True, separators=(",", ":")
+        )
         request.primitive_type = normalized_command["primitive_type"]
         request.velocity_scale = normalized_command.get("velocity_scale", 0.0)
         if "target_pose_msg" in normalized_command:
@@ -562,7 +610,9 @@ class LLMGatewayNode(Node):
             return
 
         try:
-            validated_command = self._command_from_sanitized_json(response.sanitized_json, command_payload)
+            validated_command = self._command_from_sanitized_json(
+                response.sanitized_json, command_payload
+            )
             normalized_command = self._normalize_and_validate(validated_command)
         except Exception as exc:
             if sequence_state is None:
@@ -606,7 +656,9 @@ class LLMGatewayNode(Node):
             "validated_command": goal_payload,
         }
         if sequence_state is not None:
-            validated_debug_payload["sequence_step_index"] = sequence_state.current_step_index
+            validated_debug_payload["sequence_step_index"] = (
+                sequence_state.current_step_index
+            )
             validated_debug_payload["sequence_step_count"] = sequence_state.step_count
         self._publish_debug(validated_debug_payload)
         if sequence_state is None:
@@ -631,9 +683,10 @@ class LLMGatewayNode(Node):
         goal = self._goal_mapper.to_execute_motion_goal(execution_command)
         send_future = self._execute_client.send_goal_async(goal)
         send_future.add_done_callback(
-            lambda f, intent=intent_text, payload=goal_payload, sequence=sequence_state: (
-                self._on_goal_sent(f, intent, payload, sequence)
-            )
+            lambda f,
+            intent=intent_text,
+            payload=goal_payload,
+            sequence=sequence_state: (self._on_goal_sent(f, intent, payload, sequence))
         )
         if sequence_state is None:
             self.publish_status("dispatched")
@@ -650,8 +703,11 @@ class LLMGatewayNode(Node):
         except Exception as exc:
             if sequence_state is None:
                 self._reject(
-                    "execute_motion_send_failed", str(exc),
-                    intent_text=intent_text, validated_command=goal_payload)
+                    "execute_motion_send_failed",
+                    str(exc),
+                    intent_text=intent_text,
+                    validated_command=goal_payload,
+                )
             else:
                 self._reject_sequence_step(
                     sequence_state,
@@ -664,7 +720,9 @@ class LLMGatewayNode(Node):
                 self._reject(
                     "execute_motion_rejected",
                     "ExecuteMotion action server rejected goal",
-                    intent_text=intent_text, validated_command=goal_payload)
+                    intent_text=intent_text,
+                    validated_command=goal_payload,
+                )
             else:
                 self._reject_sequence_step(
                     sequence_state,
@@ -674,7 +732,10 @@ class LLMGatewayNode(Node):
             return
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(
-            lambda f, intent=intent_text, payload=goal_payload, sequence=sequence_state: (
+            lambda f,
+            intent=intent_text,
+            payload=goal_payload,
+            sequence=sequence_state: (
                 self._on_execution_done(f, intent, payload, sequence)
             )
         )
@@ -691,8 +752,11 @@ class LLMGatewayNode(Node):
         except Exception as exc:
             if sequence_state is None:
                 self._reject(
-                    "execute_motion_result_error", str(exc),
-                    intent_text=intent_text, validated_command=goal_payload)
+                    "execute_motion_result_error",
+                    str(exc),
+                    intent_text=intent_text,
+                    validated_command=goal_payload,
+                )
             else:
                 self._reject_sequence_step(
                     sequence_state,
@@ -702,18 +766,19 @@ class LLMGatewayNode(Node):
             return
         if wrapped.result and wrapped.result.success:
             result_message = wrapped.result.message or ""
-            self.get_logger().info(
-                f"Execution succeeded: {result_message}")
+            self.get_logger().info(f"Execution succeeded: {result_message}")
             if sequence_state is None:
                 if "READY_FOR_CONFIRM" in result_message:
                     self.publish_status("ready_for_confirm")
                 self.publish_status("succeeded")
-                self._publish_debug({
-                    "status": "succeeded",
-                    "stage": "execute_motion",
-                    "intent": intent_text,
-                    "message": result_message,
-                })
+                self._publish_debug(
+                    {
+                        "status": "succeeded",
+                        "stage": "execute_motion",
+                        "intent": intent_text,
+                        "message": result_message,
+                    }
+                )
                 return
 
             if goal_payload.get("primitive_type") == "IO_SET":
@@ -724,8 +789,11 @@ class LLMGatewayNode(Node):
             msg = wrapped.result.message if wrapped.result else "no result"
             if sequence_state is None:
                 self._reject(
-                    "execute_motion_failed", msg,
-                    intent_text=intent_text, validated_command=goal_payload)
+                    "execute_motion_failed",
+                    msg,
+                    intent_text=intent_text,
+                    validated_command=goal_payload,
+                )
             else:
                 self._reject_sequence_step(
                     sequence_state,
@@ -733,7 +801,9 @@ class LLMGatewayNode(Node):
                     validated_command=goal_payload,
                 )
 
-    def _prepare_execution_command(self, normalized_command: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_execution_command(
+        self, normalized_command: Dict[str, Any]
+    ) -> Dict[str, Any]:
         return _pipeline_prepare_execution_command(
             normalized_command,
             logger=self.get_logger(),
@@ -803,15 +873,25 @@ class LLMGatewayNode(Node):
 
     def _publish_debug(self, payload: Dict[str, Any]) -> None:
         compact_payload = {
-            key: value for key, value in payload.items() if value not in (None, "", [], {})
+            key: value
+            for key, value in payload.items()
+            if value not in (None, "", [], {})
         }
         self._llm_debug_publisher.publish(
-            String(data=json.dumps(compact_payload, ensure_ascii=True, separators=(",", ":")))
+            String(
+                data=json.dumps(
+                    compact_payload, ensure_ascii=True, separators=(",", ":")
+                )
+            )
         )
 
     def _publish_command(self, command_payload: Dict[str, Any]) -> None:
         self._command_publisher.publish(
-            String(data=json.dumps(command_payload, ensure_ascii=True, separators=(",", ":")))
+            String(
+                data=json.dumps(
+                    command_payload, ensure_ascii=True, separators=(",", ":")
+                )
+            )
         )
 
     def _hydrate_draw_workplane(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -821,14 +901,20 @@ class LLMGatewayNode(Node):
             fetch_current_pose=self._request_current_pose_snapshot,
         )
 
-    def _request_current_pose_snapshot(self, reference_frame: str) -> Dict[str, Any] | None:
-        if not self._get_pose_client.wait_for_service(timeout_sec=self._safety_service_timeout_sec):
+    def _request_current_pose_snapshot(
+        self, reference_frame: str
+    ) -> Dict[str, Any] | None:
+        if not self._get_pose_client.wait_for_service(
+            timeout_sec=self._safety_service_timeout_sec
+        ):
             return None
 
         request = GetCurrentPose.Request()
         request.reference_frame = reference_frame
         future = self._get_pose_client.call_async(request)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=self._safety_service_timeout_sec)
+        rclpy.spin_until_future_complete(
+            self, future, timeout_sec=self._safety_service_timeout_sec
+        )
 
         if not future.done():
             return None

@@ -132,7 +132,9 @@ class BridgeCapabilities:
     execution_allowed: bool = False
     replay_available: bool = False
     sim_only: bool = False
-    hardware_gate: HardwareGateStatusSnapshot = field(default_factory=HardwareGateStatusSnapshot)
+    hardware_gate: HardwareGateStatusSnapshot = field(
+        default_factory=HardwareGateStatusSnapshot
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return {

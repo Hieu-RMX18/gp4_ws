@@ -23,6 +23,7 @@ pytestmark = [
 _INTERFACES_AVAILABLE = False
 try:
     import interfaces  # noqa: F401
+
     _INTERFACES_AVAILABLE = True
 except ImportError:
     pass
@@ -33,7 +34,6 @@ _SKIP_REASON = "requires colcon-sourced workspace with built interfaces"
 # Conditional imports — only available when interfaces is on PYTHONPATH.
 # Tests are skipped before these are referenced when _INTERFACES_AVAILABLE is False.
 if _INTERFACES_AVAILABLE:
-    import rclpy
     from rclpy.parameter import Parameter
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
@@ -94,7 +94,9 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
         accepted=True,
         get_result_async=lambda: ImmediateFuture(mock_exec_result),
     )
-    node._execute_client.send_goal_async = MagicMock(return_value=ImmediateFuture(mock_goal_handle))
+    node._execute_client.send_goal_async = MagicMock(
+        return_value=ImmediateFuture(mock_goal_handle)
+    )
 
     node.process_intent("di chuyển thẳng tới x 0.30 y 0.0 z 0.30")
 
@@ -186,7 +188,9 @@ def test_gateway_fails_closed_when_execute_motion_unavailable(openai_payload):
 def test_gateway_status_heartbeat_reuses_latest_status():
     node = LLMGatewayNode()
     published = []
-    node._status_publisher.publish = MagicMock(side_effect=lambda msg: published.append(msg.data))
+    node._status_publisher.publish = MagicMock(
+        side_effect=lambda msg: published.append(msg.data)
+    )
 
     node.publish_status("parsed")
     node._publish_status_heartbeat()
@@ -265,7 +269,9 @@ def test_gateway_routes_semantic_ir_single_command():
         accepted=True,
         get_result_async=lambda: ImmediateFuture(mock_exec_result),
     )
-    node._execute_client.send_goal_async = MagicMock(return_value=ImmediateFuture(mock_goal_handle))
+    node._execute_client.send_goal_async = MagicMock(
+        return_value=ImmediateFuture(mock_goal_handle)
+    )
 
     node.process_intent("move linearly to x 0.30 y 0.00 z 0.30")
 
@@ -314,7 +320,11 @@ def test_gateway_executes_sequence_step_by_step():
                                     {
                                         "intent": "absolute_move_lin",
                                         "target_pose": {
-                                            "position": {"x": 0.30, "y": 0.00, "z": 0.30}
+                                            "position": {
+                                                "x": 0.30,
+                                                "y": 0.00,
+                                                "z": 0.30,
+                                            }
                                         },
                                         "reference_frame": "base_link",
                                     },
@@ -330,9 +340,15 @@ def test_gateway_executes_sequence_step_by_step():
     node._validate_client.wait_for_service = MagicMock(return_value=True)
     node._validate_client.call_async = MagicMock(
         side_effect=[
-            ImmediateFuture(SimpleNamespace(valid=True, reason="OK", sanitized_json="")),
-            ImmediateFuture(SimpleNamespace(valid=True, reason="OK", sanitized_json="")),
-            ImmediateFuture(SimpleNamespace(valid=True, reason="OK", sanitized_json="")),
+            ImmediateFuture(
+                SimpleNamespace(valid=True, reason="OK", sanitized_json="")
+            ),
+            ImmediateFuture(
+                SimpleNamespace(valid=True, reason="OK", sanitized_json="")
+            ),
+            ImmediateFuture(
+                SimpleNamespace(valid=True, reason="OK", sanitized_json="")
+            ),
         ]
     )
     node._execute_client.server_is_ready = MagicMock(return_value=True)
@@ -340,7 +356,11 @@ def test_gateway_executes_sequence_step_by_step():
         SimpleNamespace(
             accepted=True,
             get_result_async=lambda: ImmediateFuture(
-                SimpleNamespace(result=SimpleNamespace(success=True, message="ok", execution_time_sec=0.1))
+                SimpleNamespace(
+                    result=SimpleNamespace(
+                        success=True, message="ok", execution_time_sec=0.1
+                    )
+                )
             ),
         )
         for _ in range(3)
@@ -359,12 +379,19 @@ def test_gateway_executes_sequence_step_by_step():
     assert "sequence_succeeded" in statuses
     assert node._validate_client.call_async.call_count == 3
     assert node._execute_client.send_goal_async.call_count == 3
-    assert [goal.args[0].primitive_type for goal in node._execute_client.send_goal_async.call_args_list] == [
+    assert [
+        goal.args[0].primitive_type
+        for goal in node._execute_client.send_goal_async.call_args_list
+    ] == [
         "HOME",
         "WAIT",
         "LIN",
     ]
-    assert [command["primitive_type"] for command in command_messages] == ["HOME", "WAIT", "LIN"]
+    assert [command["primitive_type"] for command in command_messages] == [
+        "HOME",
+        "WAIT",
+        "LIN",
+    ]
     assert any(m.get("status") == "sequence_succeeded" for m in debug_messages)
 
     node.destroy_node()
@@ -389,12 +416,20 @@ def test_gateway_aborts_sequence_after_first_failed_step_and_marks_manual_recove
                             {
                                 "intent": "sequence",
                                 "steps": [
-                                    {"intent": "io_set", "io_address": 10010, "io_value": 1},
+                                    {
+                                        "intent": "io_set",
+                                        "io_address": 10010,
+                                        "io_value": 1,
+                                    },
                                     {"intent": "go_home"},
                                     {
                                         "intent": "absolute_move_lin",
                                         "target_pose": {
-                                            "position": {"x": 0.30, "y": 0.00, "z": 0.30}
+                                            "position": {
+                                                "x": 0.30,
+                                                "y": 0.00,
+                                                "z": 0.30,
+                                            }
                                         },
                                         "reference_frame": "base_link",
                                     },
@@ -410,18 +445,30 @@ def test_gateway_aborts_sequence_after_first_failed_step_and_marks_manual_recove
     node._validate_client.wait_for_service = MagicMock(return_value=True)
     node._validate_client.call_async = MagicMock(
         side_effect=[
-            ImmediateFuture(SimpleNamespace(valid=True, reason="OK", sanitized_json="")),
-            ImmediateFuture(SimpleNamespace(valid=False, reason="blocked by safety gate", sanitized_json="")),
+            ImmediateFuture(
+                SimpleNamespace(valid=True, reason="OK", sanitized_json="")
+            ),
+            ImmediateFuture(
+                SimpleNamespace(
+                    valid=False, reason="blocked by safety gate", sanitized_json=""
+                )
+            ),
         ]
     )
     node._execute_client.server_is_ready = MagicMock(return_value=True)
     first_goal_handle = SimpleNamespace(
         accepted=True,
         get_result_async=lambda: ImmediateFuture(
-            SimpleNamespace(result=SimpleNamespace(success=True, message="ok", execution_time_sec=0.1))
+            SimpleNamespace(
+                result=SimpleNamespace(
+                    success=True, message="ok", execution_time_sec=0.1
+                )
+            )
         ),
     )
-    node._execute_client.send_goal_async = MagicMock(return_value=ImmediateFuture(first_goal_handle))
+    node._execute_client.send_goal_async = MagicMock(
+        return_value=ImmediateFuture(first_goal_handle)
+    )
 
     node.process_intent("set io, go home, then move linearly")
 

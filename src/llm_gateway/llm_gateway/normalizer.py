@@ -36,7 +36,9 @@ def _convert_linear(value: float, unit: Optional[str], field: str) -> float:
         return value / 100.0
     if unit == "mm":
         return value / 1000.0
-    raise ValueError(f"{field}: unsupported linear_unit '{unit}'. Use one of {sorted(_VALID_LINEAR_UNITS)}.")
+    raise ValueError(
+        f"{field}: unsupported linear_unit '{unit}'. Use one of {sorted(_VALID_LINEAR_UNITS)}."
+    )
 
 
 def _convert_angular(value: float, unit: Optional[str], field: str) -> float:
@@ -47,7 +49,9 @@ def _convert_angular(value: float, unit: Optional[str], field: str) -> float:
         return value
     if unit == "deg":
         return math.radians(value)
-    raise ValueError(f"{field}: unsupported angular_unit '{unit}'. Use one of {sorted(_VALID_ANGULAR_UNITS)}.")
+    raise ValueError(
+        f"{field}: unsupported angular_unit '{unit}'. Use one of {sorted(_VALID_ANGULAR_UNITS)}."
+    )
 
 
 def _is_likely_mm(position_xyz: List[float]) -> bool:
@@ -72,13 +76,17 @@ def _wrap_to_pi(angle_rad: float) -> float:
 
 
 def _normalize_single_joint_angle(
-    raw_value: Any, field: str, angular_unit: Optional[str] = None,
+    raw_value: Any,
+    field: str,
+    angular_unit: Optional[str] = None,
 ) -> float:
     angle = _to_float(raw_value, field)
     if angular_unit is not None:
         angle = _convert_angular(angle, angular_unit, field)
     elif _COMPAT_UNIT_HEURISTIC and _is_likely_degrees([angle]):
-        _LOGGER.warning("DEPRECATED heuristic: treating %s=%.4f as degrees.", field, angle)
+        _LOGGER.warning(
+            "DEPRECATED heuristic: treating %s=%.4f as degrees.", field, angle
+        )
         angle = math.radians(angle)
     return _wrap_to_pi(angle)
 
@@ -99,7 +107,8 @@ def _rpy_to_quaternion(roll_rad: float, pitch_rad: float, yaw_rad: float) -> Qua
 
 
 def _normalize_orientation(
-    raw_orientation: Dict[str, Any], angular_unit: Optional[str] = None,
+    raw_orientation: Dict[str, Any],
+    angular_unit: Optional[str] = None,
 ) -> Quaternion:
     if not isinstance(raw_orientation, dict):
         raise ValueError("target_pose.orientation must be an object.")
@@ -188,7 +197,8 @@ def normalize_pose(
 
 
 def normalize_joints(
-    raw_joints: List[Any], angular_unit: Optional[str] = None,
+    raw_joints: List[Any],
+    angular_unit: Optional[str] = None,
 ) -> List[float]:
     """Normalize joint list to radians in (-pi, pi].
 
@@ -199,9 +209,15 @@ def normalize_joints(
     if not isinstance(raw_joints, list):
         raise ValueError("joint_target must be a list.")
 
-    joints = [_to_float(value, f"joint_target[{index}]") for index, value in enumerate(raw_joints)]
+    joints = [
+        _to_float(value, f"joint_target[{index}]")
+        for index, value in enumerate(raw_joints)
+    ]
     if angular_unit is not None:
-        joints = [_convert_angular(v, angular_unit, f"joint_target[{i}]") for i, v in enumerate(joints)]
+        joints = [
+            _convert_angular(v, angular_unit, f"joint_target[{i}]")
+            for i, v in enumerate(joints)
+        ]
     elif _COMPAT_UNIT_HEURISTIC and _is_likely_degrees(joints):
         _LOGGER.warning("DEPRECATED heuristic: treating joint_target as degrees.")
         joints = [math.radians(value) for value in joints]
@@ -216,6 +232,7 @@ class Normalizer:
         "PTP": "PILZ_PTP",
         "CIRC": "PILZ_CIRC",
         "CARTESIAN_PATH": "PILZ_LIN",
+        "BLENDED_SEQUENCE": "PILZ_LIN",
         "HOME": "PILZ_PTP",
         "MOVE_REL": "PILZ_LIN",
         "MOVE_JOINT": "PILZ_PTP",
@@ -255,11 +272,13 @@ class Normalizer:
         if linear_unit is not None and linear_unit not in _VALID_LINEAR_UNITS:
             raise ValueError(
                 f"Unsupported linear_unit '{linear_unit}'. "
-                f"Use one of {sorted(_VALID_LINEAR_UNITS)}.")
+                f"Use one of {sorted(_VALID_LINEAR_UNITS)}."
+            )
         if angular_unit is not None and angular_unit not in _VALID_ANGULAR_UNITS:
             raise ValueError(
                 f"Unsupported angular_unit '{angular_unit}'. "
-                f"Use one of {sorted(_VALID_ANGULAR_UNITS)}.")
+                f"Use one of {sorted(_VALID_ANGULAR_UNITS)}."
+            )
 
         if primitive_type == "WAIT" and "wait_duration_sec" in normalized:
             normalized["wait_duration_sec"] = float(normalized["wait_duration_sec"])
@@ -273,7 +292,8 @@ class Normalizer:
                 normalized["joint_index"] = int(normalized["joint_index"])
             if "joint_angle" in normalized:
                 normalized["joint_angle"] = _normalize_single_joint_angle(
-                    normalized["joint_angle"], "joint_angle",
+                    normalized["joint_angle"],
+                    "joint_angle",
                     angular_unit=angular_unit,
                 )
 
@@ -284,10 +304,12 @@ class Normalizer:
 
         if "target_pose" in normalized:
             normalized["target_pose_msg"] = normalize_pose(
-                normalized["target_pose"], linear_unit, angular_unit)
+                normalized["target_pose"], linear_unit, angular_unit
+            )
         if "joint_target" in normalized:
             normalized["joint_target"] = normalize_joints(
-                normalized["joint_target"], angular_unit)
+                normalized["joint_target"], angular_unit
+            )
 
         # CARTESIAN_PATH: normalize each waypoint dict to Pose msg
         if primitive_type == "CARTESIAN_PATH" and "waypoints" in normalized:
@@ -296,19 +318,41 @@ class Normalizer:
                 waypoints_msg.append(normalize_pose(wp, linear_unit, angular_unit))
             normalized["waypoints_msg"] = waypoints_msg
 
+        # BLENDED_SEQUENCE: normalize each step's target_pose (W2.T3)
+        if primitive_type == "BLENDED_SEQUENCE" and "sequence_steps" in normalized:
+            norm_steps = []
+            for step in normalized["sequence_steps"]:
+                ns = dict(step)
+                if "target_pose" in ns:
+                    ns["target_pose_msg"] = normalize_pose(
+                        ns["target_pose"], linear_unit, angular_unit
+                    )
+                step_ptype = ns.get("primitive_type", "LIN")
+                ns.setdefault("velocity_scale", self.default_velocity_scale)
+                ns.setdefault("acceleration_scale", self.default_acceleration_scale)
+                ns.setdefault(
+                    "planner_id",
+                    self._PLANNER_DEFAULTS.get(step_ptype, "PILZ_LIN"),
+                )
+                norm_steps.append(ns)
+            normalized["sequence_steps"] = norm_steps
+
         # CIRC: normalize target_pose and auxiliary waypoint (exactly 1 required)
         if primitive_type == "CIRC":
             if "target_pose" not in normalized:
                 raise ValueError("CIRC requires target_pose.")
             normalized["target_pose_msg"] = normalize_pose(
-                normalized["target_pose"], linear_unit, angular_unit)
+                normalized["target_pose"], linear_unit, angular_unit
+            )
             if "waypoints" not in normalized:
                 raise ValueError("CIRC requires waypoints.")
             if not isinstance(normalized["waypoints"], list):
                 raise ValueError("CIRC waypoints must be a list.")
             if len(normalized["waypoints"]) != 1:
                 raise ValueError("CIRC requires exactly 1 auxiliary waypoint.")
-            waypoints_msg = [normalize_pose(normalized["waypoints"][0], linear_unit, angular_unit)]
+            waypoints_msg = [
+                normalize_pose(normalized["waypoints"][0], linear_unit, angular_unit)
+            ]
             normalized["waypoints_msg"] = waypoints_msg
 
         # MOVE_REL: explicit linear_unit applies to delta fields when present.
@@ -317,7 +361,9 @@ class Normalizer:
                 if field in normalized:
                     normalized[field] = _to_float(normalized[field], field)
                     if linear_unit is not None:
-                        normalized[field] = _convert_linear(normalized[field], linear_unit, field)
+                        normalized[field] = _convert_linear(
+                            normalized[field], linear_unit, field
+                        )
             normalized.setdefault("reference_frame", "base_link")
 
         normalized.setdefault("velocity_scale", self.default_velocity_scale)

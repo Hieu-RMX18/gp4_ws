@@ -12,7 +12,9 @@ def _macro_policy_path() -> str:
 def _router(runtime_mode: str = "hardware"):
     from llm_gateway.intent_router import IntentRouter
 
-    return IntentRouter(macro_policy_path=_macro_policy_path(), runtime_mode=runtime_mode)
+    return IntentRouter(
+        macro_policy_path=_macro_policy_path(), runtime_mode=runtime_mode
+    )
 
 
 def _draw_text_payload(text: str = "GP4", **overrides) -> dict:
@@ -69,7 +71,9 @@ def test_rejects_invalid_font_height():
     router = _router()
 
     with pytest.raises(ValueError, match="text height"):
-        router.route(_draw_text_payload(font={"type": "single_stroke_builtin", "height_m": 0.0}))
+        router.route(
+            _draw_text_payload(font={"type": "single_stroke_builtin", "height_m": 0.0})
+        )
 
 
 def test_rejects_non_builtin_font_type():

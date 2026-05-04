@@ -52,7 +52,9 @@ def _normalize_angle(value: Any, field: str) -> float:
     return _wrap_to_pi(raw)
 
 
-def _rpy_to_quaternion(roll_rad: float, pitch_rad: float, yaw_rad: float) -> dict[str, float]:
+def _rpy_to_quaternion(
+    roll_rad: float, pitch_rad: float, yaw_rad: float
+) -> dict[str, float]:
     cy = math.cos(yaw_rad * 0.5)
     sy = math.sin(yaw_rad * 0.5)
     cp = math.cos(pitch_rad * 0.5)
@@ -91,7 +93,9 @@ class IntentNormalizationMixin:
             }
         primitive = str(command.get("primitive_type") or "").strip().upper()
         if not primitive:
-            raise IntentResolutionError("missing primitive_type", missing_slots=["primitive_type"])
+            raise IntentResolutionError(
+                "missing primitive_type", missing_slots=["primitive_type"]
+            )
         if primitive not in SUPPORTED_PRIMITIVES:
             raise IntentResolutionError(
                 f"primitive_type {primitive!r} is outside the supported ExecuteMotion policy.",
@@ -104,7 +108,11 @@ class IntentNormalizationMixin:
             )
 
         allowed_fields = _ALLOWED_FIELDS_BY_PRIMITIVE[primitive]
-        rejected_fields = sorted(key for key in command if key not in allowed_fields and key != "primitive_type")
+        rejected_fields = sorted(
+            key
+            for key in command
+            if key not in allowed_fields and key != "primitive_type"
+        )
         if rejected_fields:
             raise IntentResolutionError(
                 f"{primitive} payload contains unsupported fields.",
@@ -119,7 +127,9 @@ class IntentNormalizationMixin:
                 command.get("velocity_scale", self._default_velocity_scale),
                 "velocity_scale",
             )
-            velocity_clamped = _clamp(velocity_scale, self._min_velocity_scale, self._max_velocity_scale)
+            velocity_clamped = _clamp(
+                velocity_scale, self._min_velocity_scale, self._max_velocity_scale
+            )
             if velocity_clamped != velocity_scale:
                 notes.append(
                     f"velocity_scale clamped from {velocity_scale:.4f} to {velocity_clamped:.4f}."
@@ -130,16 +140,36 @@ class IntentNormalizationMixin:
                 command.get("acceleration_scale", self._default_acceleration_scale),
                 "acceleration_scale",
             )
-            acceleration_clamped = _clamp(acceleration_scale, self._min_velocity_scale, self._max_acceleration_scale)
+            acceleration_clamped = _clamp(
+                acceleration_scale,
+                self._min_velocity_scale,
+                self._max_acceleration_scale,
+            )
             if acceleration_clamped != acceleration_scale:
                 notes.append(
                     f"acceleration_scale clamped from {acceleration_scale:.4f} to {acceleration_clamped:.4f}."
                 )
             normalized["acceleration_scale"] = acceleration_clamped
-            normalized["planner_id"] = str(command.get("planner_id") or PLANNER_DEFAULTS.get(primitive, "PILZ_PTP"))
+            normalized["planner_id"] = str(
+                command.get("planner_id") or PLANNER_DEFAULTS.get(primitive, "PILZ_PTP")
+            )
 
-        if primitive in {"HOME", "PTP", "LIN", "CIRC", "CARTESIAN_PATH", "MOVE_REL", "GET_POSE", "WAIT", "STOP", "IO_SET", "ALARM_RESET"}:
-            normalized["reference_frame"] = str(command.get("reference_frame") or "base_link")
+        if primitive in {
+            "HOME",
+            "PTP",
+            "LIN",
+            "CIRC",
+            "CARTESIAN_PATH",
+            "MOVE_REL",
+            "GET_POSE",
+            "WAIT",
+            "STOP",
+            "IO_SET",
+            "ALARM_RESET",
+        }:
+            normalized["reference_frame"] = str(
+                command.get("reference_frame") or "base_link"
+            )
             if normalized["reference_frame"] != "base_link":
                 raise IntentResolutionError(
                     f"{primitive} requires reference_frame='base_link'.",
@@ -152,11 +182,19 @@ class IntentNormalizationMixin:
                     f"{primitive} requires target_pose.",
                     missing_slots=["target_pose"],
                 )
-            normalized["target_pose"] = self._normalize_pose(command["target_pose"], field_name="target_pose")
+            normalized["target_pose"] = self._normalize_pose(
+                command["target_pose"], field_name="target_pose"
+            )
 
         if primitive == "PTP" and "joint_target" in command:
-            normalized["joint_target"] = self._normalize_joint_target(command["joint_target"])
-        if primitive == "PTP" and "target_pose" not in normalized and "joint_target" not in normalized:
+            normalized["joint_target"] = self._normalize_joint_target(
+                command["joint_target"]
+            )
+        if (
+            primitive == "PTP"
+            and "target_pose" not in normalized
+            and "joint_target" not in normalized
+        ):
             raise IntentResolutionError(
                 "PTP requires target_pose or joint_target.",
                 missing_slots=["target_pose|joint_target"],
@@ -164,10 +202,15 @@ class IntentNormalizationMixin:
 
         if primitive == "CIRC":
             if "waypoints" not in command:
-                raise IntentResolutionError("CIRC requires waypoints.", missing_slots=["waypoints[0]"])
+                raise IntentResolutionError(
+                    "CIRC requires waypoints.", missing_slots=["waypoints[0]"]
+                )
             waypoints = command.get("waypoints")
             if not isinstance(waypoints, list) or len(waypoints) != 1:
-                raise IntentResolutionError("CIRC requires exactly one auxiliary waypoint.", missing_slots=["waypoints[0]"])
+                raise IntentResolutionError(
+                    "CIRC requires exactly one auxiliary waypoint.",
+                    missing_slots=["waypoints[0]"],
+                )
             normalized["waypoints"] = [
                 self._normalize_pose(waypoints[0], field_name="waypoints[0]")
             ]
@@ -203,53 +246,94 @@ class IntentNormalizationMixin:
                 and normalized["delta_y"] == 0.0
                 and normalized["delta_z"] == 0.0
             ):
-                raise IntentResolutionError("MOVE_REL requires at least one non-zero delta component.")
+                raise IntentResolutionError(
+                    "MOVE_REL requires at least one non-zero delta component."
+                )
 
         if primitive == "MOVE_JOINT":
             if "joint_index" not in command:
-                raise IntentResolutionError("MOVE_JOINT requires joint_index.", missing_slots=["joint_index"])
+                raise IntentResolutionError(
+                    "MOVE_JOINT requires joint_index.", missing_slots=["joint_index"]
+                )
             if "joint_angle" not in command:
-                raise IntentResolutionError("MOVE_JOINT requires joint_angle.", missing_slots=["joint_angle"])
+                raise IntentResolutionError(
+                    "MOVE_JOINT requires joint_angle.", missing_slots=["joint_angle"]
+                )
             joint_index = _to_int(command.get("joint_index"), "joint_index")
             if joint_index < 0 or joint_index >= len(JOINT_NAMES):
-                raise IntentResolutionError("MOVE_JOINT joint_index must be between 0 and 5.", rejected_fields=["joint_index"])
+                raise IntentResolutionError(
+                    "MOVE_JOINT joint_index must be between 0 and 5.",
+                    rejected_fields=["joint_index"],
+                )
             normalized["joint_index"] = joint_index
-            normalized["joint_angle"] = _normalize_angle(command.get("joint_angle"), "joint_angle")
+            normalized["joint_angle"] = _normalize_angle(
+                command.get("joint_angle"), "joint_angle"
+            )
 
         if primitive == "MOVE_JOINTS":
             if "joint_target" not in command:
-                raise IntentResolutionError("MOVE_JOINTS requires joint_target.", missing_slots=["joint_target"])
-            normalized["joint_target"] = self._normalize_joint_target(command.get("joint_target"))
+                raise IntentResolutionError(
+                    "MOVE_JOINTS requires joint_target.", missing_slots=["joint_target"]
+                )
+            normalized["joint_target"] = self._normalize_joint_target(
+                command.get("joint_target")
+            )
 
         if primitive == "WAIT":
             if "wait_duration_sec" not in command:
-                raise IntentResolutionError("WAIT requires wait_duration_sec.", missing_slots=["wait_duration_sec"])
-            wait_duration_sec = _to_float(command.get("wait_duration_sec"), "wait_duration_sec")
+                raise IntentResolutionError(
+                    "WAIT requires wait_duration_sec.",
+                    missing_slots=["wait_duration_sec"],
+                )
+            wait_duration_sec = _to_float(
+                command.get("wait_duration_sec"), "wait_duration_sec"
+            )
             if wait_duration_sec < 0.0:
-                raise IntentResolutionError("WAIT wait_duration_sec must be >= 0.", rejected_fields=["wait_duration_sec"])
+                raise IntentResolutionError(
+                    "WAIT wait_duration_sec must be >= 0.",
+                    rejected_fields=["wait_duration_sec"],
+                )
             if wait_duration_sec > 60.0:
-                raise IntentResolutionError("WAIT wait_duration_sec must be <= 60.", rejected_fields=["wait_duration_sec"])
+                raise IntentResolutionError(
+                    "WAIT wait_duration_sec must be <= 60.",
+                    rejected_fields=["wait_duration_sec"],
+                )
             normalized["wait_duration_sec"] = wait_duration_sec
 
         if primitive == "SET_SPEED":
             if "velocity_scale" not in command:
-                raise IntentResolutionError("SET_SPEED requires velocity_scale.", missing_slots=["velocity_scale"])
+                raise IntentResolutionError(
+                    "SET_SPEED requires velocity_scale.",
+                    missing_slots=["velocity_scale"],
+                )
             speed_raw = _to_float(command.get("velocity_scale"), "velocity_scale")
-            speed_clamped = _clamp(speed_raw, self._min_velocity_scale, self._max_velocity_scale)
+            speed_clamped = _clamp(
+                speed_raw, self._min_velocity_scale, self._max_velocity_scale
+            )
             if speed_clamped != speed_raw:
-                notes.append(f"SET_SPEED velocity_scale clamped from {speed_raw:.4f} to {speed_clamped:.4f}.")
+                notes.append(
+                    f"SET_SPEED velocity_scale clamped from {speed_raw:.4f} to {speed_clamped:.4f}."
+                )
             normalized["velocity_scale"] = speed_clamped
 
         if primitive == "IO_SET":
-            missing_io = [field for field in ("io_address", "io_value") if field not in command]
+            missing_io = [
+                field for field in ("io_address", "io_value") if field not in command
+            ]
             if missing_io:
-                raise IntentResolutionError("IO_SET requires io_address and io_value.", missing_slots=missing_io)
+                raise IntentResolutionError(
+                    "IO_SET requires io_address and io_value.", missing_slots=missing_io
+                )
             io_address = _to_int(command.get("io_address"), "io_address")
             io_value = _to_int(command.get("io_value"), "io_value")
             if io_address < 0:
-                raise IntentResolutionError("IO_SET io_address must be >= 0.", rejected_fields=["io_address"])
+                raise IntentResolutionError(
+                    "IO_SET io_address must be >= 0.", rejected_fields=["io_address"]
+                )
             if io_value not in {0, 1}:
-                raise IntentResolutionError("IO_SET io_value must be 0 or 1.", rejected_fields=["io_value"])
+                raise IntentResolutionError(
+                    "IO_SET io_value must be 0 or 1.", rejected_fields=["io_value"]
+                )
             normalized["io_address"] = io_address
             normalized["io_value"] = io_value
 
@@ -259,13 +343,19 @@ class IntentNormalizationMixin:
         from .intent_resolution import IntentResolutionError
 
         if not isinstance(value, list):
-            raise IntentResolutionError("joint_target must be an array of 6 values.", missing_slots=["joint_target"])
+            raise IntentResolutionError(
+                "joint_target must be an array of 6 values.",
+                missing_slots=["joint_target"],
+            )
         if len(value) != len(JOINT_NAMES):
             raise IntentResolutionError(
                 "joint_target must include exactly 6 values.",
                 missing_slots=["joint_target[0..5]"],
             )
-        return [_normalize_angle(entry, f"joint_target[{index}]") for index, entry in enumerate(value)]
+        return [
+            _normalize_angle(entry, f"joint_target[{index}]")
+            for index, entry in enumerate(value)
+        ]
 
     def _normalize_pose(self, value: Any, *, field_name: str) -> dict[str, Any]:
         from .intent_resolution import IntentResolutionError
@@ -274,7 +364,10 @@ class IntentNormalizationMixin:
             raise IntentResolutionError(f"{field_name} must be an object.")
         position = value.get("position")
         if not isinstance(position, dict):
-            raise IntentResolutionError(f"{field_name}.position must be an object.", missing_slots=[f"{field_name}.position"])
+            raise IntentResolutionError(
+                f"{field_name}.position must be an object.",
+                missing_slots=[f"{field_name}.position"],
+            )
 
         x = _to_float(position.get("x"), f"{field_name}.position.x")
         y = _to_float(position.get("y"), f"{field_name}.position.y")
@@ -291,16 +384,32 @@ class IntentNormalizationMixin:
             raise IntentResolutionError(f"{field_name}.orientation must be an object.")
         elif {"x", "y", "z", "w"}.issubset(set(orientation_payload.keys())):
             orientation = {
-                "x": _to_float(orientation_payload.get("x"), f"{field_name}.orientation.x"),
-                "y": _to_float(orientation_payload.get("y"), f"{field_name}.orientation.y"),
-                "z": _to_float(orientation_payload.get("z"), f"{field_name}.orientation.z"),
-                "w": _to_float(orientation_payload.get("w"), f"{field_name}.orientation.w"),
+                "x": _to_float(
+                    orientation_payload.get("x"), f"{field_name}.orientation.x"
+                ),
+                "y": _to_float(
+                    orientation_payload.get("y"), f"{field_name}.orientation.y"
+                ),
+                "z": _to_float(
+                    orientation_payload.get("z"), f"{field_name}.orientation.z"
+                ),
+                "w": _to_float(
+                    orientation_payload.get("w"), f"{field_name}.orientation.w"
+                ),
             }
         elif {"roll", "pitch", "yaw"}.issubset(set(orientation_payload.keys())):
-            roll = _to_float(orientation_payload.get("roll"), f"{field_name}.orientation.roll")
-            pitch = _to_float(orientation_payload.get("pitch"), f"{field_name}.orientation.pitch")
-            yaw = _to_float(orientation_payload.get("yaw"), f"{field_name}.orientation.yaw")
-            if any(abs(component) > (2.0 * math.pi) for component in (roll, pitch, yaw)):
+            roll = _to_float(
+                orientation_payload.get("roll"), f"{field_name}.orientation.roll"
+            )
+            pitch = _to_float(
+                orientation_payload.get("pitch"), f"{field_name}.orientation.pitch"
+            )
+            yaw = _to_float(
+                orientation_payload.get("yaw"), f"{field_name}.orientation.yaw"
+            )
+            if any(
+                abs(component) > (2.0 * math.pi) for component in (roll, pitch, yaw)
+            ):
                 roll = math.radians(roll)
                 pitch = math.radians(pitch)
                 yaw = math.radians(yaw)
@@ -330,7 +439,11 @@ class IntentNormalizationMixin:
             if 1 <= index <= len(JOINT_NAMES):
                 return index - 1
 
-        raw_joint_name = str(parameters.get("jointNameResolved") or parameters.get("joint") or "").strip().lower()
+        raw_joint_name = (
+            str(parameters.get("jointNameResolved") or parameters.get("joint") or "")
+            .strip()
+            .lower()
+        )
         if raw_joint_name:
             if raw_joint_name in JOINT_NAMES:
                 return JOINT_NAMES.index(raw_joint_name)
@@ -340,7 +453,9 @@ class IntentNormalizationMixin:
 
         return None
 
-    def _read_joint_deg(self, *, current_joints: list[Any], joint_index: int) -> float | None:
+    def _read_joint_deg(
+        self, *, current_joints: list[Any], joint_index: int
+    ) -> float | None:
         target_name = JOINT_NAMES[joint_index]
         for joint in current_joints:
             if getattr(joint, "name", None) == target_name:

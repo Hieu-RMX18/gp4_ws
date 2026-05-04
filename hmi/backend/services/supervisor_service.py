@@ -21,7 +21,11 @@ from ..domain.state_machine import is_terminal_command_state
 from .audit_service import AuditService
 from .hardware_gate import HardwareGateEvaluator
 from .intent_resolution import IntentResolutionService
-from .session_lock_service import LeaseNotOwnedError, LeaseRejectedError, SessionLockService
+from .session_lock_service import (
+    LeaseNotOwnedError,
+    LeaseRejectedError,
+    SessionLockService,
+)
 from .supervisor_execution import SupervisorExecutionMixin
 from .supervisor_lifecycle import SupervisorLifecycleMixin
 from .supervisor_sequence import SupervisorSequenceMixin
@@ -76,7 +80,9 @@ class SupervisorService(
         self._audit = audit_service
         self._session_lock = session_lock_service
         self._ros = ros_adapter
-        self._hardware_gate_evaluator = hardware_gate_evaluator or HardwareGateEvaluator()
+        self._hardware_gate_evaluator = (
+            hardware_gate_evaluator or HardwareGateEvaluator()
+        )
         self._intent_resolution = intent_resolution_service or IntentResolutionService()
         self._sim_auto_confirm = bool(sim_auto_confirm)
         self._telemetry: TelemetryBridgeService | None = None
@@ -96,7 +102,9 @@ class SupervisorService(
         for key, value in fields.items():
             if value is None:
                 continue
-            if isinstance(value, (CommandLifecycleState, RuntimeMode, CommandRiskLevel)):
+            if isinstance(
+                value, (CommandLifecycleState, RuntimeMode, CommandRiskLevel)
+            ):
                 rendered = value.value
             elif isinstance(value, datetime):
                 rendered = value.isoformat()
@@ -116,8 +124,16 @@ class SupervisorService(
 
     def snapshot_overlay(self, session_id: str, operator_id: str) -> dict[str, Any]:
         self._expire_pending_confirmations()
-        active_command = self._commands.get(self._active_command_id) if self._active_command_id else None
-        active_sequence = self._commands.get(self._active_sequence_id) if self._active_sequence_id else None
+        active_command = (
+            self._commands.get(self._active_command_id)
+            if self._active_command_id
+            else None
+        )
+        active_sequence = (
+            self._commands.get(self._active_sequence_id)
+            if self._active_sequence_id
+            else None
+        )
         replay_items = self._audit.list_commands(limit=25, top_level_only=True)
         return {
             "capabilities": self._bridge_capabilities().to_dict(),
@@ -125,7 +141,9 @@ class SupervisorService(
             "messages": [message.to_dict() for message in self._messages],
             "activeCommand": self._serialize_command(active_command),
             "activeSequence": self._serialize_sequence(active_sequence),
-            "planMetrics": self._serialize_metrics(active_command.metrics if active_command else None),
+            "planMetrics": self._serialize_metrics(
+                active_command.metrics if active_command else None
+            ),
             "replayItems": [self._serialize_replay_item(item) for item in replay_items],
         }
 
@@ -162,7 +180,10 @@ class SupervisorService(
             session_id=session_id,
             operator_id=operator_id,
             message="controller lease acquired",
-            payload={"force_takeover": force_takeover, "takeover_reason": takeover_reason},
+            payload={
+                "force_takeover": force_takeover,
+                "takeover_reason": takeover_reason,
+            },
         )
         self._broadcast_lease_state()
         return {
@@ -214,7 +235,6 @@ class SupervisorService(
             "reason": None,
         }
 
-
     def get_command(self, command_id: str) -> dict[str, Any]:
         self._expire_pending_confirmations()
         command = self._commands.get(command_id)
@@ -226,7 +246,9 @@ class SupervisorService(
         detail = self._audit.get_command_detail(command_id)
         if detail is None:
             raise NotFoundError("command not found")
-        if (detail["command"].get("command_kind") or CommandKind.COMMAND.value) != CommandKind.COMMAND.value:
+        if (
+            detail["command"].get("command_kind") or CommandKind.COMMAND.value
+        ) != CommandKind.COMMAND.value:
             raise NotFoundError("command not found")
         return self._serialize_audited_command(detail["command"])
 
@@ -241,7 +263,9 @@ class SupervisorService(
         detail = self._audit.get_command_detail(sequence_id)
         if detail is None:
             raise NotFoundError("sequence not found")
-        if (detail["command"].get("command_kind") or CommandKind.COMMAND.value) != CommandKind.SEQUENCE.value:
+        if (
+            detail["command"].get("command_kind") or CommandKind.COMMAND.value
+        ) != CommandKind.SEQUENCE.value:
             raise NotFoundError("sequence not found")
         steps = [
             self._serialize_audited_command(row)
@@ -272,7 +296,6 @@ class SupervisorService(
         )
         return {"items": [self._serialize_replay_item(item) for item in items]}
 
-
     def list_replay(self, **filters: Any) -> dict[str, Any]:
         self._expire_pending_confirmations()
         items = self._audit.list_commands(top_level_only=True, **filters)
@@ -292,15 +315,23 @@ class SupervisorService(
                 "jobType": CommandKind.SEQUENCE.value,
                 "command": None,
                 "sequence": self._serialize_audited_sequence(detail["command"], steps),
-                "timeline": [self._serialize_timeline_row(row) for row in detail["timeline"]],
-                "runtimeEvents": [self._serialize_runtime_row(row) for row in detail["runtime_events"]],
+                "timeline": [
+                    self._serialize_timeline_row(row) for row in detail["timeline"]
+                ],
+                "runtimeEvents": [
+                    self._serialize_runtime_row(row) for row in detail["runtime_events"]
+                ],
             }
         return {
             "jobType": CommandKind.COMMAND.value,
             "command": self._serialize_audited_command(detail["command"]),
             "sequence": None,
-            "timeline": [self._serialize_timeline_row(row) for row in detail["timeline"]],
-            "runtimeEvents": [self._serialize_runtime_row(row) for row in detail["runtime_events"]],
+            "timeline": [
+                self._serialize_timeline_row(row) for row in detail["timeline"]
+            ],
+            "runtimeEvents": [
+                self._serialize_runtime_row(row) for row in detail["runtime_events"]
+            ],
         }
 
     def _assert_controller(
@@ -310,15 +341,27 @@ class SupervisorService(
         lease_token: str | None,
     ) -> Any:
         try:
-            return self._session_lock.assert_controller(session_id, operator_id, lease_token)
+            return self._session_lock.assert_controller(
+                session_id, operator_id, lease_token
+            )
         except LeaseNotOwnedError as exc:
             raise ForbiddenActionError(str(exc)) from exc
 
     def _assert_no_active_job(self) -> None:
-        active_sequence = self._commands.get(self._active_sequence_id) if self._active_sequence_id else None
-        if active_sequence is not None and not is_terminal_command_state(active_sequence.lifecycle_state):
+        active_sequence = (
+            self._commands.get(self._active_sequence_id)
+            if self._active_sequence_id
+            else None
+        )
+        if active_sequence is not None and not is_terminal_command_state(
+            active_sequence.lifecycle_state
+        ):
             raise ConflictError("another sequence is already pending or executing")
-        active_command = self._commands.get(self._active_command_id) if self._active_command_id else None
+        active_command = (
+            self._commands.get(self._active_command_id)
+            if self._active_command_id
+            else None
+        )
         if (
             active_command is not None
             and active_command.command_kind == CommandKind.COMMAND
@@ -362,4 +405,3 @@ class SupervisorService(
         if callable(reader):
             return reader()
         return []
-

@@ -14,29 +14,27 @@ Sau đó bật RViz riêng:
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, RegisterEventHandler, TimerAction
-from launch.event_handlers import OnProcessStart
+from launch.actions import DeclareLaunchArgument, TimerAction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
 def generate_launch_description():
-
     # ── Tham số có thể override từ command line ──────────────────────────
     robot_ip_arg = DeclareLaunchArgument(
         "robot_ip",
         default_value="192.168.1.33",
-        description="IP address của YRC1000micro"
+        description="IP address của YRC1000micro",
     )
     use_fake_arg = DeclareLaunchArgument(
         "use_fake_hardware",
         default_value="false",
-        description="true = mock/simulation, false = robot thật"
+        description="true = mock/simulation, false = robot thật",
     )
 
-    robot_ip        = LaunchConfiguration("robot_ip")
-    use_fake        = LaunchConfiguration("use_fake_hardware")
+    robot_ip = LaunchConfiguration("robot_ip")
+    use_fake = LaunchConfiguration("use_fake_hardware")
 
     # ── Load MoveIt config với tham số hardware ───────────────────────────
     moveit_config = (
@@ -44,7 +42,7 @@ def generate_launch_description():
         .robot_description(
             mappings={
                 "use_fake_hardware": use_fake,
-                "robot_ip":          robot_ip,
+                "robot_ip": robot_ip,
             }
         )
         .to_moveit_configs()
@@ -59,7 +57,7 @@ def generate_launch_description():
             str(moveit_config.package_path / "config/ros2_controllers.yaml"),
         ],
         remappings=[
-            ('follow_joint_trajectory', '/yaskawa/follow_joint_trajectory'),
+            ("follow_joint_trajectory", "/yaskawa/follow_joint_trajectory"),
         ],
         output="screen",
     )
@@ -76,7 +74,11 @@ def generate_launch_description():
     joint_state_broadcaster_spawner = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["joint_state_broadcaster", "--controller-manager", "/controller_manager"],
+        arguments=[
+            "joint_state_broadcaster",
+            "--controller-manager",
+            "/controller_manager",
+        ],
         output="screen",
     )
 
@@ -93,10 +95,12 @@ def generate_launch_description():
         actions=[joint_state_broadcaster_spawner, arm_controller_spawner],
     )
 
-    return LaunchDescription([
-        robot_ip_arg,
-        use_fake_arg,
-        rsp_node,
-        control_node,
-        delayed_spawners,
-    ])
+    return LaunchDescription(
+        [
+            robot_ip_arg,
+            use_fake_arg,
+            rsp_node,
+            control_node,
+            delayed_spawners,
+        ]
+    )

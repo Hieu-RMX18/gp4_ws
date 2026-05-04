@@ -13,7 +13,9 @@ class ApprovalFlow:
     A topic-based approval channel can be added in later phases.
     """
 
-    def __init__(self, node: Optional[Node] = None, input_fn: Callable[[str], str] = input):
+    def __init__(
+        self, node: Optional[Node] = None, input_fn: Callable[[str], str] = input
+    ):
         self._node = node
         self._input_fn = input_fn
 

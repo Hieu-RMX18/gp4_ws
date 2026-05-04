@@ -8,12 +8,9 @@
 
 #include "primitives/primitive_lin.hpp"
 
-namespace primitives
-{
-namespace
-{
-class FakeLinearBackend final : public LinearExecutionBackend
-{
+namespace primitives {
+namespace {
+class FakeLinearBackend final : public LinearExecutionBackend {
 public:
   bool server_available = true;
   bool normalize_ok = true;
@@ -32,10 +29,8 @@ public:
   double last_velocity_scale = 0.0;
   double last_acceleration_scale = 0.0;
 
-  bool wait_for_servers(std::string & reason) override
-  {
-    if (server_available)
-    {
+  bool wait_for_servers(std::string &reason) override {
+    if (server_available) {
       reason.clear();
       return true;
     }
@@ -44,12 +39,11 @@ public:
     return false;
   }
 
-  bool normalize_pose(geometry_msgs::msg::Pose & pose, std::string & reason) override
-  {
+  bool normalize_pose(geometry_msgs::msg::Pose &pose,
+                      std::string &reason) override {
     (void)pose;
 
-    if (normalize_ok)
-    {
+    if (normalize_ok) {
       reason.clear();
       return true;
     }
@@ -58,10 +52,9 @@ public:
     return false;
   }
 
-  bool get_current_pose_world(geometry_msgs::msg::Pose & pose, std::string & reason) override
-  {
-    if (!current_pose_ok)
-    {
+  bool get_current_pose_world(geometry_msgs::msg::Pose &pose,
+                              std::string &reason) override {
+    if (!current_pose_ok) {
       reason = "current pose unavailable";
       return false;
     }
@@ -71,16 +64,13 @@ public:
     return true;
   }
 
-  bool compute_cartesian_path(
-    const std::vector<geometry_msgs::msg::Pose> & waypoints,
-    double & fraction,
-    std::string & reason) override
-  {
+  bool
+  compute_cartesian_path(const std::vector<geometry_msgs::msg::Pose> &waypoints,
+                         double &fraction, std::string &reason) override {
     compute_called = true;
     last_waypoints = waypoints;
 
-    if (!compute_ok)
-    {
+    if (!compute_ok) {
       reason = compute_reason;
       return false;
     }
@@ -90,16 +80,11 @@ public:
     return true;
   }
 
-  LinearScalingConfig scaling_config() const override
-  {
-    return scales;
-  }
+  LinearScalingConfig scaling_config() const override { return scales; }
 
-  PrimitiveResult postprocess_and_validate(
-    double velocity_scale,
-    double acceleration_scale,
-    double cartesian_fraction_in) override
-  {
+  PrimitiveResult
+  postprocess_and_validate(double velocity_scale, double acceleration_scale,
+                           double cartesian_fraction_in) override {
     (void)cartesian_fraction_in;
     postprocess_called = true;
     last_velocity_scale = velocity_scale;
@@ -108,8 +93,7 @@ public:
   }
 };
 
-LINGoal make_lin_goal()
-{
+LINGoal make_lin_goal() {
   LINGoal goal;
   goal.target_pose.position.x = 0.25;
   goal.target_pose.position.y = 0.10;
@@ -120,8 +104,7 @@ LINGoal make_lin_goal()
   return goal;
 }
 
-TEST(PrimitiveLinTest, LinSuccessWithFractionAtLeastNinetyFivePercent)
-{
+TEST(PrimitiveLinTest, LinSuccessWithFractionAtLeastNinetyFivePercent) {
   PrimitiveLin primitive;
   FakeLinearBackend backend;
 
@@ -148,8 +131,7 @@ TEST(PrimitiveLinTest, LinSuccessWithFractionAtLeastNinetyFivePercent)
   EXPECT_DOUBLE_EQ(backend.last_acceleration_scale, 0.2);
 }
 
-TEST(PrimitiveLinTest, LinFailureWhenFractionBelowNinetyFivePercent)
-{
+TEST(PrimitiveLinTest, LinFailureWhenFractionBelowNinetyFivePercent) {
   PrimitiveLin primitive;
   FakeLinearBackend backend;
 
@@ -164,8 +146,7 @@ TEST(PrimitiveLinTest, LinFailureWhenFractionBelowNinetyFivePercent)
   EXPECT_FALSE(backend.postprocess_called);
 }
 
-TEST(PrimitiveLinTest, LinFailureWhenQuaternionIsInvalid)
-{
+TEST(PrimitiveLinTest, LinFailureWhenQuaternionIsInvalid) {
   PrimitiveLin primitive;
   FakeLinearBackend backend;
 
@@ -185,8 +166,7 @@ TEST(PrimitiveLinTest, LinFailureWhenQuaternionIsInvalid)
   EXPECT_FALSE(backend.postprocess_called);
 }
 
-TEST(PrimitiveLinTest, QualityGateRejectionPropagatesFailureReason)
-{
+TEST(PrimitiveLinTest, QualityGateRejectionPropagatesFailureReason) {
   PrimitiveLin primitive;
   FakeLinearBackend backend;
 
@@ -194,7 +174,8 @@ TEST(PrimitiveLinTest, QualityGateRejectionPropagatesFailureReason)
   backend.cartesian_fraction = 1.0;
   backend.postprocess_result.success = false;
   backend.postprocess_result.reason = PrimitiveFailReason::WRIST_FLIP_DETECTED;
-  backend.postprocess_result.message = "LIN quality gate rejected: wrist flip guard reject";
+  backend.postprocess_result.message =
+      "LIN quality gate rejected: wrist flip guard reject";
 
   const PrimitiveResult result = primitive.execute(make_lin_goal(), backend);
 
@@ -202,5 +183,5 @@ TEST(PrimitiveLinTest, QualityGateRejectionPropagatesFailureReason)
   EXPECT_EQ(result.reason, PrimitiveFailReason::WRIST_FLIP_DETECTED);
   EXPECT_TRUE(backend.postprocess_called);
 }
-}  // namespace
-}  // namespace primitives
+} // namespace
+} // namespace primitives

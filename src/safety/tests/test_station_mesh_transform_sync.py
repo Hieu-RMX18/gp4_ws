@@ -128,9 +128,9 @@ def test_station_scene_pose_stays_in_sync_with_xacro():
     assert visual_origin.attrib.get("xyz") == collision_origin.attrib.get("xyz")
 
     assert visual_mesh.attrib.get("filename") == station_mesh["resource"]
-    assert [float(v) for v in visual_mesh.attrib.get("scale", "").split()] == pytest.approx(
-        station_mesh["scale"]
-    )
+    assert [
+        float(v) for v in visual_mesh.attrib.get("scale", "").split()
+    ] == pytest.approx(station_mesh["scale"])
 
     mesh_xyz = _parse_vec3(visual_origin.attrib.get("xyz"))
     mesh_rpy = _parse_vec3(visual_origin.attrib.get("rpy"))

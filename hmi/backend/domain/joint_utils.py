@@ -1,4 +1,5 @@
 """Joint target resolution utilities — extracted from adapter.py."""
+
 from __future__ import annotations
 
 import re
@@ -21,12 +22,16 @@ def resolve_joint_target(
         if candidate is not None and 0 <= candidate < count:
             return candidate, joint_names[candidate]
 
-    raw_name = str(
-        parameters.get("jointNameResolved")
-        or parameters.get("joint")
-        or parameters.get("jointName")
-        or ""
-    ).strip().lower()
+    raw_name = (
+        str(
+            parameters.get("jointNameResolved")
+            or parameters.get("joint")
+            or parameters.get("jointName")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
     if raw_name:
         canonical_index = name_to_index.get(raw_name)
         if canonical_index is not None:

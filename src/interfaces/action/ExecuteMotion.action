@@ -19,6 +19,10 @@ float64 joint_angle          # target angle in radians
 # --- IO_SET ---
 uint32 io_address            # controller I/O address
 int32 io_value               # value to write (0 or 1 for digital)
+# --- BLENDED_SEQUENCE (W2.T0) ---
+# When primitive_type == "BLENDED_SEQUENCE", sequence_steps carries the typed
+# steps.  When primitive_type is anything else, sequence_steps must be empty.
+SequenceStep[] sequence_steps
 ---
 # Result
 bool success

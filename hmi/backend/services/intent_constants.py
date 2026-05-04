@@ -135,4 +135,6 @@ _CARTESIAN_DIRECTIONS = {
     "backward": (-1.0, 0.0, 0.0),
 }
 
-_DRAW_TEXT_PREFIX_PATTERN = re.compile(r"^(?:write|ve\s+chu|vẽ\s+chữ|viet|viết)\s+(.+)$", re.IGNORECASE)
+_DRAW_TEXT_PREFIX_PATTERN = re.compile(
+    r"^(?:write|ve\s+chu|vẽ\s+chữ|viet|viết)\s+(.+)$", re.IGNORECASE
+)

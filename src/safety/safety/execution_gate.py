@@ -36,8 +36,13 @@ class ExecutionGate:
     If any layer rejects, the command does not execute.
     """
 
-    def __init__(self, node: Node, validator: CommandValidator,
-                 guard: WorkspaceGuard, safety_manager=None):
+    def __init__(
+        self,
+        node: Node,
+        validator: CommandValidator,
+        guard: WorkspaceGuard,
+        safety_manager=None,
+    ):
         self.node = node
         self.validator = validator
         self.guard = guard
@@ -58,11 +63,11 @@ class ExecutionGate:
         self._safety_manager = safety_manager
 
         self.srv = self.node.create_service(
-            ValidateCommand,
-            '/validate_command',
-            self.validate_callback
+            ValidateCommand, "/validate_command", self.validate_callback
         )
-        self.node.get_logger().info("ExecutionGate initialized: /validate_command service ready.")
+        self.node.get_logger().info(
+            "ExecutionGate initialized: /validate_command service ready."
+        )
 
     def validate_callback(self, request, response):
         cmd_json = request.command_json
@@ -85,7 +90,8 @@ class ExecutionGate:
                 else:
                     reason = self._safety_manager.last_error_reason
                     self.node.get_logger().warn(
-                        f"Execution blocked (fail-closed): {reason}")
+                        f"Execution blocked (fail-closed): {reason}"
+                    )
                     response.valid = False
                     response.reason = f"BLOCKED: {reason}"
                     response.sanitized_json = ""
@@ -111,7 +117,8 @@ class ExecutionGate:
             move_rel_ok, move_rel_reason = self._validate_move_rel_deltas(cmd_data)
             if not move_rel_ok:
                 self.node.get_logger().warn(
-                    f"MOVE_REL delta validation failed: {move_rel_reason}")
+                    f"MOVE_REL delta validation failed: {move_rel_reason}"
+                )
                 response.valid = False
                 response.reason = move_rel_reason
                 response.sanitized_json = ""
@@ -121,9 +128,9 @@ class ExecutionGate:
         #     Skip for primitives that are non-pose commands.
         joint_target = cmd_data.get("joint_target")
         ptp_with_joints = (
-            prim_type == "PTP" and
-            isinstance(joint_target, list) and
-            len(joint_target) > 0
+            prim_type == "PTP"
+            and isinstance(joint_target, list)
+            and len(joint_target) > 0
         )
         pose_validation_skip_primitives = {
             "HOME",
@@ -156,7 +163,9 @@ class ExecutionGate:
                 return response
 
             aux_wp = waypoints[0]
-            if not isinstance(aux_wp, dict) or not isinstance(aux_wp.get("position"), dict):
+            if not isinstance(aux_wp, dict) or not isinstance(
+                aux_wp.get("position"), dict
+            ):
                 response.valid = False
                 response.reason = "CIRC auxiliary waypoint must include position{x,y,z}"
                 response.sanitized_json = ""
@@ -192,7 +201,8 @@ class ExecutionGate:
             aux_is_valid, aux_reason = self.guard.check_pose(aux_pose)
             if not aux_is_valid:
                 self.node.get_logger().warn(
-                    f"CIRC auxiliary waypoint validation failed: {aux_reason}")
+                    f"CIRC auxiliary waypoint validation failed: {aux_reason}"
+                )
                 response.valid = False
                 response.reason = f"CIRC auxiliary pose: {aux_reason}"
                 response.sanitized_json = ""
@@ -212,6 +222,46 @@ class ExecutionGate:
                 response.reason = cart_reason
                 response.sanitized_json = ""
                 return response
+
+        # 3e. BLENDED_SEQUENCE: validate every step's target_pose (W2)
+        if prim_type == "BLENDED_SEQUENCE":
+            steps = cmd_data.get("sequence_steps")
+            if not isinstance(steps, list) or len(steps) < 2:
+                response.valid = False
+                response.reason = "BLENDED_SEQUENCE requires at least 2 sequence_steps"
+                response.sanitized_json = ""
+                return response
+            for idx, step in enumerate(steps):
+                step_pose = step.get("target_pose") if isinstance(step, dict) else None
+                if not isinstance(step_pose, dict) or "position" not in step_pose:
+                    response.valid = False
+                    response.reason = (
+                        f"BLENDED_SEQUENCE step[{idx}] missing target_pose.position"
+                    )
+                    response.sanitized_json = ""
+                    return response
+                pos = step_pose["position"]
+                try:
+                    wp_pose = request.target_pose.__class__()
+                    wp_pose.position.x = float(pos["x"])
+                    wp_pose.position.y = float(pos["y"])
+                    wp_pose.position.z = float(pos["z"])
+                except (TypeError, ValueError, KeyError) as exc:
+                    response.valid = False
+                    response.reason = (
+                        f"BLENDED_SEQUENCE step[{idx}] position invalid: {exc}"
+                    )
+                    response.sanitized_json = ""
+                    return response
+                is_valid, reason = self.guard.check_pose(wp_pose)
+                if not is_valid:
+                    self.node.get_logger().warn(
+                        f"BLENDED_SEQUENCE step[{idx}] workspace check failed: {reason}"
+                    )
+                    response.valid = False
+                    response.reason = f"BLENDED_SEQUENCE step[{idx}]: {reason}"
+                    response.sanitized_json = ""
+                    return response
 
         # 4. Valid command
         response.valid = True

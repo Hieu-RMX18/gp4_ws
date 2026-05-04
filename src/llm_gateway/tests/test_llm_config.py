@@ -7,7 +7,9 @@ from pathlib import Path
 from llm_gateway.llm_config import load_llm_backend_config
 
 
-def _write_config(tmp_path: Path, api_key_value: str, model_value: str = '"gpt-5.4"') -> Path:
+def _write_config(
+    tmp_path: Path, api_key_value: str, model_value: str = '"gpt-5.4"'
+) -> Path:
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     config_path = config_dir / "llm.yaml"
@@ -74,7 +76,9 @@ def test_load_llm_backend_config_supports_explicit_env_file_override(
 ) -> None:
     workspace_dir = tmp_path / "workspace"
     workspace_dir.mkdir()
-    config_path = _write_config(workspace_dir, '"${GP4_LLM_API_KEY}"', model_value='"${LLM_MODEL}"')
+    config_path = _write_config(
+        workspace_dir, '"${GP4_LLM_API_KEY}"', model_value='"${LLM_MODEL}"'
+    )
 
     env_file = tmp_path / "secrets.env"
     env_file.write_text(
@@ -107,7 +111,9 @@ def test_load_llm_backend_config_reads_dotenv_from_current_working_directory(
     install_share = launch_root / "install" / "llm_gateway" / "share" / "llm_gateway"
     install_share.mkdir(parents=True)
     config_path = _write_config(install_share, '"${GP4_LLM_API_KEY}"')
-    (launch_root / ".env").write_text("GP4_LLM_API_KEY=from_launch_root\n", encoding="utf-8")
+    (launch_root / ".env").write_text(
+        "GP4_LLM_API_KEY=from_launch_root\n", encoding="utf-8"
+    )
 
     monkeypatch.chdir(launch_root)
     monkeypatch.delenv("GP4_LLM_API_KEY", raising=False)

@@ -19,27 +19,25 @@
 #include <rclcpp/serialized_message.hpp>
 #include <rosbag2_cpp/writer.hpp>
 
-namespace supervisor
-{
-class AuditLogger
-{
+namespace supervisor {
+class AuditLogger {
 public:
-  explicit AuditLogger(rclcpp::Node & node);
+  explicit AuditLogger(rclcpp::Node &node);
   ~AuditLogger();
 
   AuditLogger(const AuditLogger &) = delete;
-  AuditLogger & operator=(const AuditLogger &) = delete;
+  AuditLogger &operator=(const AuditLogger &) = delete;
 
   std::string bag_uri() const;
   std::string jsonl_path() const;
   uint64_t max_callback_latency_ns() const;
   std::size_t received_message_count() const;
   std::size_t written_message_count() const;
-  bool wait_for_written_messages(std::size_t min_count, std::chrono::milliseconds timeout);
+  bool wait_for_written_messages(std::size_t min_count,
+                                 std::chrono::milliseconds timeout);
 
 private:
-  enum class StreamId : uint8_t
-  {
+  enum class StreamId : uint8_t {
     kExecuteStatus,
     kExecuteFeedback,
     kValidateRequest,
@@ -47,16 +45,14 @@ private:
     kHwReady,
   };
 
-  struct TopicSpec
-  {
+  struct TopicSpec {
     StreamId stream_id;
     std::string topic_name;
     std::string type_name;
     rclcpp::QoS qos;
   };
 
-  struct QueuedEvent
-  {
+  struct QueuedEvent {
     StreamId stream_id;
     std::string topic_name;
     std::string type_name;
@@ -70,12 +66,12 @@ private:
   void start_worker();
   void stop_worker();
   void enqueue_message(
-    const TopicSpec & spec,
-    std::shared_ptr<rclcpp::SerializedMessage> serialized_message);
+      const TopicSpec &spec,
+      std::shared_ptr<rclcpp::SerializedMessage> serialized_message);
   void worker_loop();
   void write_event(QueuedEvent event);
 
-  rclcpp::Node & node_;
+  rclcpp::Node &node_;
   rclcpp::Logger logger_;
   std::string serialization_format_;
   std::filesystem::path audit_path_;
@@ -97,4 +93,4 @@ private:
   std::atomic<std::size_t> written_message_count_{0U};
   std::size_t max_queue_depth_{2048U};
 };
-}  // namespace supervisor
+} // namespace supervisor

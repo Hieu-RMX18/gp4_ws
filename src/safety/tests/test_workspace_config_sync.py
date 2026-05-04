@@ -75,5 +75,7 @@ def test_move_rel_forbidden_zone_constants_match_safety_rules():
             continue
         for field_name, suffix in field_suffixes.items():
             constant_name = f"{prefix}{suffix}"
-            assert constant_name in move_rel_limits, f"Missing MoveRelLimits::{constant_name}."
+            assert (
+                constant_name in move_rel_limits
+            ), f"Missing MoveRelLimits::{constant_name}."
             assert move_rel_limits[constant_name] == pytest.approx(zone[field_name])

@@ -14,10 +14,8 @@
 #include <interfaces/msg/robot_readiness.hpp>
 #include <rclcpp/rclcpp.hpp>
 
-namespace hw_adapter
-{
-struct RobotStatusSnapshot
-{
+namespace hw_adapter {
+struct RobotStatusSnapshot {
   bool has_status = false;
   bool ready = false;
   bool e_stopped = false;
@@ -33,13 +31,11 @@ struct RobotStatusSnapshot
   std::string status_message = "unknown: no robot status received";
 };
 
-class RobotStatusMonitor
-{
+class RobotStatusMonitor {
 public:
   explicit RobotStatusMonitor(
-    rclcpp::Node & node,
-    std::string topic_name = "/yaskawa/robot_status",
-    std::chrono::milliseconds max_age = std::chrono::milliseconds(200));
+      rclcpp::Node &node, std::string topic_name = "/yaskawa/robot_status",
+      std::chrono::milliseconds max_age = std::chrono::milliseconds(200));
 
   RobotStatusSnapshot latest_snapshot() const;
   bool has_status() const;
@@ -47,7 +43,7 @@ public:
   bool is_estop_active() const;
   std::string status_summary() const;
   interfaces::msg::RobotReadiness readiness_msg() const;
-  bool is_ready_for_motion(std::string & reason) const;
+  bool is_ready_for_motion(std::string &reason) const;
 
 private:
   void publish_readiness();
@@ -56,7 +52,8 @@ private:
   rclcpp::Logger logger_;
   rclcpp::Clock::SharedPtr clock_;
   std::chrono::milliseconds max_age_;
-  rclcpp::Subscription<industrial_msgs::msg::RobotStatus>::SharedPtr status_sub_;
+  rclcpp::Subscription<industrial_msgs::msg::RobotStatus>::SharedPtr
+      status_sub_;
   rclcpp::Publisher<interfaces::msg::RobotReadiness>::SharedPtr readiness_pub_;
 
   mutable std::mutex snapshot_mutex_;
@@ -64,4 +61,4 @@ private:
   rclcpp::Time receive_time_{0, 0, RCL_ROS_TIME};
   RobotStatusSnapshot snapshot_;
 };
-}  // namespace hw_adapter
+} // namespace hw_adapter

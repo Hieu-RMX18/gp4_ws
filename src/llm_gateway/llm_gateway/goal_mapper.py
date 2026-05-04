@@ -39,7 +39,9 @@ class GoalMapper:
     def to_execute_motion_goal(self, command: Dict[str, Any]) -> ExecuteMotion.Goal:
         goal = ExecuteMotion.Goal()
         goal.primitive_type = str(command["primitive_type"])
-        goal.velocity_scale = float(command.get("velocity_scale", self._default_velocity_scale))
+        goal.velocity_scale = float(
+            command.get("velocity_scale", self._default_velocity_scale)
+        )
         goal.acceleration_scale = float(
             command.get("acceleration_scale", self._default_acceleration_scale)
         )
@@ -62,6 +64,28 @@ class GoalMapper:
         if command.get("waypoints_msg"):
             goal.waypoints = list(command["waypoints_msg"])
 
+        # BLENDED_SEQUENCE: typed sequence steps (W2.T4)
+        if command.get("primitive_type") == "BLENDED_SEQUENCE" and command.get(
+            "sequence_steps"
+        ):
+            from interfaces.msg import SequenceStep
+
+            goal.sequence_steps = []
+            for step in command["sequence_steps"]:
+                seq = SequenceStep()
+                seq.primitive_type = str(step.get("primitive_type", "LIN"))
+                if "target_pose_msg" in step:
+                    seq.target_pose = step["target_pose_msg"]
+                seq.blend_radius_m = float(step.get("blend_radius_m", 0.0))
+                seq.planner_id = str(step.get("planner_id", "PILZ_LIN"))
+                seq.velocity_scale = float(
+                    step.get("velocity_scale", self._default_velocity_scale)
+                )
+                seq.acceleration_scale = float(
+                    step.get("acceleration_scale", self._default_acceleration_scale)
+                )
+                goal.sequence_steps.append(seq)
+
         return goal
 
     def to_command_payload(self, command: Dict[str, Any]) -> Dict[str, Any]:
@@ -83,7 +107,9 @@ class GoalMapper:
         if "reference_frame" in command:
             payload["reference_frame"] = str(command["reference_frame"])
         if command.get("joint_target"):
-            payload["joint_target"] = [float(value) for value in command["joint_target"]]
+            payload["joint_target"] = [
+                float(value) for value in command["joint_target"]
+            ]
         if "target_pose_msg" in command:
             payload["target_pose"] = self._pose_to_payload(command["target_pose_msg"])
 
@@ -112,17 +138,41 @@ class GoalMapper:
         # safety.execution_gate can validate it against WorkspaceGuard.
         if command.get("primitive_type") == "CIRC" and command.get("waypoints_msg"):
             payload["waypoints"] = [
-                self._pose_to_payload(pose)
-                for pose in command["waypoints_msg"]
+                self._pose_to_payload(pose) for pose in command["waypoints_msg"]
             ]
 
         # CARTESIAN_PATH waypoints are required by safety.execution_gate for
         # waypoint-by-waypoint workspace validation.
-        if command.get("primitive_type") == "CARTESIAN_PATH" and command.get("waypoints_msg"):
+        if command.get("primitive_type") == "CARTESIAN_PATH" and command.get(
+            "waypoints_msg"
+        ):
             payload["waypoints"] = [
-                self._pose_to_payload(pose)
-                for pose in command["waypoints_msg"]
+                self._pose_to_payload(pose) for pose in command["waypoints_msg"]
             ]
             payload["waypoints_count"] = len(command["waypoints_msg"])
+
+        # BLENDED_SEQUENCE: include sequence_steps for safety gate (W2.T4)
+        if command.get("primitive_type") == "BLENDED_SEQUENCE" and command.get(
+            "sequence_steps"
+        ):
+            payload["sequence_steps"] = []
+            for step in command["sequence_steps"]:
+                step_payload: Dict[str, Any] = {
+                    "primitive_type": str(step.get("primitive_type", "LIN")),
+                    "blend_radius_m": float(step.get("blend_radius_m", 0.0)),
+                }
+                if "target_pose_msg" in step:
+                    step_payload["target_pose"] = self._pose_to_payload(
+                        step["target_pose_msg"]
+                    )
+                if "planner_id" in step:
+                    step_payload["planner_id"] = str(step["planner_id"])
+                if "velocity_scale" in step:
+                    step_payload["velocity_scale"] = float(step["velocity_scale"])
+                if "acceleration_scale" in step:
+                    step_payload["acceleration_scale"] = float(
+                        step["acceleration_scale"]
+                    )
+                payload["sequence_steps"].append(step_payload)
 
         return payload

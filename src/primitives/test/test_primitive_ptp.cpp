@@ -8,12 +8,9 @@
 
 #include "primitives/primitive_ptp.hpp"
 
-namespace primitives
-{
-namespace
-{
-class FakePtpBackend final : public PtpExecutionBackend
-{
+namespace primitives {
+namespace {
+class FakePtpBackend final : public PtpExecutionBackend {
 public:
   bool server_available = true;
   bool planner_configured = true;
@@ -34,10 +31,8 @@ public:
   double last_velocity_scale = 0.0;
   double last_acceleration_scale = 0.0;
 
-  bool wait_for_servers(std::string & reason) override
-  {
-    if (server_available)
-    {
+  bool wait_for_servers(std::string &reason) override {
+    if (server_available) {
       reason.clear();
       return true;
     }
@@ -46,10 +41,8 @@ public:
     return false;
   }
 
-  bool configure_ptp_planner(std::string & reason) override
-  {
-    if (planner_configured)
-    {
+  bool configure_ptp_planner(std::string &reason) override {
+    if (planner_configured) {
       reason.clear();
       return true;
     }
@@ -58,13 +51,12 @@ public:
     return false;
   }
 
-  bool set_joint_target(const std::vector<double> & target, std::string & reason) override
-  {
+  bool set_joint_target(const std::vector<double> &target,
+                        std::string &reason) override {
     set_joint_target_called = true;
     last_joint_target = target;
 
-    if (set_joint_target_ok)
-    {
+    if (set_joint_target_ok) {
       reason.clear();
       return true;
     }
@@ -73,13 +65,12 @@ public:
     return false;
   }
 
-  bool normalize_pose(geometry_msgs::msg::Pose & pose, std::string & reason) override
-  {
+  bool normalize_pose(geometry_msgs::msg::Pose &pose,
+                      std::string &reason) override {
     (void)pose;
     normalize_pose_called = true;
 
-    if (normalize_pose_ok)
-    {
+    if (normalize_pose_ok) {
       reason.clear();
       return true;
     }
@@ -88,16 +79,13 @@ public:
     return false;
   }
 
-  bool solve_pose_to_joints(
-    const geometry_msgs::msg::Pose & pose,
-    std::vector<double> & joint_solution,
-    std::string & reason) override
-  {
+  bool solve_pose_to_joints(const geometry_msgs::msg::Pose &pose,
+                            std::vector<double> &joint_solution,
+                            std::string &reason) override {
     (void)pose;
     solve_ik_called = true;
 
-    if (solve_ik_ok)
-    {
+    if (solve_ik_ok) {
       joint_solution = ik_solution;
       reason.clear();
       return true;
@@ -107,13 +95,10 @@ public:
     return false;
   }
 
-  PtpScalingConfig scaling_config() const override
-  {
-    return scales;
-  }
+  PtpScalingConfig scaling_config() const override { return scales; }
 
-  PrimitiveResult plan_with_pipeline(double velocity_scale, double acceleration_scale) override
-  {
+  PrimitiveResult plan_with_pipeline(double velocity_scale,
+                                     double acceleration_scale) override {
     plan_called = true;
     last_velocity_scale = velocity_scale;
     last_acceleration_scale = acceleration_scale;
@@ -121,8 +106,7 @@ public:
   }
 };
 
-PTPGoal make_joint_goal(const std::vector<double> & joints)
-{
+PTPGoal make_joint_goal(const std::vector<double> &joints) {
   PTPGoal goal;
   goal.joint_target = joints;
   goal.velocity_scale = 0.9;
@@ -130,8 +114,7 @@ PTPGoal make_joint_goal(const std::vector<double> & joints)
   return goal;
 }
 
-TEST(PrimitivePtpTest, PtpSuccessWithValidSixJointInput)
-{
+TEST(PrimitivePtpTest, PtpSuccessWithValidSixJointInput) {
   PrimitivePtp primitive;
   FakePtpBackend backend;
 
@@ -145,8 +128,7 @@ TEST(PrimitivePtpTest, PtpSuccessWithValidSixJointInput)
   backend.plan_result.message = "PTP plan ready";
 
   const PrimitiveResult result = primitive.execute(
-    make_joint_goal({0.0, 0.1, 0.2, 0.3, 0.4, 0.5}),
-    backend);
+      make_joint_goal({0.0, 0.1, 0.2, 0.3, 0.4, 0.5}), backend);
 
   EXPECT_TRUE(result.success);
   EXPECT_EQ(result.reason, PrimitiveFailReason::UNKNOWN);
@@ -156,15 +138,13 @@ TEST(PrimitivePtpTest, PtpSuccessWithValidSixJointInput)
   EXPECT_DOUBLE_EQ(backend.last_acceleration_scale, 0.2);
 }
 
-TEST(PrimitivePtpTest, PtpFailureWhenJointListIsFiveOrSeven)
-{
+TEST(PrimitivePtpTest, PtpFailureWhenJointListIsFiveOrSeven) {
   PrimitivePtp primitive;
 
   {
     FakePtpBackend backend;
-    const PrimitiveResult result = primitive.execute(
-      make_joint_goal({0.0, 0.1, 0.2, 0.3, 0.4}),
-      backend);
+    const PrimitiveResult result =
+        primitive.execute(make_joint_goal({0.0, 0.1, 0.2, 0.3, 0.4}), backend);
 
     EXPECT_FALSE(result.success);
     EXPECT_EQ(result.reason, PrimitiveFailReason::JOINT_COUNT_MISMATCH);
@@ -175,8 +155,7 @@ TEST(PrimitivePtpTest, PtpFailureWhenJointListIsFiveOrSeven)
   {
     FakePtpBackend backend;
     const PrimitiveResult result = primitive.execute(
-      make_joint_goal({0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6}),
-      backend);
+        make_joint_goal({0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6}), backend);
 
     EXPECT_FALSE(result.success);
     EXPECT_EQ(result.reason, PrimitiveFailReason::JOINT_COUNT_MISMATCH);
@@ -185,8 +164,7 @@ TEST(PrimitivePtpTest, PtpFailureWhenJointListIsFiveOrSeven)
   }
 }
 
-TEST(PrimitivePtpTest, PtpFailureWhenPoseTargetQuaternionHasZeroNorm)
-{
+TEST(PrimitivePtpTest, PtpFailureWhenPoseTargetQuaternionHasZeroNorm) {
   PrimitivePtp primitive;
   FakePtpBackend backend;
 
@@ -208,18 +186,17 @@ TEST(PrimitivePtpTest, PtpFailureWhenPoseTargetQuaternionHasZeroNorm)
   EXPECT_FALSE(backend.plan_called);
 }
 
-TEST(PrimitivePtpTest, PtpFailureWhenQualityGateRejects)
-{
+TEST(PrimitivePtpTest, PtpFailureWhenQualityGateRejects) {
   PrimitivePtp primitive;
   FakePtpBackend backend;
 
   backend.plan_result.success = false;
   backend.plan_result.reason = PrimitiveFailReason::WRIST_FLIP_DETECTED;
-  backend.plan_result.message = "PTP quality gate rejected: wrist flip guard reject";
+  backend.plan_result.message =
+      "PTP quality gate rejected: wrist flip guard reject";
 
   const PrimitiveResult result = primitive.execute(
-    make_joint_goal({0.0, 0.1, 0.2, 0.3, 0.4, 0.5}),
-    backend);
+      make_joint_goal({0.0, 0.1, 0.2, 0.3, 0.4, 0.5}), backend);
 
   EXPECT_FALSE(result.success);
   EXPECT_EQ(result.reason, PrimitiveFailReason::WRIST_FLIP_DETECTED);
@@ -227,21 +204,19 @@ TEST(PrimitivePtpTest, PtpFailureWhenQualityGateRejects)
   EXPECT_TRUE(backend.plan_called);
 }
 
-TEST(PrimitivePtpTest, PtpFailureWhenMoveGroupServerUnavailable)
-{
+TEST(PrimitivePtpTest, PtpFailureWhenMoveGroupServerUnavailable) {
   PrimitivePtp primitive;
   FakePtpBackend backend;
 
   backend.server_available = false;
 
   const PrimitiveResult result = primitive.execute(
-    make_joint_goal({0.0, 0.1, 0.2, 0.3, 0.4, 0.5}),
-    backend);
+      make_joint_goal({0.0, 0.1, 0.2, 0.3, 0.4, 0.5}), backend);
 
   EXPECT_FALSE(result.success);
   EXPECT_EQ(result.reason, PrimitiveFailReason::PLANNING_TIMEOUT);
   EXPECT_FALSE(backend.set_joint_target_called);
   EXPECT_FALSE(backend.plan_called);
 }
-}  // namespace
-}  // namespace primitives
+} // namespace
+} // namespace primitives

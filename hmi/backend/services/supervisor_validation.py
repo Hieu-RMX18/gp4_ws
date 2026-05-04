@@ -63,13 +63,20 @@ class SupervisorValidationMixin:
         requested_mode: RuntimeMode,
     ) -> dict[str, Any]:
         source_statuses = self._read_source_statuses()
-        critical_sources = [source for source in source_statuses if getattr(source, "active", False)]
+        critical_sources = [
+            source for source in source_statuses if getattr(source, "active", False)
+        ]
         optional_sources = [
             source
             for source in source_statuses
-            if not getattr(source, "active", False) and source.name not in EVENT_DRIVEN_SOURCE_NAMES
+            if not getattr(source, "active", False)
+            and source.name not in EVENT_DRIVEN_SOURCE_NAMES
         ]
-        event_driven_sources = [source for source in source_statuses if source.name in EVENT_DRIVEN_SOURCE_NAMES]
+        event_driven_sources = [
+            source
+            for source in source_statuses
+            if source.name in EVENT_DRIVEN_SOURCE_NAMES
+        ]
         blocking_reasons: list[str] = []
         confirmation_reasons = [
             "HMI v2 requires explicit operator confirmation before a validated plan may cross the execution boundary."
@@ -105,7 +112,8 @@ class SupervisorValidationMixin:
         ]
         if stale_sources:
             blocking_reasons.append(
-                "freshness-critical telemetry is stale or unavailable: " + ", ".join(stale_sources)
+                "freshness-critical telemetry is stale or unavailable: "
+                + ", ".join(stale_sources)
             )
 
         if not preflight.get("accepted", True):
@@ -119,9 +127,21 @@ class SupervisorValidationMixin:
                 f"Risk assessment is {risk_level.value}; high-risk actions must stay behind confirmation."
             )
 
-        action = str(parsed_intent.get("action") if parsed_intent is not None else "").upper()
-        if action in {"MOVE_REL", "MOVE_JOINT", "MOVE_JOINTS", "PTP", "LIN", "CIRC", "CARTESIAN_PATH"}:
-            confirmation_reasons.append("Motion primitives always require explicit confirmation in v2.")
+        action = str(
+            parsed_intent.get("action") if parsed_intent is not None else ""
+        ).upper()
+        if action in {
+            "MOVE_REL",
+            "MOVE_JOINT",
+            "MOVE_JOINTS",
+            "PTP",
+            "LIN",
+            "CIRC",
+            "CARTESIAN_PATH",
+        }:
+            confirmation_reasons.append(
+                "Motion primitives always require explicit confirmation in v2."
+            )
 
         plan_fingerprint = (
             self._plan_fingerprint(parsed_intent, lease.lease_id, requested_mode.value)
@@ -139,18 +159,30 @@ class SupervisorValidationMixin:
             "confirmationReasons": confirmation_reasons,
             "planFingerprint": plan_fingerprint,
             "executionAllowedNow": False,
-            "criticalSources": [self._source_status_view(source) for source in critical_sources],
-            "optionalSources": [self._source_status_view(source) for source in optional_sources],
-            "eventDrivenSources": [self._source_status_view(source) for source in event_driven_sources],
+            "criticalSources": [
+                self._source_status_view(source) for source in critical_sources
+            ],
+            "optionalSources": [
+                self._source_status_view(source) for source in optional_sources
+            ],
+            "eventDrivenSources": [
+                self._source_status_view(source) for source in event_driven_sources
+            ],
             "hardwareGate": hardware_gate.to_dict(),
             "preflight": preflight,
         }
 
-    def _assess_risk(self, parsed_intent: dict[str, Any] | None) -> CommandRiskLevel | None:
+    def _assess_risk(
+        self, parsed_intent: dict[str, Any] | None
+    ) -> CommandRiskLevel | None:
         if parsed_intent is None:
             return None
         action = str(parsed_intent.get("action") or "").upper()
-        parameters = parsed_intent.get("normalizedCommand") or parsed_intent.get("parameters") or {}
+        parameters = (
+            parsed_intent.get("normalizedCommand")
+            or parsed_intent.get("parameters")
+            or {}
+        )
         if action in {"STOP", "WAIT", "GET_POSE", "ALARM_RESET", "IO_SET", "SET_SPEED"}:
             return CommandRiskLevel.LOW
         if action == "HOME":
@@ -182,7 +214,9 @@ class SupervisorValidationMixin:
             return CommandRiskLevel.HIGH
         return CommandRiskLevel.HIGH
 
-    def _plan_fingerprint(self, parsed_intent: dict[str, Any], lease_id: str, runtime_mode: str) -> str:
+    def _plan_fingerprint(
+        self, parsed_intent: dict[str, Any], lease_id: str, runtime_mode: str
+    ) -> str:
         stable_blob = json.dumps(
             {
                 "parsedIntent": parsed_intent,

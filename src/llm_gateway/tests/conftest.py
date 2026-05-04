@@ -160,7 +160,9 @@ def model_error_payload() -> str:
 
 @pytest.fixture(scope="module")
 def ros_integration_context():
-    pytest.importorskip("interfaces", reason="requires colcon-sourced workspace with built interfaces")
+    pytest.importorskip(
+        "interfaces", reason="requires colcon-sourced workspace with built interfaces"
+    )
     import rclpy
 
     ros_log_dir = Path(tempfile.gettempdir()) / "ros_logs_llm_gateway_tests"

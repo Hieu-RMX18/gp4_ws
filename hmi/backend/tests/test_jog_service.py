@@ -52,7 +52,7 @@ class JogServiceContractTests(unittest.TestCase):
         accepted, message = service.activate_bridge()
 
         self.assertFalse(accepted)
-        self.assertIn('ROS node unavailable', message)
+        self.assertIn("ROS node unavailable", message)
 
     def test_deactivate_bridge_fails_closed_when_ros_node_is_unavailable(self) -> None:
         service = JogService()
@@ -60,7 +60,7 @@ class JogServiceContractTests(unittest.TestCase):
         accepted, message = service.deactivate_bridge()
 
         self.assertFalse(accepted)
-        self.assertIn('ROS node unavailable', message)
+        self.assertIn("ROS node unavailable", message)
 
 
 if __name__ == "__main__":

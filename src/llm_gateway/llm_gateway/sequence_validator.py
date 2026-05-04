@@ -67,7 +67,9 @@ class SequenceValidator:
         self._normalizer = normalizer
         self._semantic_validator = semantic_validator
         self._max_sequence_length = int(max_sequence_length)
-        self._max_cumulative_move_rel_distance_m = float(max_cumulative_move_rel_distance_m)
+        self._max_cumulative_move_rel_distance_m = float(
+            max_cumulative_move_rel_distance_m
+        )
 
     def validate(self, commands: List[Dict[str, Any]]) -> SequenceValidationResult:
         if not isinstance(commands, list) or not commands:
@@ -119,17 +121,23 @@ class SequenceValidator:
             try:
                 self._schema_validator.validate(command)
             except Exception as exc:
-                raise SequenceValidationError("schema", str(exc), step_index=step_index) from exc
+                raise SequenceValidationError(
+                    "schema", str(exc), step_index=step_index
+                ) from exc
 
             try:
                 normalized_command = self._normalizer.normalize(command)
             except Exception as exc:
-                raise SequenceValidationError("normalize", str(exc), step_index=step_index) from exc
+                raise SequenceValidationError(
+                    "normalize", str(exc), step_index=step_index
+                ) from exc
 
             try:
                 self._semantic_validator.validate(normalized_command)
             except Exception as exc:
-                raise SequenceValidationError("semantic", str(exc), step_index=step_index) from exc
+                raise SequenceValidationError(
+                    "semantic", str(exc), step_index=step_index
+                ) from exc
 
             step_frame = self._resolve_step_frame(normalized_command, step_index)
             if step_frame is not None:
@@ -143,8 +151,13 @@ class SequenceValidator:
                     )
 
             if primitive_type == "MOVE_REL":
-                cumulative_move_rel_distance_m += self._move_rel_distance(normalized_command)
-                if cumulative_move_rel_distance_m > self._max_cumulative_move_rel_distance_m:
+                cumulative_move_rel_distance_m += self._move_rel_distance(
+                    normalized_command
+                )
+                if (
+                    cumulative_move_rel_distance_m
+                    > self._max_cumulative_move_rel_distance_m
+                ):
                     raise SequenceValidationError(
                         "move_rel_budget",
                         "cumulative MOVE_REL distance exceeds sequence limit "

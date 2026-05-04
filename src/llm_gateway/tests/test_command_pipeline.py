@@ -163,7 +163,10 @@ def test_hydrate_start_pose_present_skips_fetch():
     assert "origin" not in out["workplane"]
 
 
-def test_hydrate_missing_pose_service_raises():
+def test_hydrate_missing_pose_service_falls_back_to_ssot():
+    """W2.T5: when /get_current_pose unavailable, fall back to SSOT workplane."""
     payload = {"intent": "draw_shape", "workplane": {"mode": "tool"}}
-    with pytest.raises(ValueError, match="missing_workplane"):
-        hydrate_draw_workplane(payload, lambda _f: None)
+    out = hydrate_draw_workplane(payload, lambda _f: None)
+    # Should have an origin from the SSOT fallback
+    assert isinstance(out["workplane"].get("origin"), dict)
+    assert "position" in out["workplane"]["origin"]

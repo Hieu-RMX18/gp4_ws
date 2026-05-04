@@ -35,27 +35,37 @@ def load_safety_rules() -> dict[str, Any]:
     try:
         from ament_index_python.packages import get_package_share_directory
 
-        yaml_path = Path(get_package_share_directory("safety")) / "config" / "safety_rules.yaml"
+        yaml_path = (
+            Path(get_package_share_directory("safety")) / "config" / "safety_rules.yaml"
+        )
         if yaml_path.exists():
             rules = yaml.safe_load(yaml_path.read_text()) or {}
             if rules:
                 return rules
-            _LOGGER.warning("policy_loader: safety_rules.yaml exists but is empty: %s", yaml_path)
+            _LOGGER.warning(
+                "policy_loader: safety_rules.yaml exists but is empty: %s", yaml_path
+            )
     except Exception as ex:
         _LOGGER.debug("policy_loader: ament_index lookup failed: %s", ex)
 
     # Fallback: workspace source tree.
-    workspace_path = Path(__file__).resolve().parents[1] / "config" / "safety_rules.yaml"
+    workspace_path = (
+        Path(__file__).resolve().parents[1] / "config" / "safety_rules.yaml"
+    )
     if workspace_path.exists():
         try:
             rules = yaml.safe_load(workspace_path.read_text()) or {}
             if rules:
-                _LOGGER.info("policy_loader: loaded from workspace source: %s", workspace_path)
+                _LOGGER.info(
+                    "policy_loader: loaded from workspace source: %s", workspace_path
+                )
                 return rules
         except Exception as ex:
             _LOGGER.warning("policy_loader: workspace YAML parse failed: %s", ex)
 
-    _LOGGER.warning("policy_loader: no safety_rules.yaml found; using fail-safe defaults.")
+    _LOGGER.warning(
+        "policy_loader: no safety_rules.yaml found; using fail-safe defaults."
+    )
     return {}
 
 
@@ -72,17 +82,26 @@ def get_motion_limits(rules: dict[str, Any] | None = None) -> dict[str, float]:
     legacy = rules.get("joint_limits_override", {})
     return {
         "max_velocity_scale": float(
-            motion.get("max_velocity_scale",
-                        legacy.get("max_velocity_scale",
-                                   _FAILSAFE_MOTION_LIMITS["max_velocity_scale"]))
+            motion.get(
+                "max_velocity_scale",
+                legacy.get(
+                    "max_velocity_scale", _FAILSAFE_MOTION_LIMITS["max_velocity_scale"]
+                ),
+            )
         ),
         "max_acceleration_scale": float(
-            motion.get("max_acceleration_scale",
-                        legacy.get("max_acceleration_scale",
-                                   _FAILSAFE_MOTION_LIMITS["max_acceleration_scale"]))
+            motion.get(
+                "max_acceleration_scale",
+                legacy.get(
+                    "max_acceleration_scale",
+                    _FAILSAFE_MOTION_LIMITS["max_acceleration_scale"],
+                ),
+            )
         ),
         "max_move_rel_translation": float(
-            motion.get("max_move_rel_translation",
-                        _FAILSAFE_MOTION_LIMITS["max_move_rel_translation"])
+            motion.get(
+                "max_move_rel_translation",
+                _FAILSAFE_MOTION_LIMITS["max_move_rel_translation"],
+            )
         ),
     }

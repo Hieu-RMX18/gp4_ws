@@ -8,12 +8,9 @@
 #include "interfaces/action/execute_motion.hpp"
 #include "primitives/primitive_circ.hpp"
 
-namespace primitives
-{
-namespace
-{
-class FakeCircBackend final : public CircExecutionBackend
-{
+namespace primitives {
+namespace {
+class FakeCircBackend final : public CircExecutionBackend {
 public:
   bool server_available = true;
   bool normalize_fail_on_second_call = false;
@@ -32,10 +29,8 @@ public:
   bool plan_called = false;
   int normalize_call_count = 0;
 
-  bool wait_for_servers(std::string & reason) override
-  {
-    if (server_available)
-    {
+  bool wait_for_servers(std::string &reason) override {
+    if (server_available) {
       reason.clear();
       return true;
     }
@@ -44,12 +39,11 @@ public:
     return false;
   }
 
-  bool normalize_pose(geometry_msgs::msg::Pose & pose, std::string & reason) override
-  {
+  bool normalize_pose(geometry_msgs::msg::Pose &pose,
+                      std::string &reason) override {
     (void)pose;
     ++normalize_call_count;
-    if (normalize_fail_on_second_call && normalize_call_count == 2)
-    {
+    if (normalize_fail_on_second_call && normalize_call_count == 2) {
       reason = "quaternion norm is zero";
       return false;
     }
@@ -58,10 +52,9 @@ public:
     return true;
   }
 
-  bool get_current_pose_world(geometry_msgs::msg::Pose & pose, std::string & reason) override
-  {
-    if (!current_pose_ok)
-    {
+  bool get_current_pose_world(geometry_msgs::msg::Pose &pose,
+                              std::string &reason) override {
+    if (!current_pose_ok) {
       reason = "current pose unavailable";
       return false;
     }
@@ -71,10 +64,8 @@ public:
     return true;
   }
 
-  bool configure_circ_planner(std::string & reason) override
-  {
-    if (configure_ok)
-    {
+  bool configure_circ_planner(std::string &reason) override {
+    if (configure_ok) {
       reason.clear();
       return true;
     }
@@ -83,15 +74,13 @@ public:
     return false;
   }
 
-  bool set_interim_path_constraint(
-    const geometry_msgs::msg::Pose & auxiliary_point,
-    std::string & reason) override
-  {
+  bool
+  set_interim_path_constraint(const geometry_msgs::msg::Pose &auxiliary_point,
+                              std::string &reason) override {
     (void)auxiliary_point;
     set_interim_called = true;
 
-    if (set_interim_ok)
-    {
+    if (set_interim_ok) {
       reason.clear();
       return true;
     }
@@ -100,13 +89,12 @@ public:
     return false;
   }
 
-  bool set_goal_pose(const geometry_msgs::msg::Pose & goal_pose, std::string & reason) override
-  {
+  bool set_goal_pose(const geometry_msgs::msg::Pose &goal_pose,
+                     std::string &reason) override {
     (void)goal_pose;
     set_goal_called = true;
 
-    if (set_goal_ok)
-    {
+    if (set_goal_ok) {
       reason.clear();
       return true;
     }
@@ -115,18 +103,12 @@ public:
     return false;
   }
 
-  void clear_path_constraints() override
-  {
-    clear_called = true;
-  }
+  void clear_path_constraints() override { clear_called = true; }
 
-  CircScalingConfig scaling_config() const override
-  {
-    return scales;
-  }
+  CircScalingConfig scaling_config() const override { return scales; }
 
-  PrimitiveResult plan_with_pipeline(double velocity_scale, double acceleration_scale) override
-  {
+  PrimitiveResult plan_with_pipeline(double velocity_scale,
+                                     double acceleration_scale) override {
     (void)velocity_scale;
     (void)acceleration_scale;
     plan_called = true;
@@ -134,8 +116,7 @@ public:
   }
 };
 
-CIRCGoal make_valid_goal()
-{
+CIRCGoal make_valid_goal() {
   CIRCGoal goal;
   goal.auxiliary_point.position.x = 0.10;
   goal.auxiliary_point.position.y = 0.0;
@@ -152,8 +133,7 @@ CIRCGoal make_valid_goal()
   return goal;
 }
 
-TEST(PrimitiveCircTest, SuccessWithValidAuxiliaryAndGoal)
-{
+TEST(PrimitiveCircTest, SuccessWithValidAuxiliaryAndGoal) {
   PrimitiveCirc primitive;
   FakeCircBackend backend;
   backend.current_pose.orientation.w = 1.0;
@@ -172,8 +152,7 @@ TEST(PrimitiveCircTest, SuccessWithValidAuxiliaryAndGoal)
   EXPECT_TRUE(backend.clear_called);
 }
 
-TEST(PrimitiveCircTest, FailureWhenAuxiliaryEqualsStartPosition)
-{
+TEST(PrimitiveCircTest, FailureWhenAuxiliaryEqualsStartPosition) {
   PrimitiveCirc primitive;
   FakeCircBackend backend;
   backend.current_pose.position.x = 0.10;
@@ -189,8 +168,7 @@ TEST(PrimitiveCircTest, FailureWhenAuxiliaryEqualsStartPosition)
   EXPECT_FALSE(backend.plan_called);
 }
 
-TEST(PrimitiveCircTest, FailureWhenAuxiliaryEqualsGoalPosition)
-{
+TEST(PrimitiveCircTest, FailureWhenAuxiliaryEqualsGoalPosition) {
   PrimitiveCirc primitive;
   FakeCircBackend backend;
   backend.current_pose.orientation.w = 1.0;
@@ -208,8 +186,7 @@ TEST(PrimitiveCircTest, FailureWhenAuxiliaryEqualsGoalPosition)
   EXPECT_FALSE(backend.plan_called);
 }
 
-TEST(PrimitiveCircTest, FailureWithInvalidQuaternionOnGoal)
-{
+TEST(PrimitiveCircTest, FailureWithInvalidQuaternionOnGoal) {
   PrimitiveCirc primitive;
   FakeCircBackend backend;
   backend.current_pose.orientation.w = 1.0;
@@ -223,15 +200,15 @@ TEST(PrimitiveCircTest, FailureWithInvalidQuaternionOnGoal)
   EXPECT_FALSE(backend.plan_called);
 }
 
-TEST(PrimitiveCircTest, QualityGateRejectionIsPropagated)
-{
+TEST(PrimitiveCircTest, QualityGateRejectionIsPropagated) {
   PrimitiveCirc primitive;
   FakeCircBackend backend;
   backend.current_pose.orientation.w = 1.0;
 
   backend.plan_result.success = false;
   backend.plan_result.reason = PrimitiveFailReason::WRIST_FLIP_DETECTED;
-  backend.plan_result.message = "CIRC quality gate rejected: wrist flip guard reject";
+  backend.plan_result.message =
+      "CIRC quality gate rejected: wrist flip guard reject";
 
   const PrimitiveResult result = primitive.execute(make_valid_goal(), backend);
 
@@ -240,8 +217,7 @@ TEST(PrimitiveCircTest, QualityGateRejectionIsPropagated)
   EXPECT_TRUE(backend.plan_called);
   EXPECT_TRUE(backend.clear_called);
 }
-TEST(PrimitiveCircTest, ExecuteMotionGoalDelegatesToCIRCGoal)
-{
+TEST(PrimitiveCircTest, ExecuteMotionGoalDelegatesToCIRCGoal) {
   PrimitiveCirc primitive;
   FakeCircBackend backend;
   backend.current_pose.orientation.w = 1.0;
@@ -282,8 +258,7 @@ TEST(PrimitiveCircTest, ExecuteMotionGoalDelegatesToCIRCGoal)
   EXPECT_TRUE(backend.plan_called);
 }
 
-TEST(PrimitiveCircTest, ExecuteMotionGoalRejectsEmptyWaypoints)
-{
+TEST(PrimitiveCircTest, ExecuteMotionGoalRejectsEmptyWaypoints) {
   PrimitiveCirc primitive;
   FakeCircBackend backend;
 
@@ -297,5 +272,5 @@ TEST(PrimitiveCircTest, ExecuteMotionGoalRejectsEmptyWaypoints)
   // the overload should reject empty waypoints before reaching the backend.
   EXPECT_TRUE(em_goal.waypoints.empty());
 }
-}  // namespace
-}  // namespace primitives
+} // namespace
+} // namespace primitives

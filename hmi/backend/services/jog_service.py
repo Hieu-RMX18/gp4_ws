@@ -37,17 +37,17 @@ except Exception:  # pragma: no cover - ROS env may not be sourced
 
 
 class JogBridgeState(str, Enum):
-    IDLE = 'IDLE'
-    STARTING = 'STARTING'
-    READY = 'READY'
-    ACTIVE = 'ACTIVE'
-    HALTING = 'HALTING'
-    HALTED = 'HALTED'
-    ERROR = 'ERROR'
-    REJECTED_NOT_READY = 'REJECTED_NOT_READY'
-    REJECTED_FJT_ACTIVE = 'REJECTED_FJT_ACTIVE'
-    TIMEOUT = 'TIMEOUT'
-    BUSY_RETRY = 'BUSY_RETRY'
+    IDLE = "IDLE"
+    STARTING = "STARTING"
+    READY = "READY"
+    ACTIVE = "ACTIVE"
+    HALTING = "HALTING"
+    HALTED = "HALTED"
+    ERROR = "ERROR"
+    REJECTED_NOT_READY = "REJECTED_NOT_READY"
+    REJECTED_FJT_ACTIVE = "REJECTED_FJT_ACTIVE"
+    TIMEOUT = "TIMEOUT"
+    BUSY_RETRY = "BUSY_RETRY"
 
 
 @dataclass(slots=True)
@@ -70,23 +70,23 @@ DEFAULT_JOG_STATUS = JogBridgeStatusView(
     robot_ready=False,
     servo_active=False,
     bridge_active=False,
-    last_error='',
-    rejection_reason='',
+    last_error="",
+    rejection_reason="",
 )
 
 
 def _build_jog_status_event(status: JogBridgeStatusView) -> dict[str, Any]:
     return {
-        'type': 'jog_bridge_status',
-        'jogBridgeStatus': {
-            'state': status.state.value,
-            'pointsQueued': status.points_queued,
-            'effectiveHz': status.effective_hz,
-            'robotReady': status.robot_ready,
-            'servoActive': status.servo_active,
-            'bridgeActive': status.bridge_active,
-            'lastError': status.last_error,
-            'rejectionReason': status.rejection_reason,
+        "type": "jog_bridge_status",
+        "jogBridgeStatus": {
+            "state": status.state.value,
+            "pointsQueued": status.points_queued,
+            "effectiveHz": status.effective_hz,
+            "robotReady": status.robot_ready,
+            "servoActive": status.servo_active,
+            "bridgeActive": status.bridge_active,
+            "lastError": status.last_error,
+            "rejectionReason": status.rejection_reason,
         },
     }
 
@@ -102,10 +102,10 @@ class JogService:
     def __init__(
         self,
         *,
-        status_topic: str = '/servo_bridge/status',
-        activate_service: str = '/servo_bridge/activate',
-        deactivate_service: str = '/servo_bridge/deactivate',
-        jog_command_topic: str = '/web_jog_command',
+        status_topic: str = "/servo_bridge/status",
+        activate_service: str = "/servo_bridge/activate",
+        deactivate_service: str = "/servo_bridge/deactivate",
+        jog_command_topic: str = "/web_jog_command",
         activate_timeout_sec: float = 5.0,
     ) -> None:
         self._status_topic = status_topic
@@ -139,7 +139,7 @@ class JogService:
             self._context = rclpy.context.Context()
             rclpy.init(args=None, context=self._context)
             self._node = rclpy.create_node(
-                'gp4_hmi_jog_pendant_service', context=self._context
+                "gp4_hmi_jog_pendant_service", context=self._context
             )
             self._executor = rclpy.executors.SingleThreadedExecutor(
                 context=self._context
@@ -149,7 +149,7 @@ class JogService:
             self._create_subscriptions()
             self._stop_requested = False
             self._thread = Thread(
-                target=self._spin, name='gp4_hmi_jog_pendant_service-spin', daemon=True
+                target=self._spin, name="gp4_hmi_jog_pendant_service-spin", daemon=True
             )
             self._thread.start()
         except Exception:
@@ -182,6 +182,7 @@ class JogService:
 
     def subscribe(self) -> Any:
         import queue
+
         q: Any = queue.Queue()
         with self._subscriber_lock:
             self._subscribers[id(q)] = q
@@ -209,10 +210,10 @@ class JogService:
         Returns (accepted, message).
         """
         if self._node is None or self._activate_client is None or Trigger is None:
-            return False, 'ROS node unavailable — jog bridge service not started.'
+            return False, "ROS node unavailable — jog bridge service not started."
 
         if not self._activate_client.service_is_ready():
-            return False, f'Activation service not ready at {self._activate_service}.'
+            return False, f"Activation service not ready at {self._activate_service}."
 
         request = Trigger.Request()
         future = self._activate_client.call_async(request)
@@ -220,20 +221,21 @@ class JogService:
         deadline = datetime.now(timezone.utc).timestamp() + self._activate_timeout_sec
         while not future.done():
             if datetime.now(timezone.utc).timestamp() >= deadline:
-                return False, 'Activation service call timed out.'
+                return False, "Activation service call timed out."
             import time
+
             time.sleep(0.05)
 
         try:
             response = future.result()
         except Exception as exc:
-            return False, f'Activation call failed: {exc}'
+            return False, f"Activation call failed: {exc}"
 
         if response is None:
-            return False, 'Activation returned no response.'
+            return False, "Activation returned no response."
 
-        success = getattr(response, 'success', False)
-        message = str(getattr(response, 'message', ''))
+        success = getattr(response, "success", False)
+        message = str(getattr(response, "message", ""))
         return bool(success), message
 
     def deactivate_bridge(self) -> tuple[bool, str]:
@@ -242,10 +244,13 @@ class JogService:
         Returns (accepted, message).
         """
         if self._node is None or self._deactivate_client is None or Trigger is None:
-            return False, 'ROS node unavailable — jog bridge service not started.'
+            return False, "ROS node unavailable — jog bridge service not started."
 
         if not self._deactivate_client.service_is_ready():
-            return False, f'Deactivation service not ready at {self._deactivate_service}.'
+            return (
+                False,
+                f"Deactivation service not ready at {self._deactivate_service}.",
+            )
 
         request = Trigger.Request()
         future = self._deactivate_client.call_async(request)
@@ -253,46 +258,54 @@ class JogService:
         deadline = datetime.now(timezone.utc).timestamp() + self._activate_timeout_sec
         while not future.done():
             if datetime.now(timezone.utc).timestamp() >= deadline:
-                return False, 'Deactivation service call timed out.'
+                return False, "Deactivation service call timed out."
             import time
+
             time.sleep(0.05)
 
         try:
             response = future.result()
         except Exception as exc:
-            return False, f'Deactivation call failed: {exc}'
+            return False, f"Deactivation call failed: {exc}"
 
         if response is None:
-            return False, 'Deactivation returned no response.'
+            return False, "Deactivation returned no response."
 
-        success = getattr(response, 'success', False)
-        message = str(getattr(response, 'message', ''))
+        success = getattr(response, "success", False)
+        message = str(getattr(response, "message", ""))
         return bool(success), message
 
-    def send_jog_command(self, *, joint_index: int, direction: int, mode: str,
-                          velocity_scale: float, step_degrees: float) -> tuple[bool, str]:
+    def send_jog_command(
+        self,
+        *,
+        joint_index: int,
+        direction: int,
+        mode: str,
+        velocity_scale: float,
+        step_degrees: float,
+    ) -> tuple[bool, str]:
         """
         Publish a JogCommand message to /web_jog_command.
         Returns (success, reason).
         """
         if self._node is None or self._jog_pub is None:
-            return False, 'ROS node or publisher unavailable'
+            return False, "ROS node or publisher unavailable"
 
         if JogCommandMsg is None:
-            return False, 'JogCommand message type unavailable'
+            return False, "JogCommand message type unavailable"
 
         with self._status_lock:
             status = self._status
         if not status.bridge_active:
-            return False, 'bridge not active'
+            return False, "bridge not active"
         if not status.robot_ready or not status.servo_active:
-            return False, 'robot not ready or servo inactive'
+            return False, "robot not ready or servo inactive"
         if status.state not in {JogBridgeState.READY, JogBridgeState.ACTIVE}:
-            return False, f'bridge state {status.state.value} not READY/ACTIVE'
+            return False, f"bridge state {status.state.value} not READY/ACTIVE"
 
         msg = JogCommandMsg()
         msg.header.stamp = self._node.get_clock().now().to_msg()
-        msg.header.frame_id = ''
+        msg.header.frame_id = ""
         msg.joint_index = int(joint_index)
         msg.direction = int(direction)
         msg.step_degrees = float(step_degrees)
@@ -301,9 +314,9 @@ class JogService:
 
         try:
             self._jog_pub.publish(msg)
-            return True, 'published'
+            return True, "published"
         except Exception:
-            return False, 'publish exception'
+            return False, "publish exception"
 
     def _create_clients(self) -> None:
         if self._node is None:
@@ -331,7 +344,7 @@ class JogService:
         )
 
     def _on_servo_bridge_status(self, msg: Any) -> None:
-        state_str = str(getattr(msg, 'state', 'IDLE'))
+        state_str = str(getattr(msg, "state", "IDLE"))
         try:
             state = JogBridgeState(state_str)
         except ValueError:
@@ -339,13 +352,13 @@ class JogService:
 
         new_status = JogBridgeStatusView(
             state=state,
-            points_queued=int(getattr(msg, 'points_queued', 0)),
-            effective_hz=float(getattr(msg, 'effective_hz', 0.0)),
-            robot_ready=bool(getattr(msg, 'robot_ready', False)),
-            servo_active=bool(getattr(msg, 'servo_active', False)),
-            bridge_active=bool(getattr(msg, 'bridge_active', False)),
-            last_error=str(getattr(msg, 'last_error', '')),
-            rejection_reason=str(getattr(msg, 'rejection_reason', '')),
+            points_queued=int(getattr(msg, "points_queued", 0)),
+            effective_hz=float(getattr(msg, "effective_hz", 0.0)),
+            robot_ready=bool(getattr(msg, "robot_ready", False)),
+            servo_active=bool(getattr(msg, "servo_active", False)),
+            bridge_active=bool(getattr(msg, "bridge_active", False)),
+            last_error=str(getattr(msg, "last_error", "")),
+            rejection_reason=str(getattr(msg, "rejection_reason", "")),
         )
 
         with self._status_lock:

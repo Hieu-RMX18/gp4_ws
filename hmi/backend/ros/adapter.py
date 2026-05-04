@@ -9,10 +9,13 @@ import sys
 from threading import Lock, Thread
 from typing import Any
 
-from ..domain.constants import GP4_JOINT_NAMES as DEFAULT_JOINT_NAMES
 from .command_dispatch import CommandDispatchMixin
 from .jog_dispatch import JogDispatchMixin
-from .telemetry_snapshot import CONNECTION_FRESHNESS_SEC, TelemetrySnapshotMixin, _TelemetryState
+from .telemetry_snapshot import (
+    CONNECTION_FRESHNESS_SEC,
+    TelemetrySnapshotMixin,
+    _TelemetryState,
+)
 
 
 def _load_joint_state_type() -> Any:
@@ -44,6 +47,7 @@ try:
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import qos_profile_sensor_data
     from std_msgs.msg import String
+
     JointState = _load_joint_state_type()
 except Exception as exc:  # pragma: no cover - depends on sourced ROS environment
     rclpy = None
@@ -84,25 +88,27 @@ LOGGER = logging.getLogger("uvicorn.error")
 
 
 KNOWN_WORKSPACE_ENDPOINTS = {
-    'read_only_topics': [
-        '/gateway_status',
-        '/llm_debug',
-        '/llm_command',
-        '/hw_adapter/ready',
-        '/supervisor/alerts',
-        '/yaskawa/joint_states',
-        '/joint_states',
-        '/yaskawa/robot_status',
+    "read_only_topics": [
+        "/gateway_status",
+        "/llm_debug",
+        "/llm_command",
+        "/hw_adapter/ready",
+        "/supervisor/alerts",
+        "/yaskawa/joint_states",
+        "/joint_states",
+        "/yaskawa/robot_status",
     ],
-    'write_capable_interfaces': [
-        '/llm_text_input',
-        '/validate_command',
-        '/execute_motion',
+    "write_capable_interfaces": [
+        "/llm_text_input",
+        "/validate_command",
+        "/execute_motion",
     ],
 }
 
 
-class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispatchMixin):
+class WorkspaceRosAdapter(
+    TelemetrySnapshotMixin, CommandDispatchMixin, JogDispatchMixin
+):
     """ROS adapter for HMI telemetry and supervisor-owned execution handoff.
 
     Telemetry remains subscription-driven and read-oriented. The only write-capable
@@ -113,18 +119,21 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
     def __init__(
         self,
         *,
-        node_name: str = 'gp4_hmi_readonly_bridge',
-        gateway_status_topic: str = '/gateway_status',
-        llm_debug_topic: str = '/llm_debug',
-        llm_command_topic: str = '/llm_command',
-        readiness_topic: str = '/hw_adapter/ready',
-        supervisor_alert_topic: str = '/supervisor/alerts',
-        robot_status_topic: str = '/yaskawa/robot_status',
-        joint_state_topics: tuple[str, ...] = ('/yaskawa/joint_states', '/joint_states'),
-        preferred_joint_state_topic: str = '/yaskawa/joint_states',
-        validate_command_service: str = '/validate_command',
-        execute_motion_action: str = '/execute_motion',
-        get_current_pose_service: str = '/get_current_pose',
+        node_name: str = "gp4_hmi_readonly_bridge",
+        gateway_status_topic: str = "/gateway_status",
+        llm_debug_topic: str = "/llm_debug",
+        llm_command_topic: str = "/llm_command",
+        readiness_topic: str = "/hw_adapter/ready",
+        supervisor_alert_topic: str = "/supervisor/alerts",
+        robot_status_topic: str = "/yaskawa/robot_status",
+        joint_state_topics: tuple[str, ...] = (
+            "/yaskawa/joint_states",
+            "/joint_states",
+        ),
+        preferred_joint_state_topic: str = "/yaskawa/joint_states",
+        validate_command_service: str = "/validate_command",
+        execute_motion_action: str = "/execute_motion",
+        get_current_pose_service: str = "/get_current_pose",
     ) -> None:
         self._node_name = node_name
         self._gateway_status_topic = gateway_status_topic
@@ -176,7 +185,9 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
                 self._state.ros_started_at = self._now()
                 self._state.start_error = None
             self._stop_requested = False
-            self._thread = Thread(target=self._spin, name=f'{self._node_name}-spin', daemon=True)
+            self._thread = Thread(
+                target=self._spin, name=f"{self._node_name}-spin", daemon=True
+            )
             self._thread.start()
         except Exception as exc:  # pragma: no cover - requires ROS runtime
             with self._lock:
@@ -254,16 +265,26 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
             if value is None:
                 continue
             if isinstance(value, (dict, list, tuple)):
-                rendered_value = json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+                rendered_value = json.dumps(
+                    value, ensure_ascii=True, separators=(",", ":")
+                )
             else:
                 rendered_value = str(value)
             rendered_fields.append(f"{key}={rendered_value}")
         LOGGER.info("[HMI ROS] %s | %s", stage, " | ".join(rendered_fields))
 
-    def get_current_pose(self, *, reference_frame: str = 'base_link') -> dict[str, Any] | None:
-        if self._node is None or GetCurrentPose is None or self._get_pose_client is None:
+    def get_current_pose(
+        self, *, reference_frame: str = "base_link"
+    ) -> dict[str, Any] | None:
+        if (
+            self._node is None
+            or GetCurrentPose is None
+            or self._get_pose_client is None
+        ):
             return None
-        if not self._get_pose_client.wait_for_service(timeout_sec=DEFAULT_VALIDATE_TIMEOUT_SEC):
+        if not self._get_pose_client.wait_for_service(
+            timeout_sec=DEFAULT_VALIDATE_TIMEOUT_SEC
+        ):
             return None
 
         request = GetCurrentPose.Request()
@@ -276,56 +297,63 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
         except Exception:
             return None
 
-        if response is None or not getattr(response, 'success', False):
+        if response is None or not getattr(response, "success", False):
             return None
 
         pose = response.current_pose
         return {
-            'position': {
-                'x': float(pose.position.x),
-                'y': float(pose.position.y),
-                'z': float(pose.position.z),
+            "position": {
+                "x": float(pose.position.x),
+                "y": float(pose.position.y),
+                "z": float(pose.position.z),
             },
-            'orientation': {
-                'x': float(pose.orientation.x),
-                'y': float(pose.orientation.y),
-                'z': float(pose.orientation.z),
-                'w': float(pose.orientation.w),
+            "orientation": {
+                "x": float(pose.orientation.x),
+                "y": float(pose.orientation.y),
+                "z": float(pose.orientation.z),
+                "w": float(pose.orientation.w),
             },
         }
 
     def start_traj_mode(self) -> dict[str, Any]:
-        if self._node is None or StartTrajModeSrv is None or self._start_traj_client is None:
-            return {'accepted': False, 'message': 'start_traj_mode service unavailable'}
+        if (
+            self._node is None
+            or StartTrajModeSrv is None
+            or self._start_traj_client is None
+        ):
+            return {"accepted": False, "message": "start_traj_mode service unavailable"}
         if not self._start_traj_client.wait_for_service(timeout_sec=2.0):
-            return {'accepted': False, 'message': 'start_traj_mode service not ready'}
+            return {"accepted": False, "message": "start_traj_mode service not ready"}
         try:
             resp = self._wait_for_future(
                 self._start_traj_client.call_async(StartTrajModeSrv.Request()),
                 5.0,
             )
         except Exception as exc:
-            return {'accepted': False, 'message': str(exc)}
+            return {"accepted": False, "message": str(exc)}
         if resp is None:
-            return {'accepted': False, 'message': 'no response'}
-        code = getattr(resp.result_code, 'value', resp.result_code)
-        return {'accepted': code == 1, 'message': resp.message or f'result_code={code}'}
+            return {"accepted": False, "message": "no response"}
+        code = getattr(resp.result_code, "value", resp.result_code)
+        return {"accepted": code == 1, "message": resp.message or f"result_code={code}"}
 
     def stop_motion(self) -> dict[str, Any]:
         if self._node is None or TriggerSrv is None or self._stop_traj_client is None:
-            return {'accepted': False, 'message': 'stop_traj_mode service unavailable'}
+            return {"accepted": False, "message": "stop_traj_mode service unavailable"}
         if not self._stop_traj_client.wait_for_service(timeout_sec=2.0):
-            return {'accepted': False, 'message': 'stop_traj_mode service not ready'}
+            return {"accepted": False, "message": "stop_traj_mode service not ready"}
         try:
             resp = self._wait_for_future(
                 self._stop_traj_client.call_async(TriggerSrv.Request()),
                 5.0,
             )
         except Exception as exc:
-            return {'accepted': False, 'message': str(exc)}
+            return {"accepted": False, "message": str(exc)}
         if resp is None:
-            return {'accepted': False, 'message': 'no response'}
-        return {'accepted': resp.success, 'message': resp.message or ('stopped' if resp.success else 'failed')}
+            return {"accepted": False, "message": "no response"}
+        return {
+            "accepted": resp.success,
+            "message": resp.message or ("stopped" if resp.success else "failed"),
+        }
 
     def _create_subscriptions(self) -> None:
         assert self._node is not None
@@ -336,11 +364,24 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
         assert JointState is not None
 
         self._subscriptions = [
-            self._node.create_subscription(String, self._gateway_status_topic, self._on_gateway_status, 10),
-            self._node.create_subscription(String, self._llm_debug_topic, self._on_llm_debug, 10),
-            self._node.create_subscription(String, self._llm_command_topic, self._on_llm_command, 10),
-            self._node.create_subscription(RobotReadinessMsg, self._readiness_topic, self._on_readiness, 10),
-            self._node.create_subscription(DiagnosticStatus, self._supervisor_alert_topic, self._on_supervisor_alert, 10),
+            self._node.create_subscription(
+                String, self._gateway_status_topic, self._on_gateway_status, 10
+            ),
+            self._node.create_subscription(
+                String, self._llm_debug_topic, self._on_llm_debug, 10
+            ),
+            self._node.create_subscription(
+                String, self._llm_command_topic, self._on_llm_command, 10
+            ),
+            self._node.create_subscription(
+                RobotReadinessMsg, self._readiness_topic, self._on_readiness, 10
+            ),
+            self._node.create_subscription(
+                DiagnosticStatus,
+                self._supervisor_alert_topic,
+                self._on_supervisor_alert,
+                10,
+            ),
             self._node.create_subscription(
                 IndustrialRobotStatus,
                 self._robot_status_topic,
@@ -353,13 +394,20 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
                 self._node.create_subscription(
                     JointState,
                     topic,
-                    lambda msg, joint_topic=topic: self._on_joint_state(joint_topic, msg),
+                    lambda msg, joint_topic=topic: self._on_joint_state(
+                        joint_topic, msg
+                    ),
                     10,
                 )
             )
 
     def _create_command_clients(self) -> None:
-        if self._node is None or ValidateCommand is None or ExecuteMotion is None or ActionClient is None:
+        if (
+            self._node is None
+            or ValidateCommand is None
+            or ExecuteMotion is None
+            or ActionClient is None
+        ):
             return
         self._validate_client = self._node.create_client(
             ValidateCommand,
@@ -377,11 +425,13 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
             )
         if StartTrajModeSrv is not None:
             self._start_traj_client = self._node.create_client(
-                StartTrajModeSrv, '/yaskawa/start_traj_mode',
+                StartTrajModeSrv,
+                "/yaskawa/start_traj_mode",
             )
         if TriggerSrv is not None:
             self._stop_traj_client = self._node.create_client(
-                TriggerSrv, '/yaskawa/stop_traj_mode',
+                TriggerSrv,
+                "/yaskawa/stop_traj_mode",
             )
 
     def _spin(self) -> None:  # pragma: no cover - requires ROS runtime
@@ -392,15 +442,21 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
             self._refresh_command_interface_state()
 
     def _refresh_command_interface_state(self) -> None:
-        if self._node is None or self._validate_client is None or self._execute_client is None:
+        if (
+            self._node is None
+            or self._validate_client is None
+            or self._execute_client is None
+        ):
             return
 
         now = self._now()
         with self._lock:
             last_checked = self._state.command_interface_checked_at
-            if last_checked is not None and (
-                now - last_checked
-            ).total_seconds() < self._command_interface_poll_period_sec:
+            if (
+                last_checked is not None
+                and (now - last_checked).total_seconds()
+                < self._command_interface_poll_period_sec
+            ):
                 return
             self._state.command_interface_checked_at = now
 
@@ -411,11 +467,13 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
             self._state.validate_command_ready = validate_ready
             self._state.execute_motion_ready = execute_ready
             self._state.validate_command_detail = (
-                f"ready at {self._validate_command_service}" if validate_ready
+                f"ready at {self._validate_command_service}"
+                if validate_ready
                 else f"waiting for {self._validate_command_service}"
             )
             self._state.execute_motion_detail = (
-                f"ready at {self._execute_motion_action}" if execute_ready
+                f"ready at {self._execute_motion_action}"
+                if execute_ready
                 else f"waiting for {self._execute_motion_action}"
             )
             if validate_ready:
@@ -427,7 +485,9 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
 
     def _command_interfaces_ready(self) -> bool:
         with self._lock:
-            return self._state.validate_command_ready and self._state.execute_motion_ready
+            return (
+                self._state.validate_command_ready and self._state.execute_motion_ready
+            )
 
     def _command_interface_block_reason(self) -> str | None:
         with self._lock:
@@ -435,9 +495,14 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
                 return self._state.command_interface_error
             missing: list[str] = []
             if not self._state.validate_command_ready:
-                missing.append(self._state.validate_command_detail or self._validate_command_service)
+                missing.append(
+                    self._state.validate_command_detail
+                    or self._validate_command_service
+                )
             if not self._state.execute_motion_ready:
-                missing.append(self._state.execute_motion_detail or self._execute_motion_action)
+                missing.append(
+                    self._state.execute_motion_detail or self._execute_motion_action
+                )
         if not missing:
             return None
         return "command interfaces not ready: " + "; ".join(missing)
@@ -464,7 +529,7 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
             self._state.readiness.status_message = str(msg.status_message)
 
     def _on_supervisor_alert(self, msg: Any) -> None:
-        values = {str(item.key): str(item.value) for item in getattr(msg, 'values', [])}
+        values = {str(item.key): str(item.value) for item in getattr(msg, "values", [])}
         with self._lock:
             self._state.supervisor_alert.received_at = self._now()
             self._state.supervisor_alert.level = self._coerce_int(msg.level)
@@ -475,17 +540,29 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
         with self._lock:
             self._state.robot_status.received_at = self._now()
             self._state.robot_status.mode = self._coerce_int(msg.mode.val)
-            self._state.robot_status.e_stopped = self._tri_state_to_bool(msg.e_stopped.val)
-            self._state.robot_status.drives_powered = self._tri_state_to_bool(msg.drives_powered.val)
-            self._state.robot_status.motion_possible = self._tri_state_to_bool(msg.motion_possible.val)
-            self._state.robot_status.in_motion = self._tri_state_to_bool(msg.in_motion.val)
-            self._state.robot_status.in_error = self._tri_state_to_bool(msg.in_error.val)
-            self._state.robot_status.error_codes = [int(code) for code in msg.error_codes]
+            self._state.robot_status.e_stopped = self._tri_state_to_bool(
+                msg.e_stopped.val
+            )
+            self._state.robot_status.drives_powered = self._tri_state_to_bool(
+                msg.drives_powered.val
+            )
+            self._state.robot_status.motion_possible = self._tri_state_to_bool(
+                msg.motion_possible.val
+            )
+            self._state.robot_status.in_motion = self._tri_state_to_bool(
+                msg.in_motion.val
+            )
+            self._state.robot_status.in_error = self._tri_state_to_bool(
+                msg.in_error.val
+            )
+            self._state.robot_status.error_codes = [
+                int(code) for code in msg.error_codes
+            ]
 
     def _on_joint_state(self, topic: str, msg: Any) -> None:
         joint_positions: dict[str, float] = {}
-        for index, name in enumerate(getattr(msg, 'name', [])):
-            if index < len(getattr(msg, 'position', [])):
+        for index, name in enumerate(getattr(msg, "name", [])):
+            if index < len(getattr(msg, "position", [])):
                 joint_positions[str(name)] = float(msg.position[index])
         with self._lock:
             if not self._should_accept_joint_update(topic):
@@ -505,7 +582,7 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
             return True
         return not self._is_fresh(
             self._state.joint_received_at,
-            CONNECTION_FRESHNESS_SEC['joint_states'],
+            CONNECTION_FRESHNESS_SEC["joint_states"],
         )
 
     def _tri_state_to_bool(self, value: int) -> bool | None:
@@ -516,7 +593,7 @@ class WorkspaceRosAdapter(TelemetrySnapshotMixin, CommandDispatchMixin, JogDispa
 
     def _coerce_int(self, value: Any) -> int:
         if isinstance(value, (bytes, bytearray)):
-            return int.from_bytes(value, byteorder='little', signed=True)
+            return int.from_bytes(value, byteorder="little", signed=True)
         return int(value)
 
     def _is_fresh(self, timestamp: datetime | None, max_age_sec: float) -> bool:

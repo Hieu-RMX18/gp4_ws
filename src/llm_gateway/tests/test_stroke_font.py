@@ -16,7 +16,12 @@ def test_supported_glyph_inventory_is_complete():
 def test_generate_text_strokes_scales_to_requested_height():
     segments = generate_text_strokes("L", height_m=0.02, char_spacing_m=0.004)
 
-    draw_points = [point for segment in segments if segment.kind == "draw" for point in segment.points_2d]
+    draw_points = [
+        point
+        for segment in segments
+        if segment.kind == "draw"
+        for point in segment.points_2d
+    ]
     ys = [point[1] for point in draw_points]
 
     assert math.isclose(min(ys), 0.0, abs_tol=1e-9)

@@ -22,23 +22,25 @@ import yaml
 # Must match IntentRouter._route_single_intent exactly.
 # Update this set AND the prompt text simultaneously — never one without
 # the other.  The contract consistency test enforces this.
-FROZEN_SEMANTIC_INTENTS = frozenset({
-    "go_home",
-    "stop",
-    "alarm_reset",
-    "get_pose",
-    "set_speed",
-    "wait",
-    "move_relative",
-    "absolute_move_ptp",
-    "absolute_move_lin",
-    "circular_move",
-    "move_joint",
-    "move_joints",
-    "io_set",
-    "draw_shape",
-    "draw_text",
-})
+FROZEN_SEMANTIC_INTENTS = frozenset(
+    {
+        "go_home",
+        "stop",
+        "alarm_reset",
+        "get_pose",
+        "set_speed",
+        "wait",
+        "move_relative",
+        "absolute_move_ptp",
+        "absolute_move_lin",
+        "circular_move",
+        "move_joint",
+        "move_joints",
+        "io_set",
+        "draw_shape",
+        "draw_text",
+    }
+)
 FROZEN_TOP_LEVEL_OUTPUT_INTENTS = FROZEN_SEMANTIC_INTENTS | {"sequence"}
 
 _DEFAULT_WORKSPACE_BOUNDS = {
@@ -77,7 +79,9 @@ def _load_workspace_bounds() -> dict[str, float]:
     try:
         from ament_index_python.packages import get_package_share_directory
 
-        safety_yaml = Path(get_package_share_directory("safety")) / "config" / "safety_rules.yaml"
+        safety_yaml = (
+            Path(get_package_share_directory("safety")) / "config" / "safety_rules.yaml"
+        )
         safety_rules = _load_yaml(safety_yaml)
         if safety_rules:
             return _coerce_workspace_bounds(safety_rules.get("workspace_bounds"))
@@ -92,7 +96,9 @@ def _load_workspace_bounds() -> dict[str, float]:
             ex,
         )
 
-    workspace_yaml = Path(__file__).resolve().parents[2] / "safety" / "config" / "safety_rules.yaml"
+    workspace_yaml = (
+        Path(__file__).resolve().parents[2] / "safety" / "config" / "safety_rules.yaml"
+    )
     safety_rules = _load_yaml(workspace_yaml)
     if not safety_rules:
         _LOGGER.warning(
@@ -458,7 +464,6 @@ __JSON_SCHEMA__
 def build_system_prompt(schema_json: str) -> str:
     """Build the system prompt for the LLM, injecting the JSON schema."""
     workspace_limits = _format_workspace_bounds(_load_workspace_bounds())
-    return (
-        _SYSTEM_PROMPT_TEMPLATE.replace("__WORKSPACE_LIMITS__", workspace_limits)
-        .replace("__JSON_SCHEMA__", schema_json)
-    )
+    return _SYSTEM_PROMPT_TEMPLATE.replace(
+        "__WORKSPACE_LIMITS__", workspace_limits
+    ).replace("__JSON_SCHEMA__", schema_json)

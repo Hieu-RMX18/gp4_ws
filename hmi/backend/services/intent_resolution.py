@@ -10,27 +10,16 @@ from typing import Any, Callable
 
 from ..domain.constants import GP4_JOINT_NAMES as JOINT_NAMES
 from .intent_constants import (
-    _ALLOWED_FIELDS_BY_PRIMITIVE,
     _CARTESIAN_DIRECTIONS,
     _DRAW_TEXT_PREFIX_PATTERN,
     _OLD_ACTIONS,
     DEFAULT_DRAW_TEXT_HEIGHT,
     DEFAULT_DRAW_TEXT_UNITS,
-    HARDWARE_WHITELIST,
-    MOTION_PRIMITIVES,
-    PLANNER_DEFAULTS,
-    ROUTED_DRAW_METADATA_FIELDS,
-    SUPPORTED_PRIMITIVES,
     UNIT_TO_METERS,
 )
 from .intent_normalization import (
     IntentNormalizationMixin,
-    _clamp,
-    _normalize_angle,
-    _rpy_to_quaternion,
     _to_float,
-    _to_int,
-    _wrap_to_pi,
 )
 
 _LLM_GATEWAY_SOURCE = Path(__file__).resolve().parents[3] / "src" / "llm_gateway"
@@ -51,7 +40,10 @@ except Exception:  # pragma: no cover - depends on optional source path
     IntentRouter = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - fallback logic is covered
-    from llm_gateway.sequence_validator import SequenceValidationError, SequenceValidator
+    from llm_gateway.sequence_validator import (
+        SequenceValidationError,
+        SequenceValidator,
+    )
 except Exception:  # pragma: no cover - depends on optional source path
     SequenceValidationError = ValueError  # type: ignore[assignment]
     SequenceValidator = None  # type: ignore[assignment]
@@ -60,7 +52,6 @@ try:  # pragma: no cover - fallback logic is covered
     from llm_gateway.parser import parse_llm_output
 except Exception:  # pragma: no cover - depends on optional source path
     parse_llm_output = None  # type: ignore[assignment]
-
 
 
 class IntentResolutionError(ValueError):
@@ -219,12 +210,18 @@ class IntentResolutionService(IntentNormalizationMixin):
                     structured_intent=command,
                     runtime_mode=runtime_mode,
                     current_joints=current_joints,
-                    allow_routed_draw_metadata=bool(routed.metadata.get("macro_name") in {"draw_shape", "draw_text"}),
+                    allow_routed_draw_metadata=bool(
+                        routed.metadata.get("macro_name") in {"draw_shape", "draw_text"}
+                    ),
                 )
                 for command in routed.commands
             ]
         except (IntentResolutionError, SequenceValidationError, ValueError) as exc:
-            message = exc.operator_message() if isinstance(exc, IntentResolutionError) else str(exc)
+            message = (
+                exc.operator_message()
+                if isinstance(exc, IntentResolutionError)
+                else str(exc)
+            )
             return {
                 "parsed_steps": None,
                 "diagnostics": diagnostics,
@@ -257,10 +254,14 @@ class IntentResolutionService(IntentNormalizationMixin):
                 runtime_mode=mode,
                 current_joints=current_joints,
             )
-            normalized_text = json.dumps(structured_intent, separators=(",", ":"), ensure_ascii=True)
+            normalized_text = json.dumps(
+                structured_intent, separators=(",", ":"), ensure_ascii=True
+            )
             source = "structured"
         else:
-            initial_command = self._text_to_command(raw_text=raw_text, current_joints=current_joints)
+            initial_command = self._text_to_command(
+                raw_text=raw_text, current_joints=current_joints
+            )
             normalized_text = " ".join(raw_text.strip().split()).lower()
             source = "text"
 
@@ -305,8 +306,12 @@ class IntentResolutionService(IntentNormalizationMixin):
                 )
             routed = IntentRouter(runtime_mode=runtime_mode).route(payload)
             if routed.route_type == "error":
-                message = (routed.error_payload or {}).get("message") or (routed.error_payload or {}).get("error")
-                raise IntentResolutionError(str(message or "intent router returned an error payload."))
+                message = (routed.error_payload or {}).get("message") or (
+                    routed.error_payload or {}
+                ).get("error")
+                raise IntentResolutionError(
+                    str(message or "intent router returned an error payload.")
+                )
             if len(routed.commands) != 1:
                 raise IntentResolutionError(
                     f"semantic routing expected one command but produced {len(routed.commands)} commands."
@@ -336,9 +341,15 @@ class IntentResolutionService(IntentNormalizationMixin):
         if primitive == "STOP":
             return {"primitive_type": "STOP"}
         if primitive == "WAIT":
-            return {"primitive_type": "WAIT", "wait_duration_sec": parameters.get("wait_duration_sec")}
+            return {
+                "primitive_type": "WAIT",
+                "wait_duration_sec": parameters.get("wait_duration_sec"),
+            }
         if primitive == "SET_SPEED":
-            return {"primitive_type": "SET_SPEED", "velocity_scale": parameters.get("velocity_scale")}
+            return {
+                "primitive_type": "SET_SPEED",
+                "velocity_scale": parameters.get("velocity_scale"),
+            }
         if primitive == "IO_SET":
             return {
                 "primitive_type": "IO_SET",
@@ -348,14 +359,24 @@ class IntentResolutionService(IntentNormalizationMixin):
         if primitive == "ALARM_RESET":
             return {"primitive_type": "ALARM_RESET"}
         if primitive == "GET_POSE":
-            return {"primitive_type": "GET_POSE", "reference_frame": parameters.get("reference_frame", "base_link")}
+            return {
+                "primitive_type": "GET_POSE",
+                "reference_frame": parameters.get("reference_frame", "base_link"),
+            }
         if primitive == "MOVE_REL":
-            frame = str(parameters.get("frame") or parameters.get("reference_frame") or "base_link")
+            frame = str(
+                parameters.get("frame")
+                or parameters.get("reference_frame")
+                or "base_link"
+            )
             return {
                 "primitive_type": "MOVE_REL",
-                "delta_x": _to_float(parameters.get("xMm", 0.0), "parameters.xMm") / 1000.0,
-                "delta_y": _to_float(parameters.get("yMm", 0.0), "parameters.yMm") / 1000.0,
-                "delta_z": _to_float(parameters.get("zMm", 0.0), "parameters.zMm") / 1000.0,
+                "delta_x": _to_float(parameters.get("xMm", 0.0), "parameters.xMm")
+                / 1000.0,
+                "delta_y": _to_float(parameters.get("yMm", 0.0), "parameters.yMm")
+                / 1000.0,
+                "delta_z": _to_float(parameters.get("zMm", 0.0), "parameters.zMm")
+                / 1000.0,
                 "reference_frame": frame,
                 "velocity_scale": parameters.get("velocity_scale"),
                 "acceleration_scale": parameters.get("acceleration_scale"),
@@ -369,13 +390,17 @@ class IntentResolutionService(IntentNormalizationMixin):
                 )
             resolved_target = parameters.get("resolvedTargetDeg")
             if resolved_target is None:
-                current_deg = self._read_joint_deg(current_joints=current_joints, joint_index=joint_index)
+                current_deg = self._read_joint_deg(
+                    current_joints=current_joints, joint_index=joint_index
+                )
                 if current_deg is None:
                     raise IntentResolutionError(
                         f"fresh joint position for {JOINT_NAMES[joint_index]} is unavailable.",
                         missing_slots=["fresh_joint_position"],
                     )
-                resolved_target = float(current_deg) + _to_float(parameters.get("deltaDeg", 0.0), "parameters.deltaDeg")
+                resolved_target = float(current_deg) + _to_float(
+                    parameters.get("deltaDeg", 0.0), "parameters.deltaDeg"
+                )
             return {
                 "primitive_type": "MOVE_JOINT",
                 "joint_index": joint_index,
@@ -395,19 +420,25 @@ class IntentResolutionService(IntentNormalizationMixin):
             command.update(parameters)
             return command
 
-        raise IntentResolutionError(f"unsupported structured action: {payload.get('action')!r}")
+        raise IntentResolutionError(
+            f"unsupported structured action: {payload.get('action')!r}"
+        )
 
     def _sequence_candidate_metadata(self, payload: dict[str, Any]) -> dict[str, Any]:
         intent = str(payload.get("intent") or "").strip().lower()
         metadata: dict[str, Any] = {"intent": intent}
         if intent == "draw_shape":
             metadata["macro_name"] = "draw_shape"
-            metadata["shape_type"] = str(payload.get("shape_type", payload.get("shape", ""))).strip().lower()
+            metadata["shape_type"] = (
+                str(payload.get("shape_type", payload.get("shape", ""))).strip().lower()
+            )
         if intent == "draw_text":
             metadata["macro_name"] = "draw_text"
             metadata["text"] = str(payload.get("text") or "").strip().upper()
         return metadata
 
+    # DEPRECATED: removal_date=2026-06-01, reason=consolidated_to_llm_gateway_via_W5
+    # TODO(W5): replace with ROS service call to llm_gateway's canonical hydrate_draw_workplane
     def _hydrate_draw_workplane(
         self,
         payload: dict[str, Any],
@@ -524,9 +555,15 @@ class IntentResolutionService(IntentNormalizationMixin):
         if not content:
             return None
 
-        height_match = re.fullmatch(r"(.+?)\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)\s+tall", content, re.IGNORECASE)
+        height_match = re.fullmatch(
+            r"(.+?)\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)\s+tall", content, re.IGNORECASE
+        )
         if height_match is None:
-            height_match = re.fullmatch(r"(.+?)\s+cao\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)", content, re.IGNORECASE)
+            height_match = re.fullmatch(
+                r"(.+?)\s+cao\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)",
+                content,
+                re.IGNORECASE,
+            )
 
         if height_match is not None:
             text = height_match.group(1).strip()
@@ -551,20 +588,32 @@ class IntentResolutionService(IntentNormalizationMixin):
 
     def _fold_text(self, value: str) -> str:
         normalized = unicodedata.normalize("NFKD", value)
-        return "".join(character for character in normalized if not unicodedata.combining(character)).lower()
+        return "".join(
+            character
+            for character in normalized
+            if not unicodedata.combining(character)
+        ).lower()
 
-    def _text_to_command(self, *, raw_text: str, current_joints: list[Any]) -> dict[str, Any]:
+    def _text_to_command(
+        self, *, raw_text: str, current_joints: list[Any]
+    ) -> dict[str, Any]:
         normalized = " ".join(raw_text.strip().split()).lower()
         if not normalized:
-            raise IntentResolutionError("empty command text is not allowed", missing_slots=["intentText"])
+            raise IntentResolutionError(
+                "empty command text is not allowed", missing_slots=["intentText"]
+            )
 
         if normalized.startswith("{") and parse_llm_output is not None:
             try:
                 parsed_payload = parse_llm_output(raw_text)
             except Exception as exc:  # pragma: no cover - parser is optional
-                raise IntentResolutionError(f"failed to parse JSON intent payload: {exc}") from exc
+                raise IntentResolutionError(
+                    f"failed to parse JSON intent payload: {exc}"
+                ) from exc
             if not isinstance(parsed_payload, dict):
-                raise IntentResolutionError("JSON intent payload must decode to an object.")
+                raise IntentResolutionError(
+                    "JSON intent payload must decode to an object."
+                )
             return self._structured_to_command(
                 structured_intent=parsed_payload,
                 runtime_mode="hardware",
@@ -583,7 +632,10 @@ class IntentResolutionService(IntentNormalizationMixin):
         if normalized in {"get pose", "current pose", "where is robot", "where is tcp"}:
             return {"primitive_type": "GET_POSE", "reference_frame": "base_link"}
 
-        wait_match = re.fullmatch(r"(?:wait|pause)\s+([+-]?\d+(?:\.\d+)?)\s*(?:s|sec|second|seconds)?", normalized)
+        wait_match = re.fullmatch(
+            r"(?:wait|pause)\s+([+-]?\d+(?:\.\d+)?)\s*(?:s|sec|second|seconds)?",
+            normalized,
+        )
         if wait_match:
             return {
                 "primitive_type": "WAIT",
@@ -626,7 +678,9 @@ class IntentResolutionService(IntentNormalizationMixin):
             target_deg = float(angle_text)
             joint_index = joint_one_based - 1
             if angle_text.startswith(("+", "-")):
-                current_deg = self._read_joint_deg(current_joints=current_joints, joint_index=joint_index)
+                current_deg = self._read_joint_deg(
+                    current_joints=current_joints, joint_index=joint_index
+                )
                 if current_deg is None:
                     raise IntentResolutionError(
                         f"fresh joint position for {JOINT_NAMES[joint_index]} is unavailable.",
@@ -656,4 +710,3 @@ class IntentResolutionService(IntentNormalizationMixin):
             "intent is ambiguous or unsupported. Supported phrases: home, stop, wait, set speed, "
             "move <direction> <distance>, move joint <n> <deg>, move joints <6 values>.",
         )
-

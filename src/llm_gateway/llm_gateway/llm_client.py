@@ -76,7 +76,9 @@ class OpenAICompatibleLLMClient:
                 last_exc = wrapped
                 _LOGGER.warning(
                     "LLM transient HTTP %d on attempt %d/%d; will retry.",
-                    exc.code, attempt, max_attempts,
+                    exc.code,
+                    attempt,
+                    max_attempts,
                 )
             except urllib.error.URLError as exc:
                 wrapped = RuntimeError(f"LLM request failed: {exc.reason}")
@@ -86,7 +88,9 @@ class OpenAICompatibleLLMClient:
                 last_exc = wrapped
                 _LOGGER.warning(
                     "LLM network error on attempt %d/%d: %s; will retry.",
-                    attempt, max_attempts, exc.reason,
+                    attempt,
+                    max_attempts,
+                    exc.reason,
                 )
 
             self._sleep(self._backoff_delay(attempt))
@@ -141,7 +145,11 @@ class OpenAICompatibleLLMClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
-        api_key = self._config.api_key or os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+        api_key = (
+            self._config.api_key
+            or os.getenv("LLM_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+        )
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers

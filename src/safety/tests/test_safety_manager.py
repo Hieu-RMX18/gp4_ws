@@ -24,8 +24,8 @@ def _make_manager(sim_mode: bool):
     manager._robot_ready = False
     manager._last_error_reason = (
         "no hw_adapter readiness received yet (sim mode)"
-        if sim_mode else
-        "no robot status received yet (fail-closed)"
+        if sim_mode
+        else "no robot status received yet (fail-closed)"
     )
     manager._status_received = False
     manager._adapter_ready_received = False
@@ -78,7 +78,9 @@ def test_sim_mode_ignores_raw_robot_status():
     manager.status_callback(msg)
 
     assert manager.is_robot_ready is False
-    assert manager.last_error_reason == "no hw_adapter readiness received yet (sim mode)"
+    assert (
+        manager.last_error_reason == "no hw_adapter readiness received yet (sim mode)"
+    )
 
 
 def test_hardware_mode_preserves_raw_robot_status_fail_closed():

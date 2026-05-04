@@ -3,6 +3,7 @@
 These tests freeze the public contracts, HMI trust boundary, and launch
 entrypoints that must survive all refactor waves unchanged.
 """
+
 from __future__ import annotations
 
 import importlib

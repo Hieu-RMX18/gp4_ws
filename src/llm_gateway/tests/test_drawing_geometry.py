@@ -29,7 +29,9 @@ def _base_workplane():
 
 
 def test_circle_path_radius_correctness():
-    strokes = generate_circle_path(radius_m=0.03, max_chord_error_m=0.0005, max_segment_angle_rad=math.radians(10))
+    strokes = generate_circle_path(
+        radius_m=0.03, max_chord_error_m=0.0005, max_segment_angle_rad=math.radians(10)
+    )
     points = strokes[0].points_2d
 
     center_x = 0.03
@@ -82,15 +84,24 @@ def test_text_glyph_scaling_and_spacing():
         alignment="left",
     )
 
-    draw_points = [point for segment in segments if segment.kind == "draw" for point in segment.points_2d]
+    draw_points = [
+        point
+        for segment in segments
+        if segment.kind == "draw"
+        for point in segment.points_2d
+    ]
     min_y = min(point[1] for point in draw_points)
     max_y = max(point[1] for point in draw_points)
 
     assert math.isclose(min_y, 0.0, abs_tol=1e-9)
     assert math.isclose(max_y, 0.02, abs_tol=1e-9)
 
-    first_draw_start = [segment for segment in segments if segment.kind == "draw"][0].points_2d[0][0]
-    second_draw_start = [segment for segment in segments if segment.kind == "draw"][3].points_2d[0][0]
+    first_draw_start = [segment for segment in segments if segment.kind == "draw"][
+        0
+    ].points_2d[0][0]
+    second_draw_start = [segment for segment in segments if segment.kind == "draw"][
+        3
+    ].points_2d[0][0]
     assert second_draw_start > first_draw_start + 0.02
 
 
@@ -133,4 +144,7 @@ def test_compile_strokes_generates_chunk_metadata():
 
     assert compiled.summary["draw_stroke_count"] == 1
     assert compiled.summary["chunk_count"] >= 1
-    assert any(command["primitive_type"] in {"LIN", "CARTESIAN_PATH"} for command in compiled.commands)
+    assert any(
+        command["primitive_type"] in {"LIN", "CARTESIAN_PATH"}
+        for command in compiled.commands
+    )

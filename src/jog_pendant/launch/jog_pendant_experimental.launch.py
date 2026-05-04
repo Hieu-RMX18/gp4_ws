@@ -71,15 +71,15 @@ def generate_launch_description():
     print("=" * 70)
 
     # ── Shared paths ──────────────────────────────────────────────────────
-    gp4_moveit_share = get_package_share_directory('gp4_moveit_config')
-    jog_pendant_share = get_package_share_directory('jog_pendant')
+    gp4_moveit_share = get_package_share_directory("gp4_moveit_config")
+    jog_pendant_share = get_package_share_directory("jog_pendant")
 
     # ── Load MoveIt configs for the robot ───────────────────────────────
     moveit_config = (
-        MoveItConfigsBuilder('motoman_gp4', package_name='gp4_moveit_config')
+        MoveItConfigsBuilder("motoman_gp4", package_name="gp4_moveit_config")
         .robot_description(
             mappings={
-                'use_fake_hardware': 'false',
+                "use_fake_hardware": "false",
             }
         )
         .to_moveit_configs()
@@ -90,29 +90,26 @@ def generate_launch_description():
     # joint_topic is set to /joint_states because the experimental launch
     # does not include the move_group launch (which owns the planning scene).
     # The servo node will use /joint_states directly from the controller.
-    servo_config_path = os.path.join(
-        gp4_moveit_share, 'config', 'servo_gp4_jog.yaml'
-    )
+    servo_config_path = os.path.join(gp4_moveit_share, "config", "servo_gp4_jog.yaml")
     # MoveIt Servo reads params from "moveit_servo" namespace (see servo_parameters.h).
     # Must wrap YAML contents under {"moveit_servo": ...} like the official launch.
-    with open(servo_config_path, 'r') as f:
+    with open(servo_config_path, "r") as f:
         servo_yaml = yaml.safe_load(f)
     # Strip the /**/ros__parameters wrapper if present — the dict params handle that.
-    if '/**' in servo_yaml and 'ros__parameters' in servo_yaml['/**']:
-        servo_yaml = servo_yaml['/**']['ros__parameters']
-    servo_params = {'moveit_servo': servo_yaml}
+    if "/**" in servo_yaml and "ros__parameters" in servo_yaml["/**"]:
+        servo_yaml = servo_yaml["/**"]["ros__parameters"]
+    servo_params = {"moveit_servo": servo_yaml}
 
     # ── Shared params for jog_pendant ───────────────────────────────────
     jog_params_path = os.path.join(
-        jog_pendant_share, 'config', 'jog_pendant_params.yaml'
+        jog_pendant_share, "config", "jog_pendant_params.yaml"
     )
 
     # ── Joint state topic ────────────────────────────────────────────────
     # Use /joint_states because MotoROS2 remaps /yaskawa/joint_states → /joint_states
     # in hw.launch.py (via joint_state_publisher source_list).
     joint_states_topic = LaunchConfiguration(
-        'joint_states_topic',
-        default='/joint_states'
+        "joint_states_topic", default="/joint_states"
     )
 
     # ════════════════════════════════════════════════════════════════════════
@@ -129,25 +126,25 @@ def generate_launch_description():
     # move_group in this experimental compose. Collision checking is enabled
     # but may be degraded without a full planning scene.
     servo_node = Node(
-        package='moveit_servo',
-        executable='servo_node_main',
-        name='servo_node',
-        namespace='/servo_node',
-        output='screen',
+        package="moveit_servo",
+        executable="servo_node_main",
+        name="servo_node",
+        namespace="/servo_node",
+        output="screen",
         parameters=[
             servo_params,
             moveit_config.robot_description,
             moveit_config.robot_description_semantic,
             moveit_config.robot_description_kinematics,
             {
-                'moveit_servo': {
+                "moveit_servo": {
                     # Override joint_topic to use /joint_states directly
                     # (no move_group remapping in this experimental compose)
-                    'joint_topic': joint_states_topic,
+                    "joint_topic": joint_states_topic,
                     # Must override — MoveIt Servo defaults to panda_arm
-                    'move_group_name': 'gp4_arm',
+                    "move_group_name": "gp4_arm",
                     # Enable collision checking for safety
-                    'check_collisions': True,
+                    "check_collisions": True,
                 },
             },
         ],
@@ -158,9 +155,9 @@ def generate_launch_description():
             # name=servo_node + ns=/servo_node → fully qualified /servo_node/servo_node.
             # ~/X resolves to /servo_node/servo_node/X, but downstream nodes
             # expect /servo_node/X. Remap using absolute source names.
-            ('/servo_node/servo_node/delta_joint_cmds', '/servo_node/delta_joint_cmds'),
-            ('/servo_node/servo_node/status', '/servo_node/status'),
-            ('/servo_node/servo_node/command_out', '/servo_node/command_out'),
+            ("/servo_node/servo_node/delta_joint_cmds", "/servo_node/delta_joint_cmds"),
+            ("/servo_node/servo_node/status", "/servo_node/status"),
+            ("/servo_node/servo_node/command_out", "/servo_node/command_out"),
         ],
     )
 
@@ -170,15 +167,15 @@ def generate_launch_description():
     # Publishes to 'delta_joint_cmds' (root ns) → remapped to /servo_node/delta_joint_cmds
     # Watchdog: 200ms no heartbeat → halt.
     jog_input_node = Node(
-        package='jog_pendant',
-        executable='jog_input_node.py',
-        name='jog_input_node',
-        output='screen',
+        package="jog_pendant",
+        executable="jog_input_node.py",
+        name="jog_input_node",
+        output="screen",
         parameters=[
             {
                 # jog_input_node publishes to this topic.
                 # Remapped by servo_node to /servo_node/delta_joint_cmds.
-                'servo_cmd_topic': 'delta_joint_cmds',
+                "servo_cmd_topic": "delta_joint_cmds",
             }
         ],
     )
@@ -198,36 +195,37 @@ def generate_launch_description():
     #   /servo_bridge/activate
     #   /servo_bridge/deactivate
     servo_bridge_node = Node(
-        package='jog_pendant',
-        executable='servo_bridge_node',
-        name='servo_bridge_node',
-        output='screen',
+        package="jog_pendant",
+        executable="servo_bridge_node",
+        name="servo_bridge_node",
+        output="screen",
         parameters=[
             jog_params_path,
             {
-                'joint_states_topic': joint_states_topic,
+                "joint_states_topic": joint_states_topic,
                 # Servo trajectory topic (namespaced by servo_node)
-                'servo_trajectory_topic': '/servo_node/command_out',
+                "servo_trajectory_topic": "/servo_node/command_out",
                 # Servo status topic
-                'servo_status_topic': '/servo_node/status',
+                "servo_status_topic": "/servo_node/status",
             },
         ],
     )
 
-    return LaunchDescription([
-        SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'),
-
-        LogInfo(msg="[EXPERIMENTAL] jog_pendant_experimental.launch.py loaded"),
-        LogInfo(msg="[EXPERIMENTAL] WARNING: This is NOT the mainline execution path"),
-        LogInfo(msg="[EXPERIMENTAL] DO NOT use this for production"),
-
-        DeclareLaunchArgument(
-            'joint_states_topic',
-            default_value='/joint_states',
-            description='Joint states topic for Servo (usually /joint_states in hw bringup)',
-        ),
-
-        servo_node,
-        jog_input_node,
-        servo_bridge_node,
-    ])
+    return LaunchDescription(
+        [
+            SetEnvironmentVariable("RMW_IMPLEMENTATION", "rmw_fastrtps_cpp"),
+            LogInfo(msg="[EXPERIMENTAL] jog_pendant_experimental.launch.py loaded"),
+            LogInfo(
+                msg="[EXPERIMENTAL] WARNING: This is NOT the mainline execution path"
+            ),
+            LogInfo(msg="[EXPERIMENTAL] DO NOT use this for production"),
+            DeclareLaunchArgument(
+                "joint_states_topic",
+                default_value="/joint_states",
+                description="Joint states topic for Servo (usually /joint_states in hw bringup)",
+            ),
+            servo_node,
+            jog_input_node,
+            servo_bridge_node,
+        ]
+    )

@@ -40,7 +40,7 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         adapter = WorkspaceRosAdapter()
         adapter._state.start_error = None
         adapter._state.ros_started_at = adapter._now() - timedelta(
-            seconds=CONNECTION_FRESHNESS_SEC['ros'] + 0.5
+            seconds=CONNECTION_FRESHNESS_SEC["ros"] + 0.5
         )
 
         connections = adapter.read_connections()
@@ -65,7 +65,7 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         adapter._state.ros_started_at = now
         adapter._state.readiness.received_at = now
         adapter._state.readiness.ready = True
-        adapter._state.readiness.status_message = 'ready'
+        adapter._state.readiness.status_message = "ready"
         adapter._state.robot_status.received_at = now - timedelta(seconds=10.0)
 
         connections = adapter.read_connections()
@@ -75,8 +75,8 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertEqual(connections[0].health, ConnectionHealth.HEALTHY)
         self.assertEqual(connections[3].health, ConnectionHealth.DEGRADED)
         self.assertEqual(runtime.system_state, SystemRuntimeState.NORMAL)
-        self.assertEqual(source_statuses['readiness'].freshness_state.value, 'fresh')
-        self.assertEqual(source_statuses['robot_status'].freshness_state.value, 'stale')
+        self.assertEqual(source_statuses["readiness"].freshness_state.value, "fresh")
+        self.assertEqual(source_statuses["robot_status"].freshness_state.value, "stale")
 
     def test_estop_wins_over_fault_and_safety_blocked(self) -> None:
         adapter = WorkspaceRosAdapter()
@@ -88,7 +88,7 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         adapter._state.robot_status.in_error = True
         adapter._state.readiness.received_at = now
         adapter._state.readiness.ready = False
-        adapter._state.readiness.status_message = 'blocked'
+        adapter._state.readiness.status_message = "blocked"
 
         runtime = adapter.read_runtime_snapshot()
 
@@ -104,7 +104,7 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         adapter._state.robot_status.in_error = True
         adapter._state.readiness.received_at = now
         adapter._state.readiness.ready = False
-        adapter._state.readiness.status_message = 'blocked'
+        adapter._state.readiness.status_message = "blocked"
 
         runtime = adapter.read_runtime_snapshot()
 
@@ -139,27 +139,31 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertEqual(adapter._state.supervisor_alert.level, 1)
         self.assertEqual(adapter._state.supervisor_alert.values["reason"], "hold")
 
-    def test_sim_mode_demotes_robot_status_and_prefers_joint_state_fallback(self) -> None:
+    def test_sim_mode_demotes_robot_status_and_prefers_joint_state_fallback(
+        self,
+    ) -> None:
         adapter = WorkspaceRosAdapter()
         now = adapter._now()
         adapter._state.start_error = None
         adapter._state.ros_started_at = now
         adapter._state.readiness.received_at = now
         adapter._state.readiness.ready = True
-        adapter._state.readiness.status_message = 'simulation mode: robot status bypassed'
+        adapter._state.readiness.status_message = (
+            "simulation mode: robot status bypassed"
+        )
         adapter._state.joint_received_at = now
-        adapter._state.joint_source_topic = '/joint_states'
-        adapter._state.joint_topic_received_at['/joint_states'] = now
+        adapter._state.joint_source_topic = "/joint_states"
+        adapter._state.joint_topic_received_at["/joint_states"] = now
 
         source_statuses = {item.name: item for item in adapter.read_source_statuses()}
         runtime = adapter.read_runtime_snapshot()
 
-        self.assertEqual(runtime.mode.value, 'sim')
-        self.assertFalse(source_statuses['robot_status'].active)
-        self.assertTrue(source_statuses['joint_states_fallback'].preferred)
-        self.assertTrue(source_statuses['joint_states_fallback'].active)
-        self.assertFalse(source_statuses['joint_states_primary'].preferred)
-        self.assertFalse(source_statuses['joint_states_primary'].active)
+        self.assertEqual(runtime.mode.value, "sim")
+        self.assertFalse(source_statuses["robot_status"].active)
+        self.assertTrue(source_statuses["joint_states_fallback"].preferred)
+        self.assertTrue(source_statuses["joint_states_fallback"].active)
+        self.assertFalse(source_statuses["joint_states_primary"].preferred)
+        self.assertFalse(source_statuses["joint_states_primary"].active)
 
     def test_llm_event_topics_are_not_freshness_critical_when_idle(self) -> None:
         adapter = WorkspaceRosAdapter()
@@ -170,11 +174,13 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
 
         source_statuses = {item.name: item for item in adapter.read_source_statuses()}
 
-        self.assertTrue(source_statuses['gateway_status'].active)
-        self.assertFalse(source_statuses['llm_debug'].active)
-        self.assertFalse(source_statuses['llm_command'].active)
+        self.assertTrue(source_statuses["gateway_status"].active)
+        self.assertFalse(source_statuses["llm_debug"].active)
+        self.assertFalse(source_statuses["llm_command"].active)
 
-    def test_build_command_payload_maps_cartesian_delta_to_move_rel_in_base_link(self) -> None:
+    def test_build_command_payload_maps_cartesian_delta_to_move_rel_in_base_link(
+        self,
+    ) -> None:
         adapter = WorkspaceRosAdapter()
         payload = adapter._build_command_payload(  # pylint: disable=protected-access
             {
@@ -192,7 +198,9 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertEqual(payload["reference_frame"], "base_link")
         self.assertAlmostEqual(payload["delta_z"], 0.05)
 
-    def test_build_command_payload_maps_joint_delta_to_absolute_move_joint(self) -> None:
+    def test_build_command_payload_maps_joint_delta_to_absolute_move_joint(
+        self,
+    ) -> None:
         adapter = WorkspaceRosAdapter()
         payload = adapter._build_command_payload(  # pylint: disable=protected-access
             {
@@ -225,7 +233,9 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertEqual(payload["primitive_type"], "MOVE_REL")
         self.assertAlmostEqual(payload["delta_x"], 0.01)
 
-    def test_build_command_payload_passthrough_preserves_wait_and_io_fields(self) -> None:
+    def test_build_command_payload_passthrough_preserves_wait_and_io_fields(
+        self,
+    ) -> None:
         adapter = WorkspaceRosAdapter()
         wait_payload = adapter._build_command_payload(  # pylint: disable=protected-access
             {
@@ -257,7 +267,9 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertEqual(io_payload["io_value"], 1)
         self.assertEqual(io_payload["reference_frame"], "base_link")
 
-    def test_build_command_payload_passthrough_preserves_joint_and_pose_motion_fields(self) -> None:
+    def test_build_command_payload_passthrough_preserves_joint_and_pose_motion_fields(
+        self,
+    ) -> None:
         adapter = WorkspaceRosAdapter()
         move_joint_payload = adapter._build_command_payload(  # pylint: disable=protected-access
             {
@@ -302,7 +314,9 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertAlmostEqual(lin_payload["acceleration_scale"], 0.04)
         self.assertEqual(lin_payload["planner_id"], "PILZ_LIN")
 
-    def test_cartesian_path_uses_last_waypoint_as_target_pose_for_ros_dispatch(self) -> None:
+    def test_cartesian_path_uses_last_waypoint_as_target_pose_for_ros_dispatch(
+        self,
+    ) -> None:
         adapter = WorkspaceRosAdapter()
         payload = {
             "primitive_type": "CARTESIAN_PATH",
@@ -330,18 +344,18 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         adapter._state.ros_started_at = now
         adapter._state.readiness.received_at = now
         adapter._state.readiness.ready = True
-        adapter._state.readiness.status_message = 'hardware ready'
+        adapter._state.readiness.status_message = "hardware ready"
         adapter._state.robot_status.received_at = now
         adapter._state.robot_status.e_stopped = False
         adapter._state.robot_status.in_error = False
         adapter._state.joint_received_at = now
-        adapter._state.joint_source_topic = '/joint_states'
-        adapter._state.joint_topic_received_at['/joint_states'] = now
+        adapter._state.joint_source_topic = "/joint_states"
+        adapter._state.joint_topic_received_at["/joint_states"] = now
         adapter._state.validate_command_ready = True
         adapter._state.execute_motion_ready = True
         adapter._state.validate_command_ready_at = now
         adapter._state.execute_motion_ready_at = now
-        preflight = adapter.evaluate_execution_preflight(target_mode='hardware')
+        preflight = adapter.evaluate_execution_preflight(target_mode="hardware")
         self.assertFalse(preflight["accepted"])
         self.assertTrue(
             any("joint_states_primary" in reason for reason in preflight["reasons"]),
@@ -360,19 +374,27 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         )
 
         fake_service = type(
-            'FakeGetCurrentPose',
+            "FakeGetCurrentPose",
             (),
-            {'Request': type('Request', (), {'__init__': lambda self: setattr(self, 'reference_frame', '')})},
+            {
+                "Request": type(
+                    "Request",
+                    (),
+                    {"__init__": lambda self: setattr(self, "reference_frame", "")},
+                )
+            },
         )
-        with patch('hmi.backend.ros.adapter.GetCurrentPose', fake_service):
-            payload = adapter.get_current_pose(reference_frame='base_link')
+        with patch("hmi.backend.ros.adapter.GetCurrentPose", fake_service):
+            payload = adapter.get_current_pose(reference_frame="base_link")
 
-        self.assertEqual(adapter._get_pose_client.requests[0].reference_frame, 'base_link')  # pylint: disable=protected-access
+        self.assertEqual(
+            adapter._get_pose_client.requests[0].reference_frame, "base_link"
+        )  # pylint: disable=protected-access
         self.assertEqual(
             payload,
             {
-                'position': {'x': 0.31, 'y': -0.02, 'z': 0.42},
-                'orientation': {'x': 0.0, 'y': 0.707, 'z': 0.0, 'w': 0.707},
+                "position": {"x": 0.31, "y": -0.02, "z": 0.42},
+                "orientation": {"x": 0.0, "y": 0.707, "z": 0.0, "w": 0.707},
             },
         )
 
@@ -382,15 +404,21 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         adapter._get_pose_client = _FakePoseClient(None, ready=False)  # pylint: disable=protected-access
 
         fake_service = type(
-            'FakeGetCurrentPose',
+            "FakeGetCurrentPose",
             (),
-            {'Request': type('Request', (), {'__init__': lambda self: setattr(self, 'reference_frame', '')})},
+            {
+                "Request": type(
+                    "Request",
+                    (),
+                    {"__init__": lambda self: setattr(self, "reference_frame", "")},
+                )
+            },
         )
-        with patch('hmi.backend.ros.adapter.GetCurrentPose', fake_service):
-            payload = adapter.get_current_pose(reference_frame='base_link')
+        with patch("hmi.backend.ros.adapter.GetCurrentPose", fake_service):
+            payload = adapter.get_current_pose(reference_frame="base_link")
 
         self.assertIsNone(payload)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

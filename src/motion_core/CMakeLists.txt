@@ -33,6 +33,8 @@ add_library(${PROJECT_NAME}_components SHARED
   src/ik_selector.cpp
   src/seed_manager.cpp
   src/wrist_flip_guard.cpp
+  src/joint_position_guard.cpp
+  src/manipulability_guard.cpp
   src/trajectory_post_processor.cpp
   src/quality_gate.cpp
   src/orientation_filter.cpp
@@ -139,6 +141,30 @@ if(BUILD_TESTING)
       ${PROJECT_NAME}_components
     )
     target_include_directories(test_wrist_flip_guard PRIVATE
+      include
+    )
+  endif()
+
+  ament_add_gtest(test_joint_position_guard
+    test/test_joint_position_guard.cpp
+  )
+  if(TARGET test_joint_position_guard)
+    target_link_libraries(test_joint_position_guard
+      ${PROJECT_NAME}_components
+    )
+    target_include_directories(test_joint_position_guard PRIVATE
+      include
+    )
+  endif()
+
+  ament_add_gtest(test_manipulability_guard
+    test/test_manipulability_guard.cpp
+  )
+  if(TARGET test_manipulability_guard)
+    target_link_libraries(test_manipulability_guard
+      ${PROJECT_NAME}_components
+    )
+    target_include_directories(test_manipulability_guard PRIVATE
       include
     )
   endif()

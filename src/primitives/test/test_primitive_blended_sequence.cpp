@@ -8,12 +8,9 @@
 
 #include "primitives/primitive_blended_sequence.hpp"
 
-namespace primitives
-{
-namespace
-{
-class FakeBlendedBackend final : public BlendedSequenceExecutionBackend
-{
+namespace primitives {
+namespace {
+class FakeBlendedBackend final : public BlendedSequenceExecutionBackend {
 public:
   bool sequence_available = false;
   bool sequence_called = false;
@@ -23,24 +20,19 @@ public:
   std::size_t staged_index = 0;
   std::vector<SequenceStep> executed_steps;
 
-  bool sequence_action_available() override
-  {
-    return sequence_available;
-  }
+  bool sequence_action_available() override { return sequence_available; }
 
-  PrimitiveResult execute_sequence_action(const std::vector<SequenceStep> & steps) override
-  {
+  PrimitiveResult
+  execute_sequence_action(const std::vector<SequenceStep> &steps) override {
     sequence_called = true;
     (void)steps;
     return sequence_result;
   }
 
-  PrimitiveResult execute_substep(const SequenceStep & step) override
-  {
+  PrimitiveResult execute_substep(const SequenceStep &step) override {
     executed_steps.push_back(step);
 
-    if (staged_index < staged_results.size())
-    {
+    if (staged_index < staged_results.size()) {
       return staged_results[staged_index++];
     }
 
@@ -53,8 +45,7 @@ public:
   }
 };
 
-SequenceStep make_step(PrimitiveType type)
-{
+SequenceStep make_step(PrimitiveType type) {
   SequenceStep step;
   step.type = type;
   step.target_pose.orientation.w = 1.0;
@@ -63,8 +54,7 @@ SequenceStep make_step(PrimitiveType type)
   return step;
 }
 
-PrimitiveResult make_success(std::size_t points)
-{
+PrimitiveResult make_success(std::size_t points) {
   PrimitiveResult result;
   result.success = true;
   result.reason = PrimitiveFailReason::UNKNOWN;
@@ -73,8 +63,8 @@ PrimitiveResult make_success(std::size_t points)
   return result;
 }
 
-PrimitiveResult make_failure(PrimitiveFailReason reason, const std::string & message)
-{
+PrimitiveResult make_failure(PrimitiveFailReason reason,
+                             const std::string &message) {
   PrimitiveResult result;
   result.success = false;
   result.reason = reason;
@@ -82,26 +72,25 @@ PrimitiveResult make_failure(PrimitiveFailReason reason, const std::string & mes
   return result;
 }
 
-TEST(PrimitiveBlendedSequenceTest, UsesSequenceActionWhenAvailable)
-{
+TEST(PrimitiveBlendedSequenceTest, UsesSequenceActionWhenAvailable) {
   PrimitiveBlendedSequence primitive;
   FakeBlendedBackend backend;
 
   backend.sequence_available = true;
   backend.sequence_result = make_success(42);
-  backend.sequence_result.message = "blended_sequence planned with MoveGroupSequenceAction";
+  backend.sequence_result.message =
+      "blended_sequence planned with MoveGroupSequenceAction";
 
   const PrimitiveResult result = primitive.execute(
-    std::vector<SequenceStep>{make_step(PrimitiveType::HOME)},
-    backend);
+      std::vector<SequenceStep>{make_step(PrimitiveType::HOME)}, backend);
 
   EXPECT_TRUE(result.success);
   EXPECT_TRUE(backend.sequence_called);
   EXPECT_TRUE(backend.executed_steps.empty());
 }
 
-TEST(PrimitiveBlendedSequenceTest, SingleElementHomeSequenceSucceedsInDegradedMode)
-{
+TEST(PrimitiveBlendedSequenceTest,
+     SingleElementHomeSequenceSucceedsInDegradedMode) {
   PrimitiveBlendedSequence primitive;
   FakeBlendedBackend backend;
 
@@ -109,30 +98,26 @@ TEST(PrimitiveBlendedSequenceTest, SingleElementHomeSequenceSucceedsInDegradedMo
   backend.staged_results = {make_success(40)};
 
   const PrimitiveResult result = primitive.execute(
-    std::vector<SequenceStep>{make_step(PrimitiveType::HOME)},
-    backend);
+      std::vector<SequenceStep>{make_step(PrimitiveType::HOME)}, backend);
 
   EXPECT_TRUE(result.success);
   EXPECT_EQ(result.reason, PrimitiveFailReason::UNKNOWN);
-  EXPECT_EQ(result.message, "blended_sequence executed in degraded mode (staged)");
+  EXPECT_EQ(result.message,
+            "blended_sequence executed in degraded mode (staged)");
   EXPECT_EQ(result.trajectory_points, 40U);
   EXPECT_FALSE(backend.sequence_called);
   ASSERT_EQ(backend.executed_steps.size(), 1U);
   EXPECT_EQ(backend.executed_steps.front().type, PrimitiveType::HOME);
 }
 
-TEST(PrimitiveBlendedSequenceTest, MixedSequenceSucceedsInDegradedMode)
-{
+TEST(PrimitiveBlendedSequenceTest, MixedSequenceSucceedsInDegradedMode) {
   PrimitiveBlendedSequence primitive;
   FakeBlendedBackend backend;
 
   backend.sequence_available = false;
   backend.staged_results = {
-    make_success(20),
-    make_success(30),
-    make_success(25),
-    make_success(15),
-    make_success(10),
+      make_success(20), make_success(30), make_success(25),
+      make_success(15), make_success(10),
   };
 
   SequenceStep home = make_step(PrimitiveType::HOME);
@@ -150,24 +135,25 @@ TEST(PrimitiveBlendedSequenceTest, MixedSequenceSucceedsInDegradedMode)
   SequenceStep retract = make_step(PrimitiveType::RETRACT);
   retract.retract_distance = 0.12;
 
-  const PrimitiveResult result = primitive.execute({home, ptp, approach, lin, retract}, backend);
+  const PrimitiveResult result =
+      primitive.execute({home, ptp, approach, lin, retract}, backend);
 
   EXPECT_TRUE(result.success);
-  EXPECT_EQ(result.message, "blended_sequence executed in degraded mode (staged)");
+  EXPECT_EQ(result.message,
+            "blended_sequence executed in degraded mode (staged)");
   EXPECT_EQ(result.trajectory_points, 100U);
   EXPECT_EQ(backend.executed_steps.size(), 5U);
 }
 
-TEST(PrimitiveBlendedSequenceTest, MixedHomePtpLinSequenceSucceeds)
-{
+TEST(PrimitiveBlendedSequenceTest, MixedHomePtpLinSequenceSucceeds) {
   PrimitiveBlendedSequence primitive;
   FakeBlendedBackend backend;
 
   backend.sequence_available = false;
   backend.staged_results = {
-    make_success(30),
-    make_success(35),
-    make_success(25),
+      make_success(30),
+      make_success(35),
+      make_success(25),
   };
 
   SequenceStep home = make_step(PrimitiveType::HOME);
@@ -182,7 +168,8 @@ TEST(PrimitiveBlendedSequenceTest, MixedHomePtpLinSequenceSucceeds)
   const PrimitiveResult result = primitive.execute({home, ptp, lin}, backend);
 
   EXPECT_TRUE(result.success);
-  EXPECT_EQ(result.message, "blended_sequence executed in degraded mode (staged)");
+  EXPECT_EQ(result.message,
+            "blended_sequence executed in degraded mode (staged)");
   EXPECT_EQ(result.trajectory_points, 90U);
   ASSERT_EQ(backend.executed_steps.size(), 3U);
   EXPECT_EQ(backend.executed_steps[0].type, PrimitiveType::HOME);
@@ -190,62 +177,62 @@ TEST(PrimitiveBlendedSequenceTest, MixedHomePtpLinSequenceSucceeds)
   EXPECT_EQ(backend.executed_steps[2].type, PrimitiveType::LIN);
 }
 
-TEST(PrimitiveBlendedSequenceTest, StopsOnSubStepPlanningFailure)
-{
+TEST(PrimitiveBlendedSequenceTest, StopsOnSubStepPlanningFailure) {
   PrimitiveBlendedSequence primitive;
   FakeBlendedBackend backend;
 
   backend.staged_results = {
-    make_success(20),
-    make_success(20),
-    make_failure(PrimitiveFailReason::PLANNING_TIMEOUT, "planner timeout"),
-    make_success(20),
+      make_success(20),
+      make_success(20),
+      make_failure(PrimitiveFailReason::PLANNING_TIMEOUT, "planner timeout"),
+      make_success(20),
   };
 
   const PrimitiveResult result = primitive.execute(
-    {
-      make_step(PrimitiveType::HOME),
-      make_step(PrimitiveType::PTP),
-      make_step(PrimitiveType::LIN),
-      make_step(PrimitiveType::RETRACT),
-    },
-    backend);
+      {
+          make_step(PrimitiveType::HOME),
+          make_step(PrimitiveType::PTP),
+          make_step(PrimitiveType::LIN),
+          make_step(PrimitiveType::RETRACT),
+      },
+      backend);
 
   EXPECT_FALSE(result.success);
   EXPECT_EQ(result.reason, PrimitiveFailReason::SUB_PRIMITIVE_FAILED);
-  EXPECT_NE(result.message.find("step[2] failed: PLANNING_TIMEOUT"), std::string::npos);
+  EXPECT_NE(result.message.find("step[2] failed: PLANNING_TIMEOUT"),
+            std::string::npos);
   EXPECT_EQ(backend.executed_steps.size(), 3U);
 }
 
-TEST(PrimitiveBlendedSequenceTest, StopsOnSubStepQualityGateFailure)
-{
+TEST(PrimitiveBlendedSequenceTest, StopsOnSubStepQualityGateFailure) {
   PrimitiveBlendedSequence primitive;
   FakeBlendedBackend backend;
 
   backend.staged_results = {
-    make_success(20),
-    make_success(20),
-    make_success(20),
-    make_failure(PrimitiveFailReason::WRIST_FLIP_DETECTED, "wrist flip guard reject"),
+      make_success(20),
+      make_success(20),
+      make_success(20),
+      make_failure(PrimitiveFailReason::WRIST_FLIP_DETECTED,
+                   "wrist flip guard reject"),
   };
 
   const PrimitiveResult result = primitive.execute(
-    {
-      make_step(PrimitiveType::HOME),
-      make_step(PrimitiveType::PTP),
-      make_step(PrimitiveType::APPROACH),
-      make_step(PrimitiveType::LIN),
-    },
-    backend);
+      {
+          make_step(PrimitiveType::HOME),
+          make_step(PrimitiveType::PTP),
+          make_step(PrimitiveType::APPROACH),
+          make_step(PrimitiveType::LIN),
+      },
+      backend);
 
   EXPECT_FALSE(result.success);
   EXPECT_EQ(result.reason, PrimitiveFailReason::SUB_PRIMITIVE_FAILED);
-  EXPECT_NE(result.message.find("step[3] failed: WRIST_FLIP_DETECTED"), std::string::npos);
+  EXPECT_NE(result.message.find("step[3] failed: WRIST_FLIP_DETECTED"),
+            std::string::npos);
   EXPECT_EQ(backend.executed_steps.size(), 4U);
 }
 
-TEST(PrimitiveBlendedSequenceTest, RejectsNegativeBlendRadius)
-{
+TEST(PrimitiveBlendedSequenceTest, RejectsNegativeBlendRadius) {
   PrimitiveBlendedSequence primitive;
   FakeBlendedBackend backend;
 
@@ -261,63 +248,63 @@ TEST(PrimitiveBlendedSequenceTest, RejectsNegativeBlendRadius)
   EXPECT_TRUE(backend.executed_steps.empty());
 }
 
-TEST(PrimitiveBlendedSequenceTest, FailsWhenMergedStagedTrajectoryExceedsPointLimit)
-{
+TEST(PrimitiveBlendedSequenceTest,
+     FailsWhenMergedStagedTrajectoryExceedsPointLimit) {
   PrimitiveBlendedSequence primitive;
   FakeBlendedBackend backend;
 
   backend.staged_results = {
-    make_success(120),
-    make_success(90),
+      make_success(120),
+      make_success(90),
   };
 
   const PrimitiveResult result = primitive.execute(
-    {
-      make_step(PrimitiveType::HOME),
-      make_step(PrimitiveType::PTP),
-    },
-    backend);
+      {
+          make_step(PrimitiveType::HOME),
+          make_step(PrimitiveType::PTP),
+      },
+      backend);
 
   EXPECT_FALSE(result.success);
   EXPECT_EQ(result.reason, PrimitiveFailReason::TRAJECTORY_TOO_LONG);
   EXPECT_NE(result.message.find("> 200"), std::string::npos);
 }
 
-TEST(PrimitiveBlendedSequenceTest, CircDegenerateGeometryIsPreservedInParentMessage)
-{
+TEST(PrimitiveBlendedSequenceTest,
+     CircDegenerateGeometryIsPreservedInParentMessage) {
   PrimitiveBlendedSequence primitive;
   FakeBlendedBackend backend;
 
   backend.staged_results = {
-    make_failure(PrimitiveFailReason::DEGENERATE_GEOMETRY, "auxiliary point equals start"),
+      make_failure(PrimitiveFailReason::DEGENERATE_GEOMETRY,
+                   "auxiliary point equals start"),
   };
 
   const PrimitiveResult result = primitive.execute(
-    {
-      make_step(PrimitiveType::CIRC),
-    },
-    backend);
+      {
+          make_step(PrimitiveType::CIRC),
+      },
+      backend);
 
   EXPECT_FALSE(result.success);
   EXPECT_EQ(result.reason, PrimitiveFailReason::SUB_PRIMITIVE_FAILED);
   EXPECT_NE(result.message.find("DEGENERATE_GEOMETRY"), std::string::npos);
 }
 
-TEST(PrimitiveBlendedSequenceTest, UnknownPrimitiveTypeFailsBeforePlanning)
-{
+TEST(PrimitiveBlendedSequenceTest, UnknownPrimitiveTypeFailsBeforePlanning) {
   PrimitiveBlendedSequence primitive;
   FakeBlendedBackend backend;
 
   const PrimitiveResult result = primitive.execute(
-    {
-      make_step(PrimitiveType::UNKNOWN),
-    },
-    backend);
+      {
+          make_step(PrimitiveType::UNKNOWN),
+      },
+      backend);
 
   EXPECT_FALSE(result.success);
   EXPECT_EQ(result.reason, PrimitiveFailReason::UNKNOWN);
   EXPECT_TRUE(backend.executed_steps.empty());
   EXPECT_FALSE(backend.sequence_called);
 }
-}  // namespace
-}  // namespace primitives
+} // namespace
+} // namespace primitives

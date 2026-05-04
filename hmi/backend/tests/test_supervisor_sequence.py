@@ -29,9 +29,7 @@ class IsSequenceRequestTests(unittest.TestCase):
         )
 
     def test_multiple_segments_is_sequence(self) -> None:
-        self.assertTrue(
-            SupervisorSequenceMixin._is_sequence_request(None, ["a", "b"])
-        )
+        self.assertTrue(SupervisorSequenceMixin._is_sequence_request(None, ["a", "b"]))
 
     def test_single_segment_not_sequence(self) -> None:
         self.assertFalse(
@@ -93,11 +91,11 @@ class SplitSequenceTextTests(unittest.TestCase):
             ["move linearly to x 0.3, y 0.0, z 0.3"],
         )
 
-    def test_coordinate_commas_with_equals_do_not_create_sequence_segments(self) -> None:
+    def test_coordinate_commas_with_equals_do_not_create_sequence_segments(
+        self,
+    ) -> None:
         self.assertEqual(
-            SupervisorSequenceMixin._split_sequence_text(
-                "move to x=0.3, y=0.0, z=0.4"
-            ),
+            SupervisorSequenceMixin._split_sequence_text("move to x=0.3, y=0.0, z=0.4"),
             ["move to x=0.3, y=0.0, z=0.4"],
         )
 

@@ -31,7 +31,7 @@ class CommandValidator:
     def validate(self, command_json: str) -> tuple[bool, str]:
         if not command_json:
             return False, "Empty JSON"
-            
+
         try:
             cmd = json.loads(command_json)
         except json.JSONDecodeError:
@@ -54,7 +54,10 @@ class CommandValidator:
                 return False, "Invalid velocity_scale format"
 
             if velocity_scale > self.max_velocity:
-                return False, f"velocity_scale {velocity_scale} exceeds max allowed {self.max_velocity}"
+                return (
+                    False,
+                    f"velocity_scale {velocity_scale} exceeds max allowed {self.max_velocity}",
+                )
 
             if velocity_scale <= 0.0:
                 return False, "velocity_scale must be positive"

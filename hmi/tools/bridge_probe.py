@@ -134,7 +134,9 @@ def run_snapshot(args: argparse.Namespace) -> int:
     _assert_schema(payload, "snapshot")
     _apply_expectations(payload, args.expect)
     summary = _snapshot_summary(payload)
-    _apply_expectations({"summary": summary}, [f"summary.{item}" for item in args.expect_summary])
+    _apply_expectations(
+        {"summary": summary}, [f"summary.{item}" for item in args.expect_summary]
+    )
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
@@ -191,19 +193,34 @@ async def run_stream_async(args: argparse.Namespace) -> int:
                     "telemetryState": event["telemetryState"],
                 }
                 if args.print_events:
-                    print(json.dumps({"type": "heartbeat", **summary["lastHeartbeat"]}, sort_keys=True))
+                    print(
+                        json.dumps(
+                            {"type": "heartbeat", **summary["lastHeartbeat"]},
+                            sort_keys=True,
+                        )
+                    )
             else:
-                raise RuntimeError(f"Unexpected stream event type: {event.get('type')!r}")
+                raise RuntimeError(
+                    f"Unexpected stream event type: {event.get('type')!r}"
+                )
 
     if args.expect_last_snapshot:
         if not isinstance(summary["lastSnapshot"], dict):
-            raise AssertionError("Expected at least one snapshot event, but none arrived.")
-        _apply_expectations({"snapshot": summary["lastSnapshot"]}, [f"snapshot.{item}" for item in args.expect_last_snapshot])
+            raise AssertionError(
+                "Expected at least one snapshot event, but none arrived."
+            )
+        _apply_expectations(
+            {"snapshot": summary["lastSnapshot"]},
+            [f"snapshot.{item}" for item in args.expect_last_snapshot],
+        )
     if summary["snapshotCount"] < args.min_snapshots:
         raise AssertionError(
             f"Expected at least {args.min_snapshots} snapshot events, got {summary['snapshotCount']}."
         )
-    if args.max_heartbeats is not None and summary["heartbeatCount"] > args.max_heartbeats:
+    if (
+        args.max_heartbeats is not None
+        and summary["heartbeatCount"] > args.max_heartbeats
+    ):
         raise AssertionError(
             f"Expected at most {args.max_heartbeats} heartbeat events, got {summary['heartbeatCount']}."
         )
@@ -216,7 +233,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Read-only telemetry bridge probe.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    snapshot_parser = subparsers.add_parser("snapshot", help="Fetch and summarize GET /api/hmi/snapshot.")
+    snapshot_parser = subparsers.add_parser(
+        "snapshot", help="Fetch and summarize GET /api/hmi/snapshot."
+    )
     snapshot_parser.add_argument("--base-url", default="http://127.0.0.1:8000")
     snapshot_parser.add_argument("--session-id", default="probe-session")
     snapshot_parser.add_argument("--operator-id", default="probe-operator")

@@ -2,37 +2,33 @@
 
 #include <sstream>
 
-namespace motion_core
-{
-const char * execution_phase_name(const ExecutionPhase phase)
-{
-  switch (phase)
-  {
-    case ExecutionPhase::kIdle:
-      return "idle";
-    case ExecutionPhase::kAccepted:
-      return "accepted";
-    case ExecutionPhase::kPlanning:
-      return "planning";
-    case ExecutionPhase::kDispatchWait:
-      return "dispatch_wait";
-    case ExecutionPhase::kExecuting:
-      return "executing";
-    default:
-      return "unknown";
+namespace motion_core {
+const char *execution_phase_name(const ExecutionPhase phase) {
+  switch (phase) {
+  case ExecutionPhase::kIdle:
+    return "idle";
+  case ExecutionPhase::kAccepted:
+    return "accepted";
+  case ExecutionPhase::kPlanning:
+    return "planning";
+  case ExecutionPhase::kDispatchWait:
+    return "dispatch_wait";
+  case ExecutionPhase::kExecuting:
+    return "executing";
+  default:
+    return "unknown";
   }
 }
 
-ExecutionStartResult ExecutionOrchestrator::begin_goal(const std::string & primitive)
-{
+ExecutionStartResult
+ExecutionOrchestrator::begin_goal(const std::string &primitive) {
   std::lock_guard<std::mutex> lock(mutex_);
 
   ExecutionStartResult result;
-  if (active_.active)
-  {
+  if (active_.active) {
     std::ostringstream stream;
-    stream << "execute_motion already owns an active goal (sequence=" << active_.sequence
-           << ", primitive=" << active_.primitive
+    stream << "execute_motion already owns an active goal (sequence="
+           << active_.sequence << ", primitive=" << active_.primitive
            << ", phase=" << execution_phase_name(active_.phase) << ")";
     result.reason = stream.str();
     return result;
@@ -51,14 +47,11 @@ ExecutionStartResult ExecutionOrchestrator::begin_goal(const std::string & primi
   return result;
 }
 
-void ExecutionOrchestrator::update_phase(
-  const std::uint64_t sequence,
-  const ExecutionPhase phase,
-  const std::string & detail)
-{
+void ExecutionOrchestrator::update_phase(const std::uint64_t sequence,
+                                         const ExecutionPhase phase,
+                                         const std::string &detail) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!active_.active || active_.sequence != sequence)
-  {
+  if (!active_.active || active_.sequence != sequence) {
     return;
   }
 
@@ -66,11 +59,9 @@ void ExecutionOrchestrator::update_phase(
   active_.detail = detail;
 }
 
-bool ExecutionOrchestrator::request_stop(std::string & reason)
-{
+bool ExecutionOrchestrator::request_stop(std::string &reason) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!active_.active)
-  {
+  if (!active_.active) {
     reason = "STOP requested but no active execute_motion goal owns execution";
     return false;
   }
@@ -84,23 +75,21 @@ bool ExecutionOrchestrator::request_stop(std::string & reason)
   return true;
 }
 
-bool ExecutionOrchestrator::stop_requested(const std::uint64_t sequence) const
-{
+bool ExecutionOrchestrator::stop_requested(const std::uint64_t sequence) const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return active_.active && active_.sequence == sequence && active_.stop_requested;
+  return active_.active && active_.sequence == sequence &&
+         active_.stop_requested;
 }
 
-ExecutionOrchestratorSnapshot ExecutionOrchestrator::snapshot() const
-{
+ExecutionOrchestratorSnapshot ExecutionOrchestrator::snapshot() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return active_;
 }
 
-void ExecutionOrchestrator::finish_goal(const std::uint64_t sequence, const std::string & detail)
-{
+void ExecutionOrchestrator::finish_goal(const std::uint64_t sequence,
+                                        const std::string &detail) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!active_.active || active_.sequence != sequence)
-  {
+  if (!active_.active || active_.sequence != sequence) {
     return;
   }
 
@@ -111,4 +100,4 @@ void ExecutionOrchestrator::finish_goal(const std::uint64_t sequence, const std:
   active_.stop_requested = false;
   active_.detail = detail;
 }
-}  // namespace motion_core
+} // namespace motion_core

@@ -3,6 +3,7 @@ import json
 import time
 from typing import Any
 from ..domain.models import RuntimeMode, SystemRuntimeState, TelemetryFreshnessState
+
 try:
     from geometry_msgs.msg import Pose
     from interfaces.action import ExecuteMotion
@@ -18,6 +19,8 @@ DEFAULT_MOTION_ACCELERATION_SCALE = 0.06
 DEFAULT_VALIDATE_TIMEOUT_SEC = 5.0
 DEFAULT_ACTION_WAIT_TIMEOUT_SEC = 5.0
 DEFAULT_EXECUTION_TIMEOUT_SEC = 120.0
+
+
 class CommandDispatchMixin:
     """ValidateCommand + ExecuteMotion dispatch methods for WorkspaceRosAdapter."""
 
@@ -43,9 +46,7 @@ class CommandDispatchMixin:
         )
         runtime = self.read_runtime_snapshot()
         if requested_mode is not None and requested_mode != runtime.mode.value:
-            reason = (
-                f"requested mode {requested_mode} does not match runtime mode {runtime.mode.value}."
-            )
+            reason = f"requested mode {requested_mode} does not match runtime mode {runtime.mode.value}."
             self._trace(
                 "confirm.blocked",
                 command_id=command_id,
@@ -55,7 +56,7 @@ class CommandDispatchMixin:
             )
             return self._execution_response(
                 accepted=False,
-                status='blocked',
+                status="blocked",
                 summary=reason,
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
@@ -79,7 +80,7 @@ class CommandDispatchMixin:
             )
             return self._execution_response(
                 accepted=False,
-                status='blocked',
+                status="blocked",
                 summary=reason,
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
@@ -99,8 +100,8 @@ class CommandDispatchMixin:
             )
             return self._execution_response(
                 accepted=False,
-                status='blocked',
-                summary='Parsed intent is unavailable at the execution boundary.',
+                status="blocked",
+                summary="Parsed intent is unavailable at the execution boundary.",
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
                 operator_id=operator_id,
@@ -122,7 +123,7 @@ class CommandDispatchMixin:
             )
             return self._execution_response(
                 accepted=False,
-                status='blocked',
+                status="blocked",
                 summary=str(exc),
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
@@ -147,7 +148,7 @@ class CommandDispatchMixin:
             )
             return self._execution_response(
                 accepted=False,
-                status='blocked',
+                status="blocked",
                 summary=validation_result["summary"],
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
@@ -180,11 +181,16 @@ class CommandDispatchMixin:
                 correlation_id=correlation_id,
                 reason="no active ExecuteMotion goal for command",
             )
-            return True, f"Command {command_id} cancelled before any ROS execution request."
+            return (
+                True,
+                f"Command {command_id} cancelled before any ROS execution request.",
+            )
 
         try:
             cancel_future = goal_handle.cancel_goal_async()
-            wrapped = self._wait_for_future(cancel_future, DEFAULT_ACTION_WAIT_TIMEOUT_SEC)
+            wrapped = self._wait_for_future(
+                cancel_future, DEFAULT_ACTION_WAIT_TIMEOUT_SEC
+            )
         except Exception as exc:
             self._trace(
                 "abort.failed",
@@ -194,7 +200,7 @@ class CommandDispatchMixin:
             )
             return False, f"Failed to cancel ExecuteMotion goal for {command_id}: {exc}"
 
-        goals_canceling = getattr(wrapped, 'goals_canceling', [])
+        goals_canceling = getattr(wrapped, "goals_canceling", [])
         if goals_canceling:
             self._trace(
                 "abort.accepted",
@@ -239,16 +245,26 @@ class CommandDispatchMixin:
             "dispatchedToRos": dispatched_to_ros,
         }
 
-    def evaluate_execution_preflight(self, *, target_mode: str | None = None) -> dict[str, Any]:
+    def evaluate_execution_preflight(
+        self, *, target_mode: str | None = None
+    ) -> dict[str, Any]:
         runtime = self.read_runtime_snapshot()
-        requested_mode_text = str(target_mode or runtime.mode.value).strip().lower() or runtime.mode.value
-        requested_mode = RuntimeMode(requested_mode_text) if requested_mode_text in RuntimeMode._value2member_map_ else RuntimeMode.UNKNOWN
+        requested_mode_text = (
+            str(target_mode or runtime.mode.value).strip().lower() or runtime.mode.value
+        )
+        requested_mode = (
+            RuntimeMode(requested_mode_text)
+            if requested_mode_text in RuntimeMode._value2member_map_
+            else RuntimeMode.UNKNOWN
+        )
         source_statuses = self.read_source_statuses()
         source_map = {source.name: source for source in source_statuses}
         reasons: list[str] = []
 
         if requested_mode not in {RuntimeMode.SIM, RuntimeMode.HARDWARE}:
-            reasons.append(f"runtime mode {requested_mode.value} is not command-capable.")
+            reasons.append(
+                f"runtime mode {requested_mode.value} is not command-capable."
+            )
 
         if runtime.mode != requested_mode:
             reasons.append(
@@ -256,7 +272,9 @@ class CommandDispatchMixin:
             )
 
         if runtime.system_state != SystemRuntimeState.NORMAL:
-            reasons.append(f"runtime state {runtime.system_state.value} blocks execution.")
+            reasons.append(
+                f"runtime state {runtime.system_state.value} blocks execution."
+            )
 
         required_sources: list[str]
         if requested_mode == RuntimeMode.SIM:
@@ -297,9 +315,13 @@ class CommandDispatchMixin:
             primary_joint_source = source_map.get("joint_states_primary")
             if primary_joint_source is not None:
                 if not primary_joint_source.preferred:
-                    reasons.append("joint_states_primary is not marked preferred in hardware mode.")
+                    reasons.append(
+                        "joint_states_primary is not marked preferred in hardware mode."
+                    )
                 if not primary_joint_source.active:
-                    reasons.append("joint_states_primary is not the active joint source in hardware mode.")
+                    reasons.append(
+                        "joint_states_primary is not the active joint source in hardware mode."
+                    )
 
             robot_status = source_map.get("robot_status")
             if robot_status is not None and not robot_status.active:
@@ -325,7 +347,9 @@ class CommandDispatchMixin:
 
     def _build_command_payload(self, parsed_intent: dict[str, Any]) -> dict[str, Any]:
         normalized_command = parsed_intent.get("normalizedCommand")
-        if isinstance(normalized_command, dict) and normalized_command.get("primitive_type"):
+        if isinstance(normalized_command, dict) and normalized_command.get(
+            "primitive_type"
+        ):
             command_payload = dict(normalized_command)
             return command_payload
 
@@ -402,14 +426,18 @@ class CommandDispatchMixin:
                 "accepted": False,
                 "summary": "ValidateCommand client is not initialized.",
             }
-        if not self._validate_client.wait_for_service(timeout_sec=DEFAULT_VALIDATE_TIMEOUT_SEC):
+        if not self._validate_client.wait_for_service(
+            timeout_sec=DEFAULT_VALIDATE_TIMEOUT_SEC
+        ):
             return {
                 "accepted": False,
                 "summary": f"ValidateCommand service unavailable at {self._validate_command_service}.",
             }
 
         request = ValidateCommand.Request()
-        request.command_json = json.dumps(command_payload, ensure_ascii=True, separators=(",", ":"))
+        request.command_json = json.dumps(
+            command_payload, ensure_ascii=True, separators=(",", ":")
+        )
         request.primitive_type = str(command_payload["primitive_type"])
         request.velocity_scale = float(command_payload.get("velocity_scale", 0.0))
         target_pose_payload = self._cartesian_path_target_pose(command_payload)
@@ -488,8 +516,8 @@ class CommandDispatchMixin:
         if self._node is None or ExecuteMotion is None or ActionClient is None:
             return self._execution_response(
                 accepted=False,
-                status='blocked',
-                summary='ROS node is unavailable; ExecuteMotion cannot be called.',
+                status="blocked",
+                summary="ROS node is unavailable; ExecuteMotion cannot be called.",
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
                 operator_id=operator_id,
@@ -501,8 +529,8 @@ class CommandDispatchMixin:
         if self._execute_client is None:
             return self._execution_response(
                 accepted=False,
-                status='blocked',
-                summary='ExecuteMotion client is not initialized.',
+                status="blocked",
+                summary="ExecuteMotion client is not initialized.",
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
                 operator_id=operator_id,
@@ -511,11 +539,13 @@ class CommandDispatchMixin:
                 correlation_id=correlation_id,
                 dispatched_to_ros=False,
             )
-        if not self._execute_client.wait_for_server(timeout_sec=DEFAULT_ACTION_WAIT_TIMEOUT_SEC):
+        if not self._execute_client.wait_for_server(
+            timeout_sec=DEFAULT_ACTION_WAIT_TIMEOUT_SEC
+        ):
             return self._execution_response(
                 accepted=False,
-                status='blocked',
-                summary=f'ExecuteMotion action server unavailable at {self._execute_motion_action}.',
+                status="blocked",
+                summary=f"ExecuteMotion action server unavailable at {self._execute_motion_action}.",
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
                 operator_id=operator_id,
@@ -540,8 +570,8 @@ class CommandDispatchMixin:
             )
             return self._execution_response(
                 accepted=False,
-                status='failed',
-                summary=f'ExecuteMotion send failed: {exc}',
+                status="failed",
+                summary=f"ExecuteMotion send failed: {exc}",
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
                 operator_id=operator_id,
@@ -560,8 +590,8 @@ class CommandDispatchMixin:
             )
             return self._execution_response(
                 accepted=False,
-                status='blocked',
-                summary='ExecuteMotion action server rejected the goal.',
+                status="blocked",
+                summary="ExecuteMotion action server rejected the goal.",
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
                 operator_id=operator_id,
@@ -594,8 +624,8 @@ class CommandDispatchMixin:
             )
             return self._execution_response(
                 accepted=False,
-                status='failed',
-                summary=f'ExecuteMotion result wait failed: {exc}',
+                status="failed",
+                summary=f"ExecuteMotion result wait failed: {exc}",
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
                 operator_id=operator_id,
@@ -609,7 +639,7 @@ class CommandDispatchMixin:
                 self._goal_handles.pop(command_id, None)
                 self._goal_correlation_ids.pop(command_id, None)
 
-        result = getattr(wrapped_result, 'result', None)
+        result = getattr(wrapped_result, "result", None)
         if result is None:
             self._trace(
                 "execute.result_failed",
@@ -619,8 +649,8 @@ class CommandDispatchMixin:
             )
             return self._execution_response(
                 accepted=False,
-                status='failed',
-                summary='ExecuteMotion returned no result payload.',
+                status="failed",
+                summary="ExecuteMotion returned no result payload.",
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
                 operator_id=operator_id,
@@ -630,18 +660,18 @@ class CommandDispatchMixin:
                 dispatched_to_ros=True,
             )
 
-        if getattr(result, 'success', False):
+        if getattr(result, "success", False):
             self._trace(
                 "execute.result",
                 command_id=command_id,
                 correlation_id=correlation_id,
                 status="succeeded",
-                summary=str(result.message or 'ExecuteMotion completed successfully.'),
+                summary=str(result.message or "ExecuteMotion completed successfully."),
             )
             return self._execution_response(
                 accepted=True,
-                status='succeeded',
-                summary=str(result.message or 'ExecuteMotion completed successfully.'),
+                status="succeeded",
+                summary=str(result.message or "ExecuteMotion completed successfully."),
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
                 operator_id=operator_id,
@@ -651,8 +681,8 @@ class CommandDispatchMixin:
                 dispatched_to_ros=True,
             )
 
-        summary = str(result.message or 'ExecuteMotion failed.')
-        if 'cancel' in summary.lower():
+        summary = str(result.message or "ExecuteMotion failed.")
+        if "cancel" in summary.lower():
             self._trace(
                 "execute.result",
                 command_id=command_id,
@@ -662,7 +692,7 @@ class CommandDispatchMixin:
             )
             return self._execution_response(
                 accepted=False,
-                status='cancelled',
+                status="cancelled",
                 summary=summary,
                 command_id=command_id,
                 plan_fingerprint=plan_fingerprint,
@@ -682,7 +712,7 @@ class CommandDispatchMixin:
         )
         return self._execution_response(
             accepted=False,
-            status='failed',
+            status="failed",
             summary=summary,
             command_id=command_id,
             plan_fingerprint=plan_fingerprint,
@@ -708,7 +738,9 @@ class CommandDispatchMixin:
         goal.joint_angle = float(command_payload.get("joint_angle", 0.0))
         goal.io_address = int(command_payload.get("io_address", 0))
         goal.io_value = int(command_payload.get("io_value", 0))
-        goal.joint_target = [float(value) for value in command_payload.get("joint_target", [])]
+        goal.joint_target = [
+            float(value) for value in command_payload.get("joint_target", [])
+        ]
 
         target_pose_payload = self._cartesian_path_target_pose(command_payload)
         if target_pose_payload is not None and Pose is not None:
@@ -721,7 +753,9 @@ class CommandDispatchMixin:
 
         return goal
 
-    def _cartesian_path_target_pose(self, command_payload: dict[str, Any]) -> dict[str, Any] | None:
+    def _cartesian_path_target_pose(
+        self, command_payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
         target_pose = command_payload.get("target_pose")
         if isinstance(target_pose, dict):
             return target_pose

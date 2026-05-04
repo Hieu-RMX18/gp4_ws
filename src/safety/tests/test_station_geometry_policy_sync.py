@@ -82,7 +82,7 @@ def _load_stl_vertices(path: Path) -> list[tuple[float, float, float]]:
         for _ in range(triangle_count):
             offset += 12  # normal
             for _ in range(3):
-                vertices.append(struct.unpack("<fff", data[offset:offset + 12]))
+                vertices.append(struct.unpack("<fff", data[offset : offset + 12]))
                 offset += 12
             offset += 2  # attribute byte count
         return vertices
@@ -97,12 +97,16 @@ def _load_stl_vertices(path: Path) -> list[tuple[float, float, float]]:
     return vertices
 
 
-def _station_mesh_bounds_in_base(xacro_root: ET.Element, vertices: list[tuple[float, float, float]]):
+def _station_mesh_bounds_in_base(
+    xacro_root: ET.Element, vertices: list[tuple[float, float, float]]
+):
     station_link = xacro_root.find(".//link[@name='station_link']")
     assert station_link is not None
     visual_origin = station_link.find("./visual/origin")
     visual_mesh = station_link.find("./visual/geometry/mesh")
-    station_to_robot_origin = xacro_root.find(".//joint[@name='station_to_robot']/origin")
+    station_to_robot_origin = xacro_root.find(
+        ".//joint[@name='station_to_robot']/origin"
+    )
     assert visual_origin is not None
     assert visual_mesh is not None
     assert station_to_robot_origin is not None

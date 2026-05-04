@@ -59,7 +59,6 @@ def build_default_services() -> tuple[TelemetryBridgeService, SupervisorService]
     return telemetry_service, supervisor_service
 
 
-
 def create_app(
     telemetry_service: TelemetryBridgeService | None = None,
     supervisor_service: SupervisorService | None = None,
@@ -94,41 +93,41 @@ def create_app(
             jog_svc.stop()
 
     app = FastAPI(
-        title='GP4 HMI Telemetry + Supervisor Bridge',
-        version='0.2.0',
+        title="GP4 HMI Telemetry + Supervisor Bridge",
+        version="0.2.0",
         lifespan=lifespan,
     )
 
     @app.exception_handler(SupervisorServiceError)
     async def supervisor_error_handler(_request, exc: SupervisorServiceError):
-        return JSONResponse(status_code=exc.status_code, content={'detail': str(exc)})
+        return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
 
-    @app.get('/api/hmi/snapshot', response_model=HmiStateSnapshotModel)
+    @app.get("/api/hmi/snapshot", response_model=HmiStateSnapshotModel)
     def get_snapshot(
         session_id: str = Query(...),
         operator_id: str = Query(...),
     ) -> dict:
         return app.state.telemetry_service.get_snapshot(session_id, operator_id)
 
-    @app.get('/api/hmi/runtime-state', response_model=RuntimeStateResponseModel)
+    @app.get("/api/hmi/runtime-state", response_model=RuntimeStateResponseModel)
     def get_runtime_state(
         session_id: str = Query(...),
         operator_id: str = Query(...),
     ) -> dict:
         return app.state.telemetry_service.get_runtime_state(session_id, operator_id)
 
-    @app.get('/api/hmi/connection-state', response_model=ConnectionStateResponseModel)
+    @app.get("/api/hmi/connection-state", response_model=ConnectionStateResponseModel)
     def get_connection_state() -> dict:
         return app.state.telemetry_service.get_connection_state()
 
-    @app.get('/api/hmi/lease-state', response_model=LeaseStateResponseModel)
+    @app.get("/api/hmi/lease-state", response_model=LeaseStateResponseModel)
     def get_lease_state(
         session_id: str = Query(...),
         operator_id: str = Query(...),
     ) -> dict:
         return app.state.telemetry_service.get_lease_state(session_id, operator_id)
 
-    @app.post('/api/hmi/lease/acquire', response_model=LeaseMutationResponseModel)
+    @app.post("/api/hmi/lease/acquire", response_model=LeaseMutationResponseModel)
     def acquire_lease(request: LeaseAcquireRequestModel) -> dict:
         return app.state.supervisor_service.acquire_lease(
             session_id=request.sessionId,
@@ -137,7 +136,7 @@ def create_app(
             takeover_reason=request.takeoverReason,
         )
 
-    @app.post('/api/hmi/lease/renew', response_model=LeaseMutationResponseModel)
+    @app.post("/api/hmi/lease/renew", response_model=LeaseMutationResponseModel)
     def renew_lease(request: LeaseRenewRequestModel) -> dict:
         return app.state.supervisor_service.renew_lease(
             session_id=request.sessionId,
@@ -145,7 +144,7 @@ def create_app(
             lease_token=request.leaseToken,
         )
 
-    @app.post('/api/hmi/lease/release', response_model=LeaseMutationResponseModel)
+    @app.post("/api/hmi/lease/release", response_model=LeaseMutationResponseModel)
     def release_lease(request: LeaseReleaseRequestModel) -> dict:
         return app.state.supervisor_service.release_lease(
             session_id=request.sessionId,
@@ -153,7 +152,7 @@ def create_app(
             lease_token=request.leaseToken,
         )
 
-    @app.post('/api/hmi/commands/intent', response_model=CommandMutationResponseModel)
+    @app.post("/api/hmi/commands/intent", response_model=CommandMutationResponseModel)
     def submit_intent(request: CommandIntentRequestModel) -> dict:
         return app.state.supervisor_service.submit_intent(
             session_id=request.sessionId,
@@ -164,13 +163,13 @@ def create_app(
             mode=request.mode,
         )
 
-    @app.get('/api/hmi/commands', response_model=CommandListResponseModel)
+    @app.get("/api/hmi/commands", response_model=CommandListResponseModel)
     def list_commands(
         session_id: str | None = Query(None),
         operator_id: str | None = Query(None),
         final_state: str | None = Query(None),
-        from_timestamp: str | None = Query(None, alias='from'),
-        to_timestamp: str | None = Query(None, alias='to'),
+        from_timestamp: str | None = Query(None, alias="from"),
+        to_timestamp: str | None = Query(None, alias="to"),
         limit: int = Query(25, ge=1, le=200),
     ) -> dict:
         return app.state.supervisor_service.list_commands(
@@ -182,11 +181,14 @@ def create_app(
             limit=limit,
         )
 
-    @app.get('/api/hmi/commands/{command_id}', response_model=CommandViewModel)
+    @app.get("/api/hmi/commands/{command_id}", response_model=CommandViewModel)
     def get_command(command_id: str) -> dict:
         return app.state.supervisor_service.get_command(command_id)
 
-    @app.post('/api/hmi/commands/{command_id}/confirm', response_model=CommandMutationResponseModel)
+    @app.post(
+        "/api/hmi/commands/{command_id}/confirm",
+        response_model=CommandMutationResponseModel,
+    )
     def confirm_command(command_id: str, request: CommandConfirmRequestModel) -> dict:
         return app.state.supervisor_service.confirm_command(
             session_id=request.sessionId,
@@ -196,7 +198,10 @@ def create_app(
             plan_fingerprint=request.planFingerprint,
         )
 
-    @app.post('/api/hmi/commands/{command_id}/cancel', response_model=CommandMutationResponseModel)
+    @app.post(
+        "/api/hmi/commands/{command_id}/cancel",
+        response_model=CommandMutationResponseModel,
+    )
     def cancel_command(command_id: str, request: CommandCancelRequestModel) -> dict:
         return app.state.supervisor_service.cancel_command(
             session_id=request.sessionId,
@@ -206,11 +211,14 @@ def create_app(
             reason=request.reason,
         )
 
-    @app.get('/api/hmi/sequences/{sequence_id}', response_model=SequenceViewModel)
+    @app.get("/api/hmi/sequences/{sequence_id}", response_model=SequenceViewModel)
     def get_sequence(sequence_id: str) -> dict:
         return app.state.supervisor_service.get_sequence(sequence_id)
 
-    @app.post('/api/hmi/sequences/{sequence_id}/confirm', response_model=CommandMutationResponseModel)
+    @app.post(
+        "/api/hmi/sequences/{sequence_id}/confirm",
+        response_model=CommandMutationResponseModel,
+    )
     def confirm_sequence(sequence_id: str, request: CommandConfirmRequestModel) -> dict:
         return app.state.supervisor_service.confirm_sequence(
             session_id=request.sessionId,
@@ -220,7 +228,10 @@ def create_app(
             plan_fingerprint=request.planFingerprint,
         )
 
-    @app.post('/api/hmi/sequences/{sequence_id}/cancel', response_model=CommandMutationResponseModel)
+    @app.post(
+        "/api/hmi/sequences/{sequence_id}/cancel",
+        response_model=CommandMutationResponseModel,
+    )
     def cancel_sequence(sequence_id: str, request: CommandCancelRequestModel) -> dict:
         return app.state.supervisor_service.cancel_sequence(
             session_id=request.sessionId,
@@ -230,13 +241,13 @@ def create_app(
             reason=request.reason,
         )
 
-    @app.get('/api/hmi/replay', response_model=CommandListResponseModel)
+    @app.get("/api/hmi/replay", response_model=CommandListResponseModel)
     def list_replay(
         session_id: str | None = Query(None),
         operator_id: str | None = Query(None),
         final_state: str | None = Query(None),
-        from_timestamp: str | None = Query(None, alias='from'),
-        to_timestamp: str | None = Query(None, alias='to'),
+        from_timestamp: str | None = Query(None, alias="from"),
+        to_timestamp: str | None = Query(None, alias="to"),
         limit: int = Query(25, ge=1, le=200),
     ) -> dict:
         return app.state.supervisor_service.list_replay(
@@ -248,7 +259,7 @@ def create_app(
             limit=limit,
         )
 
-    @app.get('/api/hmi/replay/{command_id}', response_model=ReplayDetailModel)
+    @app.get("/api/hmi/replay/{command_id}", response_model=ReplayDetailModel)
     def replay_detail(command_id: str) -> dict:
         return app.state.supervisor_service.replay_detail(command_id)
 
@@ -256,33 +267,33 @@ def create_app(
 
     # ── Servo Control Endpoints ────────────────────────────────────────────
 
-    @app.post('/api/hmi/servo/start')
+    @app.post("/api/hmi/servo/start")
     def servo_start() -> dict:
         adapter = app.state.ros_adapter
         if adapter is None:
-            return {'accepted': False, 'message': 'ROS adapter not available'}
+            return {"accepted": False, "message": "ROS adapter not available"}
         return adapter.start_traj_mode()
 
-    @app.post('/api/hmi/servo/stop')
+    @app.post("/api/hmi/servo/stop")
     def servo_stop() -> dict:
         adapter = app.state.ros_adapter
         if adapter is None:
-            return {'accepted': False, 'message': 'ROS adapter not available'}
+            return {"accepted": False, "message": "ROS adapter not available"}
         return adapter.stop_motion()
 
-    @app.post('/api/hmi/jog/activate')
+    @app.post("/api/hmi/jog/activate")
     def jog_activate() -> dict:
         svc = app.state.jog_pendant_service
         accepted, message = svc.activate_bridge()
-        return {'accepted': accepted, 'message': message}
+        return {"accepted": accepted, "message": message}
 
-    @app.post('/api/hmi/jog/deactivate')
+    @app.post("/api/hmi/jog/deactivate")
     def jog_deactivate() -> dict:
         svc = app.state.jog_pendant_service
         accepted, message = svc.deactivate_bridge()
-        return {'accepted': accepted, 'message': message}
+        return {"accepted": accepted, "message": message}
 
-    @app.post('/api/hmi/jog/command')
+    @app.post("/api/hmi/jog/command")
     def jog_command(request: JogCommandRequestModel) -> dict:
         svc = app.state.jog_pendant_service
         ok, reason = svc.send_jog_command(
@@ -292,9 +303,9 @@ def create_app(
             velocity_scale=request.velocityScale,
             step_degrees=request.stepDegrees,
         )
-        return {'accepted': ok, 'message': reason}
+        return {"accepted": ok, "message": reason}
 
-    @app.websocket('/api/hmi/stream')
+    @app.websocket("/api/hmi/stream")
     async def stream_state(
         websocket: WebSocket,
         session_id: str = Query(...),
@@ -303,36 +314,41 @@ def create_app(
         await websocket.accept()
         service = app.state.telemetry_service
         jog_svc = app.state.jog_pendant_service
-        telemetry_queue = service.subscribe(session_id=session_id, operator_id=operator_id)
+        telemetry_queue = service.subscribe(
+            session_id=session_id, operator_id=operator_id
+        )
         jog_queue = jog_svc.subscribe()
 
         try:
             await websocket.send_json(
                 HMI_STREAM_EVENT_ADAPTER.validate_python(
                     {
-                        'type': 'snapshot',
-                        'snapshot': service.get_snapshot(session_id, operator_id),
+                        "type": "snapshot",
+                        "snapshot": service.get_snapshot(session_id, operator_id),
                     }
-                ).model_dump(mode='json')
+                ).model_dump(mode="json")
             )
             # Send initial jog status
             jog_status = jog_svc.get_status()
-            await websocket.send_json({
-                'type': 'jog_bridge_status',
-                'jogBridgeStatus': {
-                    'state': jog_status.state.value,
-                    'pointsQueued': jog_status.points_queued,
-                    'effectiveHz': jog_status.effective_hz,
-                    'robotReady': jog_status.robot_ready,
-                    'servoActive': jog_status.servo_active,
-                    'bridgeActive': jog_status.bridge_active,
-                    'lastError': jog_status.last_error,
-                    'rejectionReason': jog_status.rejection_reason,
-                },
-            })
+            await websocket.send_json(
+                {
+                    "type": "jog_bridge_status",
+                    "jogBridgeStatus": {
+                        "state": jog_status.state.value,
+                        "pointsQueued": jog_status.points_queued,
+                        "effectiveHz": jog_status.effective_hz,
+                        "robotReady": jog_status.robot_ready,
+                        "servoActive": jog_status.servo_active,
+                        "bridgeActive": jog_status.bridge_active,
+                        "lastError": jog_status.last_error,
+                        "rejectionReason": jog_status.rejection_reason,
+                    },
+                }
+            )
 
             while True:
                 import asyncio as _asyncio
+
                 done, pending = await _asyncio.wait(
                     [
                         _asyncio.create_task(_async_queue_get(telemetry_queue)),
@@ -348,14 +364,18 @@ def create_app(
                 if not done:
                     payload = service.get_heartbeat_event()
                     await websocket.send_json(
-                        HMI_STREAM_EVENT_ADAPTER.validate_python(payload).model_dump(mode='json')
+                        HMI_STREAM_EVENT_ADAPTER.validate_python(payload).model_dump(
+                            mode="json"
+                        )
                     )
                 else:
                     for task in done:
                         payload = task.result()
                         if payload is not None:
                             await websocket.send_json(
-                                HMI_STREAM_EVENT_ADAPTER.validate_python(payload).model_dump(mode='json')
+                                HMI_STREAM_EVENT_ADAPTER.validate_python(
+                                    payload
+                                ).model_dump(mode="json")
                             )
 
         except WebSocketDisconnect:

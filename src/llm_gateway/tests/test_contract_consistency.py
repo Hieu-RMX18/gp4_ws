@@ -43,6 +43,7 @@ _FROZEN_PUBLIC_PRIMITIVES = {
     "MOVE_JOINTS",
     "IO_SET",
     "ALARM_RESET",
+    "BLENDED_SEQUENCE",
 }
 # These primitives are operational/query commands and do not need planner defaults.
 _NON_PLANNING_PRIMITIVES = {
@@ -70,8 +71,8 @@ _INTENT_TO_PRIMITIVES = {
     "move_joint": {"MOVE_JOINT"},
     "move_joints": {"MOVE_JOINTS"},
     "io_set": {"IO_SET"},
-    "draw_shape": {"PTP", "CARTESIAN_PATH"},  # macro expander
-    "draw_text": {"PTP", "CARTESIAN_PATH"},  # macro expander
+    "draw_shape": {"PTP", "CARTESIAN_PATH", "BLENDED_SEQUENCE"},  # macro expander
+    "draw_text": {"PTP", "CARTESIAN_PATH", "BLENDED_SEQUENCE"},  # macro expander
 }
 
 
@@ -105,9 +106,9 @@ def test_normalizer_planner_defaults_cover_public_primitives():
     defaults = Normalizer._PLANNER_DEFAULTS
     motion_primitives = _FROZEN_PUBLIC_PRIMITIVES - _NON_PLANNING_PRIMITIVES
     for prim in motion_primitives:
-        assert prim in defaults, (
-            f"Normalizer missing planner default for motion primitive '{prim}'"
-        )
+        assert (
+            prim in defaults
+        ), f"Normalizer missing planner default for motion primitive '{prim}'"
 
 
 def test_prompt_builder_mentions_all_semantic_intents():
@@ -118,9 +119,9 @@ def test_prompt_builder_mentions_all_semantic_intents():
     """
     prompt = build_system_prompt("{}")
     for intent_name in FROZEN_SEMANTIC_INTENTS:
-        assert intent_name in prompt, (
-            f"Prompt builder does not mention semantic intent '{intent_name}'"
-        )
+        assert (
+            intent_name in prompt
+        ), f"Prompt builder does not mention semantic intent '{intent_name}'"
 
 
 def test_intent_to_primitive_mapping_covers_all_primitives():
@@ -186,10 +187,12 @@ def test_top_level_output_intents_include_sequence():
 
 def test_no_deprecated_schema_loaded_at_runtime():
     """command_schema.json must not exist (deprecated to .DEPRECATED)."""
-    deprecated_path = Path(__file__).resolve().parents[1] / "config" / "command_schema.json"
-    assert not deprecated_path.exists(), (
-        "command_schema.json should have been renamed to .DEPRECATED"
+    deprecated_path = (
+        Path(__file__).resolve().parents[1] / "config" / "command_schema.json"
     )
+    assert (
+        not deprecated_path.exists()
+    ), "command_schema.json should have been renamed to .DEPRECATED"
 
 
 def test_macro_policy_declares_draw_shape_and_draw_text():

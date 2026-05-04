@@ -42,7 +42,11 @@ class SupervisorSubmissionMixin:
 
         lease = self._assert_controller(session_id, operator_id, lease_token)
         runtime = self._current_runtime()
-        requested_mode = RuntimeMode(mode) if mode in RuntimeMode._value2member_map_ else runtime.mode
+        requested_mode = (
+            RuntimeMode(mode)
+            if mode in RuntimeMode._value2member_map_
+            else runtime.mode
+        )
         self._assert_no_active_job()
         sequence_segments = self._split_sequence_text(raw_text) if raw_text else []
         prepared_sequence = self._prepare_sequence_request(
@@ -50,7 +54,9 @@ class SupervisorSubmissionMixin:
             structured_intent=structured_intent,
             requested_mode=requested_mode,
         )
-        if prepared_sequence is not None or self._is_sequence_request(structured_intent, sequence_segments):
+        if prepared_sequence is not None or self._is_sequence_request(
+            structured_intent, sequence_segments
+        ):
             return self._submit_sequence(
                 session_id=session_id,
                 operator_id=operator_id,
@@ -109,7 +115,8 @@ class SupervisorSubmissionMixin:
             raw_text=raw_text or "<structured-intent>",
         )
         self._ros.submit_text_for_review(
-            raw_text=raw_text or json.dumps(structured_intent, separators=(",", ":"), ensure_ascii=True),
+            raw_text=raw_text
+            or json.dumps(structured_intent, separators=(",", ":"), ensure_ascii=True),
             session_id=session_id,
             operator_id=operator_id,
             command_id=command_id,
@@ -120,7 +127,11 @@ class SupervisorSubmissionMixin:
             self._active_command_id = command_id
             self._active_sequence_id = None
 
-        self._append_message(origin="operator", text=raw_text or "Submitted structured command.", command_id=command_id)
+        self._append_message(
+            origin="operator",
+            text=raw_text or "Submitted structured command.",
+            command_id=command_id,
+        )
         self._audit.upsert_command(command)
         self._audit.record_transition(
             command_id=command_id,
@@ -178,7 +189,9 @@ class SupervisorSubmissionMixin:
                 session_id=session_id,
                 operator_id=operator_id,
             )
-            return self._command_response(session_id, operator_id, command, accepted=False, reason=parse_error)
+            return self._command_response(
+                session_id, operator_id, command, accepted=False, reason=parse_error
+            )
 
         command.parsed_intent = parsed_intent
         self._audit.record_runtime_event(
@@ -267,7 +280,9 @@ class SupervisorSubmissionMixin:
                 risk_level=validation.get("riskLevel"),
             )
         if not validation["accepted"]:
-            reject_reason = "; ".join(validation["blockingReasons"]) or "validation failed"
+            reject_reason = (
+                "; ".join(validation["blockingReasons"]) or "validation failed"
+            )
             command.reject_reason = reject_reason
             self._reject_command(
                 command,
@@ -276,7 +291,9 @@ class SupervisorSubmissionMixin:
                 session_id=session_id,
                 operator_id=operator_id,
             )
-            return self._command_response(session_id, operator_id, command, accepted=False, reason=reject_reason)
+            return self._command_response(
+                session_id, operator_id, command, accepted=False, reason=reject_reason
+            )
 
         if self._is_get_pose_command(command):
             return self._execute_get_pose_query(
@@ -316,7 +333,9 @@ class SupervisorSubmissionMixin:
                 operator_id=operator_id,
                 plan_fingerprint=command.plan_fingerprint,
             )
-        return self._command_response(session_id, operator_id, command, accepted=True, reason=None)
+        return self._command_response(
+            session_id, operator_id, command, accepted=True, reason=None
+        )
 
     def _submit_sequence(
         self,
@@ -352,12 +371,17 @@ class SupervisorSubmissionMixin:
             self._active_sequence_id = sequence_id
             self._active_command_id = None
         self._ros.submit_text_for_review(
-            raw_text=raw_text or json.dumps(structured_intent, separators=(",", ":"), ensure_ascii=True),
+            raw_text=raw_text
+            or json.dumps(structured_intent, separators=(",", ":"), ensure_ascii=True),
             session_id=session_id,
             operator_id=operator_id,
             command_id=sequence_id,
         )
-        self._append_message(origin="operator", text=raw_text or "Submitted structured sequence.", command_id=sequence_id)
+        self._append_message(
+            origin="operator",
+            text=raw_text or "Submitted structured sequence.",
+            command_id=sequence_id,
+        )
         self._audit.upsert_command(sequence)
         self._audit.record_transition(
             command_id=sequence_id,
@@ -367,7 +391,11 @@ class SupervisorSubmissionMixin:
             to_state=CommandLifecycleState.RECEIVED,
             runtime_state=runtime.system_state,
             reason="sequence received from HMI v2 intent endpoint",
-            payload={"mode": sequence.mode.value, "intentSource": sequence.intent_source, "kind": sequence.command_kind.value},
+            payload={
+                "mode": sequence.mode.value,
+                "intentSource": sequence.intent_source,
+                "kind": sequence.command_kind.value,
+            },
         )
         self._transition_top_level_record(
             sequence,
@@ -378,11 +406,13 @@ class SupervisorSubmissionMixin:
             message_tag=CommandLifecycleState.PARSING.value,
         )
         if prepared_sequence is None:
-            parsed_steps, diagnostics, parse_error, route_metadata = self._parse_sequence_steps(
-                raw_text=raw_text,
-                structured_intent=structured_intent,
-                mode=sequence.mode,
-                sequence_segments=sequence_segments,
+            parsed_steps, diagnostics, parse_error, route_metadata = (
+                self._parse_sequence_steps(
+                    raw_text=raw_text,
+                    structured_intent=structured_intent,
+                    mode=sequence.mode,
+                    sequence_segments=sequence_segments,
+                )
             )
         else:
             parsed_steps = prepared_sequence.get("parsed_steps")
@@ -423,7 +453,9 @@ class SupervisorSubmissionMixin:
                 session_id=session_id,
                 operator_id=operator_id,
             )
-            return self._sequence_response(session_id, operator_id, sequence, accepted=False, reason=parse_error)
+            return self._sequence_response(
+                session_id, operator_id, sequence, accepted=False, reason=parse_error
+            )
 
         sequence.sequence_step_count = len(parsed_steps)
         sequence.current_step_index = 0
@@ -434,7 +466,11 @@ class SupervisorSubmissionMixin:
                 command_id=str(uuid4()),
                 session_id=session_id,
                 operator_id=operator_id,
-                raw_text=(sequence_segments[step_index] if step_index < len(sequence_segments) else parsed_step["targetSummary"]),
+                raw_text=(
+                    sequence_segments[step_index]
+                    if step_index < len(sequence_segments)
+                    else parsed_step["targetSummary"]
+                ),
                 lifecycle_state=CommandLifecycleState.RECEIVED,
                 summary_label=parsed_step["targetSummary"],
                 mode=sequence.mode,
@@ -460,7 +496,11 @@ class SupervisorSubmissionMixin:
                 to_state=CommandLifecycleState.RECEIVED,
                 runtime_state=runtime.system_state,
                 reason="sequence step received from HMI v2 intent endpoint",
-                payload={"parentSequenceId": sequence_id, "stepIndex": step_index, "stepCount": len(parsed_steps)},
+                payload={
+                    "parentSequenceId": sequence_id,
+                    "stepIndex": step_index,
+                    "stepCount": len(parsed_steps),
+                },
             )
             self._transition_command(
                 child_command,
@@ -475,7 +515,9 @@ class SupervisorSubmissionMixin:
                 runtime_state=runtime.system_state,
             )
 
-        self._active_command_id = child_commands[0].command_id if child_commands else None
+        self._active_command_id = (
+            child_commands[0].command_id if child_commands else None
+        )
         self._transition_top_level_record(
             sequence,
             next_state=CommandLifecycleState.VALIDATING,
@@ -506,14 +548,23 @@ class SupervisorSubmissionMixin:
             child_command.validation_result = child_validation
             child_command.plan_fingerprint = child_validation["planFingerprint"]
             if child_validation["riskLevel"] is not None:
-                child_command.risk_level = CommandRiskLevel(child_validation["riskLevel"])
+                child_command.risk_level = CommandRiskLevel(
+                    child_validation["riskLevel"]
+                )
             if not child_validation["accepted"]:
                 validation["accepted"] = False
-                validation["blockingReasons"] = list(dict.fromkeys(validation["blockingReasons"] + child_validation["blockingReasons"]))
+                validation["blockingReasons"] = list(
+                    dict.fromkeys(
+                        validation["blockingReasons"]
+                        + child_validation["blockingReasons"]
+                    )
+                )
             self._audit.upsert_command(child_command)
         self._audit.upsert_command(sequence)
         if not validation["accepted"]:
-            reject_reason = "; ".join(validation["blockingReasons"]) or "sequence validation failed"
+            reject_reason = (
+                "; ".join(validation["blockingReasons"]) or "sequence validation failed"
+            )
             sequence.reject_reason = reject_reason
             self._reject_top_level_record(
                 sequence,
@@ -522,7 +573,9 @@ class SupervisorSubmissionMixin:
                 session_id=session_id,
                 operator_id=operator_id,
             )
-            return self._sequence_response(session_id, operator_id, sequence, accepted=False, reason=reject_reason)
+            return self._sequence_response(
+                session_id, operator_id, sequence, accepted=False, reason=reject_reason
+            )
 
         sequence.confirmation_expires_at = _utcnow() + self._confirmation_window
         for child_command in child_commands:
@@ -550,7 +603,11 @@ class SupervisorSubmissionMixin:
             ),
             message_tag=CommandLifecycleState.NEEDS_CONFIRMATION.value,
         )
-        if self._sim_auto_confirm and sequence.mode == RuntimeMode.SIM and sequence.plan_fingerprint is not None:
+        if (
+            self._sim_auto_confirm
+            and sequence.mode == RuntimeMode.SIM
+            and sequence.plan_fingerprint is not None
+        ):
             return self.confirm_sequence(
                 session_id=session_id,
                 operator_id=operator_id,
@@ -558,4 +615,6 @@ class SupervisorSubmissionMixin:
                 sequence_id=sequence.command_id,
                 plan_fingerprint=sequence.plan_fingerprint,
             )
-        return self._sequence_response(session_id, operator_id, sequence, accepted=True, reason=None)
+        return self._sequence_response(
+            session_id, operator_id, sequence, accepted=True, reason=None
+        )

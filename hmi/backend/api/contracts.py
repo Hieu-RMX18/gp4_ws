@@ -8,19 +8,19 @@ from ..services.telemetry_bridge_service import SNAPSHOT_SCHEMA_VERSION
 
 
 class StrictModel(BaseModel):
-    model_config = ConfigDict(extra='forbid')
+    model_config = ConfigDict(extra="forbid")
 
 
 class BridgeConnectionModel(StrictModel):
-    name: Literal['ros2', 'moveit2', 'llm', 'motoros2']
+    name: Literal["ros2", "moveit2", "llm", "motoros2"]
     label: str
-    health: Literal['healthy', 'degraded', 'down']
+    health: Literal["healthy", "degraded", "down"]
 
 
 class LeaseViewModel(StrictModel):
     leaseId: str | None
     leaseToken: str | None
-    role: Literal['controller', 'observer']
+    role: Literal["controller", "observer"]
     ownsControl: bool
     holderOperatorId: str | None
     holderSessionId: str | None
@@ -79,16 +79,16 @@ class TelemetrySourceStatusModel(StrictModel):
     topic: str
     lastSeenAt: str | None
     freshnessThresholdSec: float
-    freshnessState: Literal['fresh', 'stale', 'unavailable']
+    freshnessState: Literal["fresh", "stale", "unavailable"]
     preferred: bool
     active: bool
     detail: str | None
 
 
 class RobotStatusSnapshotModel(StrictModel):
-    servoState: Literal['ON', 'OFF', 'UNKNOWN']
-    eStop: Literal['CLEAR', 'ACTIVE', 'UNKNOWN']
-    alarmState: Literal['NONE', 'ACTIVE', 'UNKNOWN']
+    servoState: Literal["ON", "OFF", "UNKNOWN"]
+    eStop: Literal["CLEAR", "ACTIVE", "UNKNOWN"]
+    alarmState: Literal["NONE", "ACTIVE", "UNKNOWN"]
     motionMode: str | None
     trajectoryPointsUsed: int | None
     trajectoryPointsCapacity: int | None
@@ -96,17 +96,19 @@ class RobotStatusSnapshotModel(StrictModel):
 
 
 class RuntimeSnapshotModel(StrictModel):
-    systemState: Literal['NORMAL', 'FAULT', 'ESTOP', 'HOLD', 'TIMEOUT', 'LOST_CONN', 'SAFETY_BLOCKED']
+    systemState: Literal[
+        "NORMAL", "FAULT", "ESTOP", "HOLD", "TIMEOUT", "LOST_CONN", "SAFETY_BLOCKED"
+    ]
     blocking: bool
     statusText: str
-    mode: Literal['sim', 'hardware', 'unknown']
+    mode: Literal["sim", "hardware", "unknown"]
     robotStatus: RobotStatusSnapshotModel
 
 
 class ChatMessageModel(StrictModel):
     id: str
     commandId: str | None
-    origin: Literal['system', 'operator', 'assistant']
+    origin: Literal["system", "operator", "assistant"]
     timestamp: str
     text: str
     tag: str | None = None
@@ -125,7 +127,7 @@ class ValidationSourceStatusModel(StrictModel):
     name: str
     label: str
     topic: str
-    freshnessState: Literal['fresh', 'stale', 'unavailable']
+    freshnessState: Literal["fresh", "stale", "unavailable"]
     active: bool
     preferred: bool
     detail: str | None
@@ -137,7 +139,7 @@ class CommandValidationResultModel(StrictModel):
     runtimeAllowed: bool
     telemetryFresh: bool
     requiresConfirmation: bool
-    riskLevel: Literal['low', 'medium', 'high', 'critical'] | None
+    riskLevel: Literal["low", "medium", "high", "critical"] | None
     blockingReasons: list[str]
     confirmationReasons: list[str]
     planFingerprint: str | None
@@ -169,31 +171,31 @@ class CommandExecutionResultModel(StrictModel):
 
 class CommandViewModel(StrictModel):
     commandId: str
-    commandKind: Literal['command']
+    commandKind: Literal["command"]
     sessionId: str
     operatorId: str
     rawText: str
-    intentSource: Literal['text', 'structured']
+    intentSource: Literal["text", "structured"]
     structuredIntent: dict[str, Any] | None = None
     lifecycleState: Literal[
-        'RECEIVED',
-        'PARSING',
-        'VALIDATING',
-        'NEEDS_CONFIRMATION',
-        'CONFIRMED',
-        'EXECUTION_REQUESTED',
-        'EXECUTING',
-        'SUCCEEDED',
-        'FAILED',
-        'REJECTED',
-        'CANCELLED',
-        'EXPIRED',
+        "RECEIVED",
+        "PARSING",
+        "VALIDATING",
+        "NEEDS_CONFIRMATION",
+        "CONFIRMED",
+        "EXECUTION_REQUESTED",
+        "EXECUTING",
+        "SUCCEEDED",
+        "FAILED",
+        "REJECTED",
+        "CANCELLED",
+        "EXPIRED",
     ]
     summaryLabel: str
     plannerUsed: str | None
     frameUsed: str | None
-    mode: Literal['sim', 'hardware', 'unknown']
-    riskLevel: Literal['low', 'medium', 'high', 'critical'] | None = None
+    mode: Literal["sim", "hardware", "unknown"]
+    riskLevel: Literal["low", "medium", "high", "critical"] | None = None
     planFingerprint: str | None = None
     correlationId: str | None = None
     rejectReason: str | None
@@ -206,7 +208,9 @@ class CommandViewModel(StrictModel):
     confirmAt: str | None
     executeAt: str | None
     executionResult: CommandExecutionResultModel | None = None
-    finalState: Literal['SUCCEEDED', 'FAILED', 'REJECTED', 'CANCELLED', 'EXPIRED'] | None = None
+    finalState: (
+        Literal["SUCCEEDED", "FAILED", "REJECTED", "CANCELLED", "EXPIRED"] | None
+    ) = None
     parentSequenceId: str | None = None
     sequenceStepIndex: int | None = None
     sequenceStepCount: int | None = None
@@ -214,31 +218,31 @@ class CommandViewModel(StrictModel):
 
 class SequenceViewModel(StrictModel):
     sequenceId: str
-    commandKind: Literal['sequence']
+    commandKind: Literal["sequence"]
     sessionId: str
     operatorId: str
     rawText: str
-    intentSource: Literal['text', 'structured']
+    intentSource: Literal["text", "structured"]
     structuredIntent: dict[str, Any] | None = None
     lifecycleState: Literal[
-        'RECEIVED',
-        'PARSING',
-        'VALIDATING',
-        'NEEDS_CONFIRMATION',
-        'CONFIRMED',
-        'EXECUTION_REQUESTED',
-        'EXECUTING',
-        'SUCCEEDED',
-        'FAILED',
-        'REJECTED',
-        'CANCELLED',
-        'EXPIRED',
+        "RECEIVED",
+        "PARSING",
+        "VALIDATING",
+        "NEEDS_CONFIRMATION",
+        "CONFIRMED",
+        "EXECUTION_REQUESTED",
+        "EXECUTING",
+        "SUCCEEDED",
+        "FAILED",
+        "REJECTED",
+        "CANCELLED",
+        "EXPIRED",
     ]
     summaryLabel: str
     plannerUsed: str | None
     frameUsed: str | None
-    mode: Literal['sim', 'hardware', 'unknown']
-    riskLevel: Literal['low', 'medium', 'high', 'critical'] | None = None
+    mode: Literal["sim", "hardware", "unknown"]
+    riskLevel: Literal["low", "medium", "high", "critical"] | None = None
     planFingerprint: str | None = None
     correlationId: str | None = None
     rejectReason: str | None
@@ -250,7 +254,9 @@ class SequenceViewModel(StrictModel):
     confirmAt: str | None
     executeAt: str | None
     executionResult: CommandExecutionResultModel | None = None
-    finalState: Literal['SUCCEEDED', 'FAILED', 'REJECTED', 'CANCELLED', 'EXPIRED'] | None = None
+    finalState: (
+        Literal["SUCCEEDED", "FAILED", "REJECTED", "CANCELLED", "EXPIRED"] | None
+    ) = None
     stepCount: int
     currentStepIndex: int | None = None
     diagnostics: list[str] = Field(default_factory=list)
@@ -260,7 +266,7 @@ class SequenceViewModel(StrictModel):
 
 class ReplayListItemModel(StrictModel):
     commandId: str
-    kind: Literal['command', 'sequence']
+    kind: Literal["command", "sequence"]
     sessionId: str
     operatorId: str
     summaryLabel: str
@@ -268,10 +274,10 @@ class ReplayListItemModel(StrictModel):
     finalState: str | None
     plannerUsed: str | None
     frameUsed: str | None
-    mode: Literal['sim', 'hardware', 'unknown']
+    mode: Literal["sim", "hardware", "unknown"]
     createdAt: str
     executeAt: str | None
-    riskLevel: Literal['low', 'medium', 'high', 'critical'] | None = None
+    riskLevel: Literal["low", "medium", "high", "critical"] | None = None
     stepCount: int | None = None
     currentStepIndex: int | None = None
     manualRecoveryRequired: bool = False
@@ -289,7 +295,7 @@ class TimelineEventModel(StrictModel):
 
 
 class ReplayDetailModel(StrictModel):
-    jobType: Literal['command', 'sequence']
+    jobType: Literal["command", "sequence"]
     command: CommandViewModel | None = None
     sequence: SequenceViewModel | None = None
     timeline: list[TimelineEventModel]
@@ -299,10 +305,10 @@ class ReplayDetailModel(StrictModel):
 class HmiStateSnapshotModel(StrictModel):
     schemaVersion: Literal[SNAPSHOT_SCHEMA_VERSION]
     generatedAt: str
-    transportState: Literal['connected', 'connecting', 'disconnected']
-    telemetryState: Literal['fresh', 'stale', 'unavailable']
+    transportState: Literal["connected", "connecting", "disconnected"]
+    telemetryState: Literal["fresh", "stale", "unavailable"]
     telemetrySources: list[TelemetrySourceStatusModel]
-    mode: Literal['sim', 'hardware', 'unknown']
+    mode: Literal["sim", "hardware", "unknown"]
     connections: list[BridgeConnectionModel]
     capabilities: BridgeCapabilitiesModel
     lease: LeaseViewModel
@@ -318,7 +324,7 @@ class HmiStateSnapshotModel(StrictModel):
 class RuntimeStateResponseModel(StrictModel):
     schemaVersion: Literal[SNAPSHOT_SCHEMA_VERSION]
     generatedAt: str
-    telemetryState: Literal['fresh', 'stale', 'unavailable']
+    telemetryState: Literal["fresh", "stale", "unavailable"]
     telemetrySources: list[TelemetrySourceStatusModel]
     runtime: RuntimeSnapshotModel
     jointPositions: list[JointPositionModel]
@@ -327,8 +333,8 @@ class RuntimeStateResponseModel(StrictModel):
 class ConnectionStateResponseModel(StrictModel):
     schemaVersion: Literal[SNAPSHOT_SCHEMA_VERSION]
     generatedAt: str
-    transportState: Literal['connected', 'connecting', 'disconnected']
-    telemetryState: Literal['fresh', 'stale', 'unavailable']
+    transportState: Literal["connected", "connecting", "disconnected"]
+    telemetryState: Literal["fresh", "stale", "unavailable"]
     telemetrySources: list[TelemetrySourceStatusModel]
     connections: list[BridgeConnectionModel]
 
@@ -343,7 +349,7 @@ class LeaseStateResponseModel(StrictModel):
 class LeaseAcquireRequestModel(StrictModel):
     sessionId: str
     operatorId: str
-    requestedRole: Literal['controller', 'observer']
+    requestedRole: Literal["controller", "observer"]
     forceTakeover: bool = False
     takeoverReason: str | None = None
 
@@ -372,12 +378,15 @@ class CommandIntentRequestModel(StrictModel):
     leaseToken: str | None
     intentText: str | None = None
     structuredIntent: dict[str, Any] | None = None
-    mode: Literal['sim', 'hardware', 'unknown']
+    mode: Literal["sim", "hardware", "unknown"]
 
-    @model_validator(mode='after')
-    def validate_intent_payload(self) -> 'CommandIntentRequestModel':
-        if not (self.intentText and self.intentText.strip()) and self.structuredIntent is None:
-            raise ValueError('intentText or structuredIntent is required')
+    @model_validator(mode="after")
+    def validate_intent_payload(self) -> "CommandIntentRequestModel":
+        if (
+            not (self.intentText and self.intentText.strip())
+            and self.structuredIntent is None
+        ):
+            raise ValueError("intentText or structuredIntent is required")
         return self
 
 
@@ -397,7 +406,7 @@ class CommandCancelRequestModel(StrictModel):
 
 class CommandMutationResponseModel(StrictModel):
     accepted: bool
-    jobType: Literal['command', 'sequence']
+    jobType: Literal["command", "sequence"]
     commandId: str | None
     sequenceId: str | None = None
     reason: str | None
@@ -411,43 +420,44 @@ class CommandListResponseModel(StrictModel):
 
 
 class SnapshotStreamEventModel(StrictModel):
-    type: Literal['snapshot']
+    type: Literal["snapshot"]
     snapshot: HmiStateSnapshotModel
 
 
 class HeartbeatStreamEventModel(StrictModel):
-    type: Literal['heartbeat']
+    type: Literal["heartbeat"]
     schemaVersion: Literal[SNAPSHOT_SCHEMA_VERSION]
     generatedAt: str
-    transportState: Literal['connected', 'connecting', 'disconnected']
-    telemetryState: Literal['fresh', 'stale', 'unavailable']
+    transportState: Literal["connected", "connecting", "disconnected"]
+    telemetryState: Literal["fresh", "stale", "unavailable"]
 
 
 class LeaseStateStreamEventModel(StrictModel):
-    type: Literal['lease_state']
+    type: Literal["lease_state"]
     lease: LeaseViewModel
     capabilities: BridgeCapabilitiesModel
 
 
 class CommandLifecycleStreamEventModel(StrictModel):
-    type: Literal['command_lifecycle']
+    type: Literal["command_lifecycle"]
     command: CommandViewModel
     messages: list[ChatMessageModel] = Field(default_factory=list)
     planMetrics: PlanMetricsModel | None = None
 
 
 class SequenceLifecycleStreamEventModel(StrictModel):
-    type: Literal['sequence_lifecycle']
+    type: Literal["sequence_lifecycle"]
     sequence: SequenceViewModel
     messages: list[ChatMessageModel] = Field(default_factory=list)
 
 
 class ReplayUpdatedStreamEventModel(StrictModel):
-    type: Literal['replay_updated']
+    type: Literal["replay_updated"]
     replayItems: list[ReplayListItemModel]
 
 
 # ── Jog Pendant Models ──────────────────────────────────────────────────────
+
 
 class JogBridgeStatusModel(StrictModel):
     state: str
@@ -461,14 +471,14 @@ class JogBridgeStatusModel(StrictModel):
 
 
 class JogBridgeStatusStreamEventModel(StrictModel):
-    type: Literal['jog_bridge_status']
+    type: Literal["jog_bridge_status"]
     jogBridgeStatus: JogBridgeStatusModel
 
 
 class JogCommandRequestModel(StrictModel):
     jointIndex: int = Field(..., ge=0, le=5)
     direction: Literal[-1, 1]
-    mode: Literal['continuous', 'discrete']
+    mode: Literal["continuous", "discrete"]
     velocityScale: float = Field(..., ge=0.0, le=0.3)
     stepDegrees: float = Field(0.0, ge=0.0, le=10.0)
 

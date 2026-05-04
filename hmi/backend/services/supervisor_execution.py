@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from ..domain.models import CommandLifecycleState, CommandRecord, RuntimeMode, RuntimeSnapshot
+from ..domain.models import (
+    CommandLifecycleState,
+    CommandRecord,
+    RuntimeMode,
+    RuntimeSnapshot,
+)
 
 
 class SupervisorExecutionMixin:
@@ -46,7 +51,10 @@ class SupervisorExecutionMixin:
                 payload=confirm_gate.get("preflight"),
             )
         if not confirm_gate["accepted"]:
-            reason = "; ".join(confirm_gate["blockingReasons"]) or "confirmation gate rejected command"
+            reason = (
+                "; ".join(confirm_gate["blockingReasons"])
+                or "confirmation gate rejected command"
+            )
             self._trace(
                 "confirmation.rejected",
                 command_id=command.command_id,
@@ -195,7 +203,8 @@ class SupervisorExecutionMixin:
             self._transition_command(
                 command,
                 next_state=CommandLifecycleState.SUCCEEDED,
-                reason=execution_result.get("summary") or "execution completed successfully",
+                reason=execution_result.get("summary")
+                or "execution completed successfully",
                 runtime_state=runtime.system_state,
                 payload=execution_result,
                 message_text=(
@@ -208,7 +217,8 @@ class SupervisorExecutionMixin:
                 "terminal.succeeded",
                 command_id=command.command_id,
                 correlation_id=command.correlation_id,
-                reason=execution_result.get("summary") or "execution completed successfully",
+                reason=execution_result.get("summary")
+                or "execution completed successfully",
             )
         elif execution_status == "cancelled":
             if not dispatched_to_ros:
@@ -249,7 +259,8 @@ class SupervisorExecutionMixin:
             self._transition_command(
                 command,
                 next_state=CommandLifecycleState.FAILED,
-                reason=execution_result.get("summary") or "execution boundary rejected request",
+                reason=execution_result.get("summary")
+                or "execution boundary rejected request",
                 runtime_state=runtime.system_state,
                 payload=execution_result,
                 message_text=(
@@ -262,7 +273,8 @@ class SupervisorExecutionMixin:
                 "terminal.failed",
                 command_id=command.command_id,
                 correlation_id=command.correlation_id,
-                reason=execution_result.get("summary") or "execution boundary rejected request",
+                reason=execution_result.get("summary")
+                or "execution boundary rejected request",
             )
 
         self._audit.upsert_command(command)
@@ -280,7 +292,11 @@ class SupervisorExecutionMixin:
     def _is_get_pose_command(command: CommandRecord) -> bool:
         parsed_intent = command.parsed_intent or {}
         normalized_command = parsed_intent.get("normalizedCommand") or {}
-        primitive = str(normalized_command.get("primitive_type") or parsed_intent.get("action") or "").upper()
+        primitive = str(
+            normalized_command.get("primitive_type")
+            or parsed_intent.get("action")
+            or ""
+        ).upper()
         return primitive == "GET_POSE"
 
     def _execute_get_pose_query(
@@ -357,7 +373,9 @@ class SupervisorExecutionMixin:
             status=execution_result.get("status"),
             summary=execution_result.get("summary"),
         )
-        should_emit_querying_state = command.lifecycle_state != CommandLifecycleState.VALIDATING
+        should_emit_querying_state = (
+            command.lifecycle_state != CommandLifecycleState.VALIDATING
+        )
         if should_emit_querying_state:
             self._transition_command(
                 command,

@@ -22,6 +22,7 @@ properties:
       - IO_SET
       - ALARM_RESET
       - MOVE_JOINTS
+      - BLENDED_SEQUENCE
   target_pose:
     type: object
     additionalProperties: false
@@ -195,6 +196,91 @@ properties:
     enum:
       - 0
       - 1
+  sequence_steps:
+    type: array
+    minItems: 2
+    items:
+      type: object
+      additionalProperties: false
+      required:
+        - primitive_type
+        - target_pose
+      properties:
+        primitive_type:
+          type: string
+          enum:
+            - LIN
+            - PTP
+            - CIRC
+        target_pose:
+          type: object
+          additionalProperties: false
+          required:
+            - position
+          properties:
+            position:
+              type: object
+              additionalProperties: false
+              required:
+                - x
+                - y
+                - z
+              properties:
+                x:
+                  type: number
+                y:
+                  type: number
+                z:
+                  type: number
+            orientation:
+              anyOf:
+                - type: object
+                  additionalProperties: false
+                  required:
+                    - x
+                    - y
+                    - z
+                    - w
+                  properties:
+                    x:
+                      type: number
+                    y:
+                      type: number
+                    z:
+                      type: number
+                    w:
+                      type: number
+                - type: object
+                  additionalProperties: false
+                  required:
+                    - roll
+                    - pitch
+                    - yaw
+                  properties:
+                    roll:
+                      type: number
+                    pitch:
+                      type: number
+                    yaw:
+                      type: number
+        blend_radius_m:
+          type: number
+          minimum: 0.0
+          maximum: 0.015
+        planner_id:
+          type: string
+          enum:
+            - PILZ_LIN
+            - PILZ_PTP
+            - PILZ_CIRC
+        velocity_scale:
+          type: number
+          minimum: 0.01
+          maximum: 0.06
+        acceleration_scale:
+          type: number
+          minimum: 0.01
+          maximum: 0.06
 allOf:
   - if:
       properties:
@@ -278,3 +364,10 @@ allOf:
     then:
       required:
         - joint_target
+  - if:
+      properties:
+        primitive_type:
+          const: BLENDED_SEQUENCE
+    then:
+      required:
+        - sequence_steps

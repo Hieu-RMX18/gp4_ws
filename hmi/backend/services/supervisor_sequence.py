@@ -55,7 +55,6 @@ _COMMA_SEQUENCE_PREFIXES = {
     "mo",
     "move",
     "open",
-    "park",
     "pause",
     "quay",
     "reset",
@@ -91,9 +90,10 @@ class SupervisorSequenceMixin:
         sequence_segments: list[str],
     ) -> bool:
         """Return True when the input should be handled as a multi-step sequence."""
-        if structured_intent is not None and str(
-            structured_intent.get("intent") or ""
-        ).strip().lower() == "sequence":
+        if (
+            structured_intent is not None
+            and str(structured_intent.get("intent") or "").strip().lower() == "sequence"
+        ):
             return True
         return len(sequence_segments) > 1
 
@@ -166,12 +166,15 @@ class SupervisorSequenceMixin:
         structured_intent: dict[str, Any] | None,
         mode: RuntimeMode,
         sequence_segments: list[str],
-    ) -> tuple[list[dict[str, Any]] | None, list[str], str | None, dict[str, Any] | None]:
+    ) -> tuple[
+        list[dict[str, Any]] | None, list[str], str | None, dict[str, Any] | None
+    ]:
         diagnostics: list[str] = []
         parsed_steps: list[dict[str, Any]] = []
-        if structured_intent is not None and str(
-            structured_intent.get("intent") or ""
-        ).strip().lower() == "sequence":
+        if (
+            structured_intent is not None
+            and str(structured_intent.get("intent") or "").strip().lower() == "sequence"
+        ):
             if IntentRouter is None or SequenceValidator is None:
                 return (
                     None,
@@ -182,9 +185,12 @@ class SupervisorSequenceMixin:
             try:
                 routed = IntentRouter(runtime_mode=mode.value).route(structured_intent)
                 if routed.route_type != "sequence":
-                    return None, diagnostics, "structured sequence did not resolve to a sequence route.", {
-                        "intent": "sequence"
-                    }
+                    return (
+                        None,
+                        diagnostics,
+                        "structured sequence did not resolve to a sequence route.",
+                        {"intent": "sequence"},
+                    )
                 validation = SequenceValidator().validate(routed.commands)
                 diagnostics.extend(validation.diagnostics)
                 for command in routed.commands:
@@ -227,7 +233,10 @@ class SupervisorSequenceMixin:
     ) -> str:
         macro_name = str((route_metadata or {}).get("macro_name") or "").strip().lower()
         if macro_name == "draw_shape":
-            shape_type = str((route_metadata or {}).get("shape_type") or "shape").strip().lower() or "shape"
+            shape_type = (
+                str((route_metadata or {}).get("shape_type") or "shape").strip().lower()
+                or "shape"
+            )
             return f"Draw {shape_type}"[:120]
         if macro_name == "draw_text":
             text = str((route_metadata or {}).get("text") or "").strip().upper()
@@ -237,7 +246,9 @@ class SupervisorSequenceMixin:
         if raw_text:
             return raw_text[:120]
         if structured_intent is not None:
-            return json.dumps(structured_intent, separators=(",", ":"), ensure_ascii=True)[:120]
+            return json.dumps(
+                structured_intent, separators=(",", ":"), ensure_ascii=True
+            )[:120]
         return "structured sequence"
 
     def _sequence_plan_summary(
@@ -254,7 +265,9 @@ class SupervisorSequenceMixin:
             "normalizedIntent": (
                 raw_text
                 or (
-                    json.dumps(structured_intent, separators=(",", ":"), ensure_ascii=True)
+                    json.dumps(
+                        structured_intent, separators=(",", ":"), ensure_ascii=True
+                    )
                     if structured_intent is not None
                     else ""
                 )

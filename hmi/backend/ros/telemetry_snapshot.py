@@ -20,13 +20,13 @@ from ..domain.models import (
 
 
 CONNECTION_FRESHNESS_SEC = {
-    'ros': 3.0,
-    'robot_status': 3.0,
-    'readiness': 3.0,
-    'joint_states': 3.0,
-    'command_interface': 3.0,
-    'llm': 30.0,
-    'alerts': 5.0,
+    "ros": 3.0,
+    "robot_status": 3.0,
+    "readiness": 3.0,
+    "joint_states": 3.0,
+    "command_interface": 3.0,
+    "llm": 30.0,
+    "alerts": 5.0,
 }
 
 
@@ -46,21 +46,21 @@ class _RobotStatusState:
 class _ReadinessState:
     received_at: datetime | None = None
     ready: bool | None = None
-    status_message: str = 'No readiness signal received.'
+    status_message: str = "No readiness signal received."
 
 
 @dataclass(slots=True)
 class _SupervisorAlertState:
     received_at: datetime | None = None
     level: int | None = None
-    message: str = ''
+    message: str = ""
     values: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class _LlmState:
     gateway_status_at: datetime | None = None
-    gateway_status_text: str = ''
+    gateway_status_text: str = ""
     debug_at: datetime | None = None
     command_at: datetime | None = None
 
@@ -71,7 +71,9 @@ class _TelemetryState:
     start_error: str | None = None
     robot_status: _RobotStatusState = field(default_factory=_RobotStatusState)
     readiness: _ReadinessState = field(default_factory=_ReadinessState)
-    supervisor_alert: _SupervisorAlertState = field(default_factory=_SupervisorAlertState)
+    supervisor_alert: _SupervisorAlertState = field(
+        default_factory=_SupervisorAlertState
+    )
     llm: _LlmState = field(default_factory=_LlmState)
     joint_positions_rad: dict[str, float] = field(default_factory=dict)
     joint_received_at: datetime | None = None
@@ -81,8 +83,8 @@ class _TelemetryState:
     execute_motion_ready_at: datetime | None = None
     validate_command_ready: bool = False
     execute_motion_ready: bool = False
-    validate_command_detail: str = ''
-    execute_motion_detail: str = ''
+    validate_command_detail: str = ""
+    execute_motion_detail: str = ""
     command_interface_checked_at: datetime | None = None
     command_interface_check_inflight: bool = False
     command_interface_error: str | None = None
@@ -101,10 +103,10 @@ class TelemetrySnapshotMixin:
         motoros2_health = self._derive_motoros2_health(snapshot, ros_health)
 
         return [
-            BridgeConnection(name='ros2', label='ROS 2', health=ros_health),
-            BridgeConnection(name='moveit2', label='MoveIt 2', health=moveit_health),
-            BridgeConnection(name='llm', label='LLM', health=llm_health),
-            BridgeConnection(name='motoros2', label='MotoROS2', health=motoros2_health),
+            BridgeConnection(name="ros2", label="ROS 2", health=ros_health),
+            BridgeConnection(name="moveit2", label="MoveIt 2", health=moveit_health),
+            BridgeConnection(name="llm", label="LLM", health=llm_health),
+            BridgeConnection(name="motoros2", label="MotoROS2", health=motoros2_health),
         ]
 
     def read_runtime_snapshot(self) -> RuntimeSnapshot:
@@ -116,7 +118,8 @@ class TelemetrySnapshotMixin:
         runtime_state, status_text = self._derive_runtime_state(snapshot, robot_status)
         return RuntimeSnapshot(
             system_state=runtime_state,
-            blocking=runtime_state in {
+            blocking=runtime_state
+            in {
                 SystemRuntimeState.FAULT,
                 SystemRuntimeState.ESTOP,
                 SystemRuntimeState.LOST_CONN,
@@ -132,11 +135,19 @@ class TelemetrySnapshotMixin:
             snapshot = self._copy_state_locked()
 
         joint_positions: list[JointPosition] = []
-        joint_data_is_fresh = self._is_fresh(snapshot.joint_received_at, CONNECTION_FRESHNESS_SEC['joint_states'])
+        joint_data_is_fresh = self._is_fresh(
+            snapshot.joint_received_at, CONNECTION_FRESHNESS_SEC["joint_states"]
+        )
         for joint_name in DEFAULT_JOINT_NAMES:
-            position_rad = snapshot.joint_positions_rad.get(joint_name) if joint_data_is_fresh else None
+            position_rad = (
+                snapshot.joint_positions_rad.get(joint_name)
+                if joint_data_is_fresh
+                else None
+            )
             position_deg = degrees(position_rad) if position_rad is not None else None
-            joint_positions.append(JointPosition(name=joint_name, position_deg=position_deg))
+            joint_positions.append(
+                JointPosition(name=joint_name, position_deg=position_deg)
+            )
         return joint_positions
 
     def read_source_statuses(self) -> list[TelemetrySourceSnapshot]:
@@ -146,90 +157,100 @@ class TelemetrySnapshotMixin:
         runtime_mode = self._derive_mode(snapshot)
         joint_fallback_topic = self._joint_state_topics[-1]
         preferred_joint_topic = (
-            joint_fallback_topic if runtime_mode == RuntimeMode.SIM else self._preferred_joint_state_topic
+            joint_fallback_topic
+            if runtime_mode == RuntimeMode.SIM
+            else self._preferred_joint_state_topic
         )
 
         statuses = [
             self._build_source_status(
                 snapshot=snapshot,
-                name='gateway_status',
-                label='Gateway status',
+                name="gateway_status",
+                label="Gateway status",
                 topic=self._gateway_status_topic,
                 last_seen_at=snapshot.llm.gateway_status_at,
-                freshness_sec=CONNECTION_FRESHNESS_SEC['llm'],
+                freshness_sec=CONNECTION_FRESHNESS_SEC["llm"],
                 detail=snapshot.llm.gateway_status_text or None,
             ),
             self._build_source_status(
                 snapshot=snapshot,
-                name='llm_debug',
-                label='LLM debug',
+                name="llm_debug",
+                label="LLM debug",
                 topic=self._llm_debug_topic,
                 last_seen_at=snapshot.llm.debug_at,
-                freshness_sec=CONNECTION_FRESHNESS_SEC['llm'],
-                active=self._is_fresh(snapshot.llm.debug_at, CONNECTION_FRESHNESS_SEC['llm']),
-            ),
-            self._build_source_status(
-                snapshot=snapshot,
-                name='llm_command',
-                label='LLM command echo',
-                topic=self._llm_command_topic,
-                last_seen_at=snapshot.llm.command_at,
-                freshness_sec=CONNECTION_FRESHNESS_SEC['llm'],
-                active=self._is_fresh(snapshot.llm.command_at, CONNECTION_FRESHNESS_SEC['llm']),
-            ),
-            self._build_source_status(
-                snapshot=snapshot,
-                name='readiness',
-                label='HW readiness',
-                topic=self._readiness_topic,
-                last_seen_at=snapshot.readiness.received_at,
-                freshness_sec=CONNECTION_FRESHNESS_SEC['readiness'],
-                detail=snapshot.readiness.status_message,
-            ),
-            self._build_source_status(
-                snapshot=snapshot,
-                name='supervisor_alerts',
-                label='Supervisor alerts',
-                topic=self._supervisor_alert_topic,
-                last_seen_at=snapshot.supervisor_alert.received_at,
-                freshness_sec=CONNECTION_FRESHNESS_SEC['alerts'],
-                detail=snapshot.supervisor_alert.message or None,
-            ),
-            self._build_source_status(
-                snapshot=snapshot,
-                name='robot_status',
-                label='Robot status',
-                topic=self._robot_status_topic,
-                last_seen_at=snapshot.robot_status.received_at,
-                freshness_sec=CONNECTION_FRESHNESS_SEC['robot_status'],
-                active=runtime_mode != RuntimeMode.SIM,
-                detail=(
-                    'SIM mode uses /hw_adapter/ready instead of raw /yaskawa/robot_status.'
-                    if runtime_mode == RuntimeMode.SIM else None
+                freshness_sec=CONNECTION_FRESHNESS_SEC["llm"],
+                active=self._is_fresh(
+                    snapshot.llm.debug_at, CONNECTION_FRESHNESS_SEC["llm"]
                 ),
             ),
             self._build_source_status(
                 snapshot=snapshot,
-                name='joint_states_primary',
-                label='Joint states primary',
-                topic=self._preferred_joint_state_topic,
-                last_seen_at=snapshot.joint_topic_received_at.get(self._preferred_joint_state_topic),
-                freshness_sec=CONNECTION_FRESHNESS_SEC['joint_states'],
-                preferred=self._preferred_joint_state_topic == preferred_joint_topic,
-                active=snapshot.joint_source_topic == self._preferred_joint_state_topic,
+                name="llm_command",
+                label="LLM command echo",
+                topic=self._llm_command_topic,
+                last_seen_at=snapshot.llm.command_at,
+                freshness_sec=CONNECTION_FRESHNESS_SEC["llm"],
+                active=self._is_fresh(
+                    snapshot.llm.command_at, CONNECTION_FRESHNESS_SEC["llm"]
+                ),
+            ),
+            self._build_source_status(
+                snapshot=snapshot,
+                name="readiness",
+                label="HW readiness",
+                topic=self._readiness_topic,
+                last_seen_at=snapshot.readiness.received_at,
+                freshness_sec=CONNECTION_FRESHNESS_SEC["readiness"],
+                detail=snapshot.readiness.status_message,
+            ),
+            self._build_source_status(
+                snapshot=snapshot,
+                name="supervisor_alerts",
+                label="Supervisor alerts",
+                topic=self._supervisor_alert_topic,
+                last_seen_at=snapshot.supervisor_alert.received_at,
+                freshness_sec=CONNECTION_FRESHNESS_SEC["alerts"],
+                detail=snapshot.supervisor_alert.message or None,
+            ),
+            self._build_source_status(
+                snapshot=snapshot,
+                name="robot_status",
+                label="Robot status",
+                topic=self._robot_status_topic,
+                last_seen_at=snapshot.robot_status.received_at,
+                freshness_sec=CONNECTION_FRESHNESS_SEC["robot_status"],
+                active=runtime_mode != RuntimeMode.SIM,
                 detail=(
-                    f'SIM mode prefers {joint_fallback_topic}.'
-                    if runtime_mode == RuntimeMode.SIM and self._preferred_joint_state_topic != preferred_joint_topic
+                    "SIM mode uses /hw_adapter/ready instead of raw /yaskawa/robot_status."
+                    if runtime_mode == RuntimeMode.SIM
                     else None
                 ),
             ),
             self._build_source_status(
                 snapshot=snapshot,
-                name='joint_states_fallback',
-                label='Joint states fallback',
+                name="joint_states_primary",
+                label="Joint states primary",
+                topic=self._preferred_joint_state_topic,
+                last_seen_at=snapshot.joint_topic_received_at.get(
+                    self._preferred_joint_state_topic
+                ),
+                freshness_sec=CONNECTION_FRESHNESS_SEC["joint_states"],
+                preferred=self._preferred_joint_state_topic == preferred_joint_topic,
+                active=snapshot.joint_source_topic == self._preferred_joint_state_topic,
+                detail=(
+                    f"SIM mode prefers {joint_fallback_topic}."
+                    if runtime_mode == RuntimeMode.SIM
+                    and self._preferred_joint_state_topic != preferred_joint_topic
+                    else None
+                ),
+            ),
+            self._build_source_status(
+                snapshot=snapshot,
+                name="joint_states_fallback",
+                label="Joint states fallback",
                 topic=joint_fallback_topic,
                 last_seen_at=snapshot.joint_topic_received_at.get(joint_fallback_topic),
-                freshness_sec=CONNECTION_FRESHNESS_SEC['joint_states'],
+                freshness_sec=CONNECTION_FRESHNESS_SEC["joint_states"],
                 preferred=joint_fallback_topic == preferred_joint_topic,
                 active=snapshot.joint_source_topic == joint_fallback_topic,
             ),
@@ -246,35 +267,37 @@ class TelemetrySnapshotMixin:
         return [
             self._build_source_status(
                 snapshot=snapshot,
-                name='validate_command_service',
-                label='ValidateCommand service',
+                name="validate_command_service",
+                label="ValidateCommand service",
                 topic=self._validate_command_service,
                 last_seen_at=snapshot.validate_command_ready_at,
-                freshness_sec=CONNECTION_FRESHNESS_SEC['command_interface'],
+                freshness_sec=CONNECTION_FRESHNESS_SEC["command_interface"],
                 active=active,
                 detail=(
                     snapshot.validate_command_detail
                     if active
-                    else 'Read-only outside command-capable modes.'
+                    else "Read-only outside command-capable modes."
                 ),
             ),
             self._build_source_status(
                 snapshot=snapshot,
-                name='execute_motion_action',
-                label='ExecuteMotion action',
+                name="execute_motion_action",
+                label="ExecuteMotion action",
                 topic=self._execute_motion_action,
                 last_seen_at=snapshot.execute_motion_ready_at,
-                freshness_sec=CONNECTION_FRESHNESS_SEC['command_interface'],
+                freshness_sec=CONNECTION_FRESHNESS_SEC["command_interface"],
                 active=active,
                 detail=(
                     snapshot.execute_motion_detail
                     if active
-                    else 'Read-only outside command-capable modes.'
+                    else "Read-only outside command-capable modes."
                 ),
             ),
         ]
 
-    def _command_interface_health(self, snapshot: _TelemetryState, runtime_mode: RuntimeMode) -> ConnectionHealth:
+    def _command_interface_health(
+        self, snapshot: _TelemetryState, runtime_mode: RuntimeMode
+    ) -> ConnectionHealth:
         if snapshot.start_error:
             return ConnectionHealth.DOWN
         if runtime_mode not in {RuntimeMode.SIM, RuntimeMode.HARDWARE}:
@@ -288,15 +311,17 @@ class TelemetrySnapshotMixin:
     def _command_interface_active(self, runtime_mode: RuntimeMode) -> bool:
         return runtime_mode in {RuntimeMode.SIM, RuntimeMode.HARDWARE}
 
-    def _command_interface_detail(self, snapshot: _TelemetryState, runtime_mode: RuntimeMode) -> str | None:
+    def _command_interface_detail(
+        self, snapshot: _TelemetryState, runtime_mode: RuntimeMode
+    ) -> str | None:
         if runtime_mode not in {RuntimeMode.SIM, RuntimeMode.HARDWARE}:
-            return 'Command ingress stays read-only outside command-capable modes.'
+            return "Command ingress stays read-only outside command-capable modes."
         parts: list[str] = []
         if snapshot.validate_command_detail:
             parts.append(snapshot.validate_command_detail)
         if snapshot.execute_motion_detail:
             parts.append(snapshot.execute_motion_detail)
-        return '; '.join(parts) if parts else None
+        return "; ".join(parts) if parts else None
 
     def _copy_state_locked(self) -> _TelemetryState:
         return _TelemetryState(
@@ -346,25 +371,45 @@ class TelemetrySnapshotMixin:
 
     def _derive_mode(self, snapshot: _TelemetryState) -> RuntimeMode:
         readiness_text = snapshot.readiness.status_message.lower()
-        if 'sim' in readiness_text:
+        if "sim" in readiness_text:
             return RuntimeMode.SIM
         if snapshot.robot_status.received_at or snapshot.readiness.received_at:
             return RuntimeMode.HARDWARE
         return RuntimeMode.UNKNOWN
 
-    def _derive_robot_status_snapshot(self, snapshot: _TelemetryState) -> RobotStatusSnapshot:
-        if not self._is_fresh(snapshot.robot_status.received_at, CONNECTION_FRESHNESS_SEC['robot_status']):
-            readiness_message = snapshot.readiness.status_message or 'Robot status topic is stale.'
+    def _derive_robot_status_snapshot(
+        self, snapshot: _TelemetryState
+    ) -> RobotStatusSnapshot:
+        if not self._is_fresh(
+            snapshot.robot_status.received_at, CONNECTION_FRESHNESS_SEC["robot_status"]
+        ):
+            readiness_message = (
+                snapshot.readiness.status_message or "Robot status topic is stale."
+            )
             return RobotStatusSnapshot(readiness_message=readiness_message)
 
         drives_powered = snapshot.robot_status.drives_powered
         e_stopped = snapshot.robot_status.e_stopped
-        in_error = snapshot.robot_status.in_error or bool(snapshot.robot_status.error_codes)
+        in_error = snapshot.robot_status.in_error or bool(
+            snapshot.robot_status.error_codes
+        )
 
         return RobotStatusSnapshot(
-            servo_state='ON' if drives_powered is True else 'OFF' if drives_powered is False else 'UNKNOWN',
-            e_stop='ACTIVE' if e_stopped is True else 'CLEAR' if e_stopped is False else 'UNKNOWN',
-            alarm_state='ACTIVE' if in_error else 'NONE' if in_error is False else 'UNKNOWN',
+            servo_state="ON"
+            if drives_powered is True
+            else "OFF"
+            if drives_powered is False
+            else "UNKNOWN",
+            e_stop="ACTIVE"
+            if e_stopped is True
+            else "CLEAR"
+            if e_stopped is False
+            else "UNKNOWN",
+            alarm_state="ACTIVE"
+            if in_error
+            else "NONE"
+            if in_error is False
+            else "UNKNOWN",
             motion_mode=self._robot_mode_to_string(snapshot.robot_status.mode),
             trajectory_points_used=None,
             trajectory_points_capacity=None,
@@ -377,52 +422,93 @@ class TelemetrySnapshotMixin:
         robot_status: RobotStatusSnapshot,
     ) -> tuple[SystemRuntimeState, str]:
         if snapshot.start_error:
-            return SystemRuntimeState.LOST_CONN, f'ROS telemetry bridge unavailable: {snapshot.start_error}'
+            return (
+                SystemRuntimeState.LOST_CONN,
+                f"ROS telemetry bridge unavailable: {snapshot.start_error}",
+            )
 
         ros_health = self._derive_ros_health(snapshot)
         if ros_health == ConnectionHealth.DOWN:
-            return SystemRuntimeState.LOST_CONN, 'No fresh ROS telemetry received from configured read-only topics.'
+            return (
+                SystemRuntimeState.LOST_CONN,
+                "No fresh ROS telemetry received from configured read-only topics.",
+            )
 
-        alert_text = ' '.join(
+        alert_text = " ".join(
             filter(
                 None,
                 [
                     snapshot.supervisor_alert.message,
-                    snapshot.supervisor_alert.values.get('reason', ''),
-                    snapshot.supervisor_alert.values.get('message', ''),
+                    snapshot.supervisor_alert.values.get("reason", ""),
+                    snapshot.supervisor_alert.values.get("message", ""),
                 ],
             )
         ).lower()
 
         if snapshot.robot_status.e_stopped is True:
-            return SystemRuntimeState.ESTOP, 'Emergency stop is active according to /yaskawa/robot_status.'
+            return (
+                SystemRuntimeState.ESTOP,
+                "Emergency stop is active according to /yaskawa/robot_status.",
+            )
 
-        if 'timeout' in alert_text:
-            return SystemRuntimeState.TIMEOUT, snapshot.supervisor_alert.message or 'Supervisor reported a timeout condition.'
+        if "timeout" in alert_text:
+            return (
+                SystemRuntimeState.TIMEOUT,
+                snapshot.supervisor_alert.message
+                or "Supervisor reported a timeout condition.",
+            )
 
-        if snapshot.robot_status.in_error is True or bool(snapshot.robot_status.error_codes):
-            return SystemRuntimeState.FAULT, 'Robot controller reports an active fault condition.'
+        if snapshot.robot_status.in_error is True or bool(
+            snapshot.robot_status.error_codes
+        ):
+            return (
+                SystemRuntimeState.FAULT,
+                "Robot controller reports an active fault condition.",
+            )
 
-        if self._is_fresh(snapshot.supervisor_alert.received_at, CONNECTION_FRESHNESS_SEC['alerts']):
+        if self._is_fresh(
+            snapshot.supervisor_alert.received_at, CONNECTION_FRESHNESS_SEC["alerts"]
+        ):
             alert_level = snapshot.supervisor_alert.level
             if alert_level is not None and alert_level >= 2:
-                return SystemRuntimeState.FAULT, snapshot.supervisor_alert.message or 'Supervisor alert level indicates a fault.'
-            if 'hold' in alert_text:
-                return SystemRuntimeState.HOLD, snapshot.supervisor_alert.message or 'Supervisor reported HOLD state.'
-            if 'blocked' in alert_text:
-                return SystemRuntimeState.SAFETY_BLOCKED, snapshot.supervisor_alert.message or 'Supervisor reported safety blocked.'
+                return (
+                    SystemRuntimeState.FAULT,
+                    snapshot.supervisor_alert.message
+                    or "Supervisor alert level indicates a fault.",
+                )
+            if "hold" in alert_text:
+                return (
+                    SystemRuntimeState.HOLD,
+                    snapshot.supervisor_alert.message
+                    or "Supervisor reported HOLD state.",
+                )
+            if "blocked" in alert_text:
+                return (
+                    SystemRuntimeState.SAFETY_BLOCKED,
+                    snapshot.supervisor_alert.message
+                    or "Supervisor reported safety blocked.",
+                )
 
-        if self._is_fresh(snapshot.readiness.received_at, CONNECTION_FRESHNESS_SEC['readiness']):
+        if self._is_fresh(
+            snapshot.readiness.received_at, CONNECTION_FRESHNESS_SEC["readiness"]
+        ):
             if snapshot.readiness.ready is False:
-                return SystemRuntimeState.SAFETY_BLOCKED, snapshot.readiness.status_message
+                return (
+                    SystemRuntimeState.SAFETY_BLOCKED,
+                    snapshot.readiness.status_message,
+                )
 
-        return SystemRuntimeState.NORMAL, robot_status.readiness_message or 'Telemetry bridge connected and no blocking state is active.'
+        return (
+            SystemRuntimeState.NORMAL,
+            robot_status.readiness_message
+            or "Telemetry bridge connected and no blocking state is active.",
+        )
 
     def _derive_ros_health(self, snapshot: _TelemetryState) -> ConnectionHealth:
         if snapshot.start_error:
             return ConnectionHealth.DOWN
         if any(
-            self._is_fresh(candidate, CONNECTION_FRESHNESS_SEC['ros'])
+            self._is_fresh(candidate, CONNECTION_FRESHNESS_SEC["ros"])
             for candidate in (
                 snapshot.robot_status.received_at,
                 snapshot.readiness.received_at,
@@ -433,7 +519,7 @@ class TelemetrySnapshotMixin:
         ):
             return ConnectionHealth.HEALTHY
         if snapshot.ros_started_at is not None:
-            if self._is_fresh(snapshot.ros_started_at, CONNECTION_FRESHNESS_SEC['ros']):
+            if self._is_fresh(snapshot.ros_started_at, CONNECTION_FRESHNESS_SEC["ros"]):
                 return ConnectionHealth.DEGRADED
             return ConnectionHealth.DOWN
         return ConnectionHealth.DOWN
@@ -446,7 +532,7 @@ class TelemetrySnapshotMixin:
         if snapshot.start_error:
             return ConnectionHealth.DOWN
         if any(
-            self._is_fresh(candidate, CONNECTION_FRESHNESS_SEC['llm'])
+            self._is_fresh(candidate, CONNECTION_FRESHNESS_SEC["llm"])
             for candidate in (
                 snapshot.llm.gateway_status_at,
                 snapshot.llm.debug_at,
@@ -465,9 +551,17 @@ class TelemetrySnapshotMixin:
     ) -> ConnectionHealth:
         if snapshot.start_error:
             return ConnectionHealth.DOWN
-        if self._is_fresh(snapshot.readiness.received_at, CONNECTION_FRESHNESS_SEC['readiness']):
-            return ConnectionHealth.HEALTHY if snapshot.readiness.ready else ConnectionHealth.DEGRADED
-        if self._is_fresh(snapshot.supervisor_alert.received_at, CONNECTION_FRESHNESS_SEC['alerts']):
+        if self._is_fresh(
+            snapshot.readiness.received_at, CONNECTION_FRESHNESS_SEC["readiness"]
+        ):
+            return (
+                ConnectionHealth.HEALTHY
+                if snapshot.readiness.ready
+                else ConnectionHealth.DEGRADED
+            )
+        if self._is_fresh(
+            snapshot.supervisor_alert.received_at, CONNECTION_FRESHNESS_SEC["alerts"]
+        ):
             return ConnectionHealth.DEGRADED
         if ros_health != ConnectionHealth.DOWN:
             return ConnectionHealth.DEGRADED
@@ -480,9 +574,14 @@ class TelemetrySnapshotMixin:
     ) -> ConnectionHealth:
         if snapshot.start_error:
             return ConnectionHealth.DOWN
-        if self._is_fresh(snapshot.robot_status.received_at, CONNECTION_FRESHNESS_SEC['robot_status']):
+        if self._is_fresh(
+            snapshot.robot_status.received_at, CONNECTION_FRESHNESS_SEC["robot_status"]
+        ):
             return ConnectionHealth.HEALTHY
-        if ros_health != ConnectionHealth.DOWN and self._derive_mode(snapshot) == RuntimeMode.SIM:
+        if (
+            ros_health != ConnectionHealth.DOWN
+            and self._derive_mode(snapshot) == RuntimeMode.SIM
+        ):
             return ConnectionHealth.DOWN
         if ros_health != ConnectionHealth.DOWN:
             return ConnectionHealth.DEGRADED
@@ -501,7 +600,9 @@ class TelemetrySnapshotMixin:
         active: bool = True,
         detail: str | None = None,
     ) -> TelemetrySourceSnapshot:
-        freshness_state = self._source_freshness_state(snapshot, last_seen_at, freshness_sec)
+        freshness_state = self._source_freshness_state(
+            snapshot, last_seen_at, freshness_sec
+        )
         return TelemetrySourceSnapshot(
             name=name,
             label=label,
@@ -531,11 +632,11 @@ class TelemetrySnapshotMixin:
         return TelemetryFreshnessState.STALE
 
     def _robot_mode_to_string(self, mode: int | None) -> str | None:
-        industrial_robot_mode = getattr(self, '_industrial_robot_mode', None)
+        industrial_robot_mode = getattr(self, "_industrial_robot_mode", None)
         if mode is None or industrial_robot_mode is None:
             return None
         if mode == industrial_robot_mode.AUTO:
-            return 'AUTO'
+            return "AUTO"
         if mode == industrial_robot_mode.MANUAL:
-            return 'MANUAL'
-        return 'UNKNOWN'
+            return "MANUAL"
+        return "UNKNOWN"

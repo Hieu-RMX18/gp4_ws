@@ -15,10 +15,10 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
-namespace hw_adapter
-{
-struct TrajectoryExecutionRequest
-{
+#include "motion_core/joint_position_guard.hpp"
+
+namespace hw_adapter {
+struct TrajectoryExecutionRequest {
   trajectory_msgs::msg::JointTrajectory trajectory;
   std::chrono::milliseconds result_timeout{std::chrono::seconds(30)};
   std::string command_id;
@@ -29,8 +29,7 @@ struct TrajectoryExecutionRequest
   bool enforce_start_state_match = false;
 };
 
-struct TrajectoryExecutionResult
-{
+struct TrajectoryExecutionResult {
   bool accepted = false;
   bool completed = false;
   bool canceled = false;
@@ -58,8 +57,7 @@ struct TrajectoryExecutionResult
   std::string message = "trajectory not executed";
 };
 
-struct ExecutionRuntimeSnapshot
-{
+struct ExecutionRuntimeSnapshot {
   bool joint_state_valid = false;
   std::vector<double> current_joint_positions;
   builtin_interfaces::msg::Time joint_state_stamp;
@@ -71,56 +69,54 @@ struct ExecutionRuntimeSnapshot
   std::string failure_reason;
 };
 
-class TrajectoryExecutor
-{
+class TrajectoryExecutor {
 public:
   using FollowJointTrajectory = control_msgs::action::FollowJointTrajectory;
   using RuntimeSnapshotProvider = std::function<ExecutionRuntimeSnapshot()>;
   static constexpr std::size_t kMaxTrajectoryPoints = 200;
 
   explicit TrajectoryExecutor(
-    rclcpp::Node & node,
-    std::string action_name = "/yaskawa/follow_joint_trajectory",
-    RuntimeSnapshotProvider runtime_snapshot_provider = {},
-    std::chrono::milliseconds default_timeout = std::chrono::seconds(30),
-    std::vector<std::string> canonical_joint_names = {},
-    std::chrono::milliseconds trajectory_header_max_age = std::chrono::milliseconds(200),
-    double start_state_max_abs_delta_rad = 0.01,
-    double start_state_max_l2_delta_rad = 0.02);
+      rclcpp::Node &node,
+      std::string action_name = "/yaskawa/follow_joint_trajectory",
+      RuntimeSnapshotProvider runtime_snapshot_provider = {},
+      std::chrono::milliseconds default_timeout = std::chrono::seconds(30),
+      std::vector<std::string> canonical_joint_names = {},
+      std::chrono::milliseconds trajectory_header_max_age =
+          std::chrono::milliseconds(200),
+      double start_state_max_abs_delta_rad = 0.01,
+      double start_state_max_l2_delta_rad = 0.02,
+      motion_core::JointPositionGuard joint_position_guard =
+          motion_core::JointPositionGuard{});
 
-  const std::string & action_name() const;
+  const std::string &action_name() const;
   bool wait_for_server(std::chrono::milliseconds timeout) const;
-  bool validate_trajectory_request(
-    const trajectory_msgs::msg::JointTrajectory & traj,
-    std::string & reason) const;
-  bool execute(const trajectory_msgs::msg::JointTrajectory & traj, std::string & reason);
-  bool execute_with_timeout(
-    const trajectory_msgs::msg::JointTrajectory & traj,
-    double timeout_sec,
-    std::string & reason);
-  TrajectoryExecutionResult execute_blocking(const TrajectoryExecutionRequest & request);
+  bool
+  validate_trajectory_request(const trajectory_msgs::msg::JointTrajectory &traj,
+                              std::string &reason) const;
+  bool execute(const trajectory_msgs::msg::JointTrajectory &traj,
+               std::string &reason);
+  bool execute_with_timeout(const trajectory_msgs::msg::JointTrajectory &traj,
+                            double timeout_sec, std::string &reason);
+  TrajectoryExecutionResult
+  execute_blocking(const TrajectoryExecutionRequest &request);
 
 private:
-  struct StartStateGateResult
-  {
+  struct StartStateGateResult {
     bool valid = false;
     double max_abs_delta = 0.0;
     double l2_delta = 0.0;
     std::string reason;
   };
 
-  bool validate_trajectory(
-    const trajectory_msgs::msg::JointTrajectory & traj,
-    std::string & reason) const;
-  bool validate_runtime_snapshot(
-    const ExecutionRuntimeSnapshot & snapshot,
-    std::string & reason) const;
-  StartStateGateResult evaluate_start_state_gate(
-    const std::vector<double> & expected,
-    const std::vector<double> & actual) const;
-  void log_dispatch_diagnostics(
-    const TrajectoryExecutionRequest & request,
-    const TrajectoryExecutionResult & result) const;
+  bool validate_trajectory(const trajectory_msgs::msg::JointTrajectory &traj,
+                           std::string &reason) const;
+  bool validate_runtime_snapshot(const ExecutionRuntimeSnapshot &snapshot,
+                                 std::string &reason) const;
+  StartStateGateResult
+  evaluate_start_state_gate(const std::vector<double> &expected,
+                            const std::vector<double> &actual) const;
+  void log_dispatch_diagnostics(const TrajectoryExecutionRequest &request,
+                                const TrajectoryExecutionResult &result) const;
   static std::string decode_action_result_name(int32_t result_code);
   static std::string decode_controller_error_name(int32_t error_code);
 
@@ -134,5 +130,6 @@ private:
   double start_state_max_abs_delta_rad_;
   double start_state_max_l2_delta_rad_;
   rclcpp_action::Client<FollowJointTrajectory>::SharedPtr action_client_;
+  motion_core::JointPositionGuard joint_position_guard_;
 };
-}  // namespace hw_adapter
+} // namespace hw_adapter

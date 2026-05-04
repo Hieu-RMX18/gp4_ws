@@ -2,7 +2,6 @@ from pathlib import Path
 import math
 import xml.etree.ElementTree as ET
 
-import pytest
 import yaml
 
 
@@ -124,7 +123,9 @@ def test_scene_objects_use_station_mesh_only():
     station_link = xacro_root.find(".//link[@name='station_link']")
     assert station_link is not None
     visual_origin = station_link.find("./visual/origin")
-    station_to_robot_origin = xacro_root.find(".//joint[@name='station_to_robot']/origin")
+    station_to_robot_origin = xacro_root.find(
+        ".//joint[@name='station_to_robot']/origin"
+    )
     assert visual_origin is not None and station_to_robot_origin is not None
 
     r_sm = _mat_from_rpy(*_parse_vec3(visual_origin.attrib.get("rpy")))
@@ -132,14 +133,18 @@ def test_scene_objects_use_station_mesh_only():
     r_bs = _mat_transpose(r_sb)
     expected_orientation = _quat_from_matrix(_mat_mul(r_bs, r_sm))
 
-    actual_orientation = tuple(float(v) for v in station_mesh.get("pose", {}).get("orientation", []))
+    actual_orientation = tuple(
+        float(v) for v in station_mesh.get("pose", {}).get("orientation", [])
+    )
     assert len(actual_orientation) == 4
     assert _quat_equivalent(actual_orientation, expected_orientation, tol=1e-4)
 
     # Cross-check MoveIt embedded station visual transform against scene_objects orientation.
     moveit_xacro_path = root / "gp4_moveit_config" / "config" / "motoman_gp4.urdf.xacro"
     moveit_root = ET.fromstring(moveit_xacro_path.read_text())
-    base_to_station_visual = moveit_root.find(".//joint[@name='base_to_station_visual']/origin")
+    base_to_station_visual = moveit_root.find(
+        ".//joint[@name='base_to_station_visual']/origin"
+    )
     assert base_to_station_visual is not None
     r_bsvis = _mat_from_rpy(*_parse_vec3(base_to_station_visual.attrib.get("rpy")))
     moveit_orientation = _quat_from_matrix(r_bsvis)
@@ -147,7 +152,9 @@ def test_scene_objects_use_station_mesh_only():
 
 
 def test_safety_forbidden_zones_defined_for_station_policy():
-    safety_rules_path = Path(__file__).resolve().parents[1] / "config" / "safety_rules.yaml"
+    safety_rules_path = (
+        Path(__file__).resolve().parents[1] / "config" / "safety_rules.yaml"
+    )
     safety_rules = _load_yaml(safety_rules_path)
     zones = safety_rules.get("forbidden_zones", [])
     assert isinstance(zones, list)

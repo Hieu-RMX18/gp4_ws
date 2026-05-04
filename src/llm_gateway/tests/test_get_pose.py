@@ -124,6 +124,7 @@ class ImmediateFuture:
             raise self._error
         return self._result
 
+
 @pytest.mark.ros_integration
 def test_gateway_routes_get_pose_to_query_service(ros_integration_context):
     """GET_POSE must go through query service, NOT ValidateCommand/ExecuteMotion."""
@@ -179,8 +180,9 @@ def test_gateway_routes_get_pose_to_query_service(ros_integration_context):
     node._get_pose_client.call_async.assert_called_once()
 
     # Verify debug output contains pose data
-    assert any(m.get("status") == "query_result" for m in debug_messages), \
-        f"Expected query_result in debug, got: {debug_messages}"
+    assert any(
+        m.get("status") == "query_result" for m in debug_messages
+    ), f"Expected query_result in debug, got: {debug_messages}"
     query_msg = next(m for m in debug_messages if m["status"] == "query_result")
     assert query_msg["current_pose"]["position"]["x"] == 0.35
     assert "query_succeeded" in statuses
@@ -189,7 +191,9 @@ def test_gateway_routes_get_pose_to_query_service(ros_integration_context):
 
 
 @pytest.mark.ros_integration
-def test_gateway_fails_closed_when_get_pose_service_unavailable(ros_integration_context):
+def test_gateway_fails_closed_when_get_pose_service_unavailable(
+    ros_integration_context,
+):
     """GET_POSE must fail-closed when the query service is unavailable."""
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
@@ -271,12 +275,14 @@ def test_gateway_get_pose_does_not_affect_motion_path(ros_integration_context):
     home_payload = json.dumps({"primitive_type": "HOME"})
     node._llm_client.generate_response = MagicMock(return_value=home_payload)
     node._validate_client.wait_for_service = MagicMock(return_value=True)
-    sanitized_json = json.dumps({
-        "primitive_type": "HOME",
-        "velocity_scale": 0.06,
-        "acceleration_scale": 0.06,
-        "planner_id": "PILZ_PTP",
-    })
+    sanitized_json = json.dumps(
+        {
+            "primitive_type": "HOME",
+            "velocity_scale": 0.06,
+            "acceleration_scale": 0.06,
+            "planner_id": "PILZ_PTP",
+        }
+    )
     node._validate_client.call_async = MagicMock(
         return_value=ImmediateFuture(
             SimpleNamespace(valid=True, reason="OK", sanitized_json=sanitized_json)

@@ -7,12 +7,9 @@
 
 #include "primitives/primitive_home.hpp"
 
-namespace primitives
-{
-namespace
-{
-class FakeHomeBackend final : public HomeExecutionBackend
-{
+namespace primitives {
+namespace {
+class FakeHomeBackend final : public HomeExecutionBackend {
 public:
   bool server_available = true;
   bool named_target_available = true;
@@ -21,10 +18,8 @@ public:
 
   bool plan_called = false;
 
-  bool wait_for_servers(std::string & reason) override
-  {
-    if (server_available)
-    {
+  bool wait_for_servers(std::string &reason) override {
+    if (server_available) {
       reason.clear();
       return true;
     }
@@ -33,10 +28,8 @@ public:
     return false;
   }
 
-  bool set_named_target_home(std::string & reason) override
-  {
-    if (named_target_available)
-    {
+  bool set_named_target_home(std::string &reason) override {
+    if (named_target_available) {
       reason.clear();
       return true;
     }
@@ -45,13 +38,10 @@ public:
     return false;
   }
 
-  HomeScalingConfig scaling_config() const override
-  {
-    return scales;
-  }
+  HomeScalingConfig scaling_config() const override { return scales; }
 
-  PrimitiveResult plan_with_pipeline(double velocity_scale, double acceleration_scale) override
-  {
+  PrimitiveResult plan_with_pipeline(double velocity_scale,
+                                     double acceleration_scale) override {
     (void)velocity_scale;
     (void)acceleration_scale;
     plan_called = true;
@@ -59,8 +49,7 @@ public:
   }
 };
 
-TEST(PrimitiveHomeTest, HomeSuccessWithNamedTargetAvailable)
-{
+TEST(PrimitiveHomeTest, HomeSuccessWithNamedTargetAvailable) {
   PrimitiveHome primitive;
   FakeHomeBackend backend;
 
@@ -76,8 +65,7 @@ TEST(PrimitiveHomeTest, HomeSuccessWithNamedTargetAvailable)
   EXPECT_TRUE(backend.plan_called);
 }
 
-TEST(PrimitiveHomeTest, HomeFailureWhenNamedTargetMissing)
-{
+TEST(PrimitiveHomeTest, HomeFailureWhenNamedTargetMissing) {
   PrimitiveHome primitive;
   FakeHomeBackend backend;
 
@@ -89,5 +77,5 @@ TEST(PrimitiveHomeTest, HomeFailureWhenNamedTargetMissing)
   EXPECT_EQ(result.reason, PrimitiveFailReason::NAMED_TARGET_NOT_FOUND);
   EXPECT_FALSE(backend.plan_called);
 }
-}  // namespace
-}  // namespace primitives
+} // namespace
+} // namespace primitives

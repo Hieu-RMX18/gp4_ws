@@ -29,7 +29,9 @@ def _decode_arguments(arguments: Any) -> Dict[str, Any]:
     if isinstance(arguments, dict):
         return arguments
     if isinstance(arguments, str):
-        return _load_json_object(arguments, "Function arguments JSON must decode to an object.")
+        return _load_json_object(
+            arguments, "Function arguments JSON must decode to an object."
+        )
     raise ValueError("Function arguments must be an object or JSON string.")
 
 
@@ -57,10 +59,14 @@ def _parse_message_content(content: Any) -> Dict[str, Any]:
                 text_value = block.get("text")
                 if isinstance(text_value, str):
                     text_parts.append(text_value)
-                elif isinstance(text_value, dict) and isinstance(text_value.get("value"), str):
+                elif isinstance(text_value, dict) and isinstance(
+                    text_value.get("value"), str
+                ):
                     text_parts.append(text_value["value"])
         if text_parts:
-            return _load_json_object("".join(text_parts), "Model content must be a JSON object.")
+            return _load_json_object(
+                "".join(text_parts), "Model content must be a JSON object."
+            )
 
     raise ValueError("Model content must be a JSON object.")
 
@@ -109,8 +115,14 @@ def parse_llm_output(text: str) -> Dict[str, Any]:
         first_call = tool_calls[0]
         if isinstance(first_call, dict):
             function_data = first_call.get("function")
-            if isinstance(function_data, dict) and "name" in function_data and "arguments" in function_data:
-                return _canonical_command(function_data["name"], function_data["arguments"])
+            if (
+                isinstance(function_data, dict)
+                and "name" in function_data
+                and "arguments" in function_data
+            ):
+                return _canonical_command(
+                    function_data["name"], function_data["arguments"]
+                )
             if "name" in first_call and "arguments" in first_call:
                 return _canonical_command(first_call["name"], first_call["arguments"])
 
@@ -123,9 +135,13 @@ def parse_llm_output(text: str) -> Dict[str, Any]:
             if isinstance(message, dict):
                 message_function_call = message.get("function_call")
                 if isinstance(message_function_call, dict):
-                    if "name" in message_function_call and "arguments" in message_function_call:
+                    if (
+                        "name" in message_function_call
+                        and "arguments" in message_function_call
+                    ):
                         return _canonical_command(
-                            message_function_call["name"], message_function_call["arguments"]
+                            message_function_call["name"],
+                            message_function_call["arguments"],
                         )
 
                 message_tool_calls = message.get("tool_calls")
@@ -138,9 +154,13 @@ def parse_llm_output(text: str) -> Dict[str, Any]:
                             and "name" in function_data
                             and "arguments" in function_data
                         ):
-                            return _canonical_command(function_data["name"], function_data["arguments"])
+                            return _canonical_command(
+                                function_data["name"], function_data["arguments"]
+                            )
                         if "name" in first_call and "arguments" in first_call:
-                            return _canonical_command(first_call["name"], first_call["arguments"])
+                            return _canonical_command(
+                                first_call["name"], first_call["arguments"]
+                            )
 
                 if "content" in message:
                     return _parse_message_content(message["content"])
@@ -152,7 +172,9 @@ def parse_llm_output(text: str) -> Dict[str, Any]:
 
     # OpenAI responses wrapper.
     if isinstance(payload.get("output_text"), str):
-        return _load_json_object(payload["output_text"], "Model content must be a JSON object.")
+        return _load_json_object(
+            payload["output_text"], "Model content must be a JSON object."
+        )
 
     output = payload.get("output")
     if isinstance(output, list):

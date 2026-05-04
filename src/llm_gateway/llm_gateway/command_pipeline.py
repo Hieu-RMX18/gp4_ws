@@ -13,6 +13,8 @@ import json
 import logging
 from typing import Any, Callable, Dict, Optional, Protocol
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class _SchemaValidatorLike(Protocol):
     """Minimal protocol matching llm_gateway.schema_validator.SchemaValidator."""
@@ -97,10 +99,28 @@ def hydrate_draw_workplane(
 
     current_pose = fetch_current_pose("base_link")
     if current_pose is None:
-        raise ValueError(
-            "missing_workplane: tool mode requires current pose, "
-            "but /get_current_pose is unavailable"
+        # W2.T5: fallback to base-frame workplane from SSOT instead of hard error.
+        _LOGGER.warning(
+            "hydrate_draw_workplane: /get_current_pose unavailable; "
+            "falling back to base-frame workplane from safety_rules.yaml"
         )
+        try:
+            from safety.policy_loader import load_safety_rules
+
+            drawing_cfg = load_safety_rules().get("drawing", {})
+            fb = drawing_cfg.get("fallback_workplane", {})
+            fb_pose = fb.get("pose", {})
+            current_pose = {
+                "position": fb_pose.get("position", {"x": 0.30, "y": 0.0, "z": 0.20}),
+                "orientation": fb_pose.get(
+                    "orientation", {"x": 1.0, "y": 0.0, "z": 0.0, "w": 0.0}
+                ),
+            }
+        except Exception:
+            raise ValueError(
+                "missing_workplane: tool mode requires current pose, "
+                "but /get_current_pose is unavailable"
+            )
 
     hydrated_workplane = dict(workplane)
     hydrated_workplane["origin"] = current_pose

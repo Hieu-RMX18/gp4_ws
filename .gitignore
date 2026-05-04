@@ -13,6 +13,15 @@
 !docs/
 !docs/**
 
+# 4a. Governance + CI files (W0)
+!AGENTS.md
+!.pre-commit-config.yaml
+!MIGRATION-W*.md
+!.github/
+!.github/**
+!tools/
+!tools/**
+
 # 4. (Tùy chọn) Chặn các folder rác bên trong src nếu có
 # Ví dụ: chặn các folder dependency bạn đã liệt kê trong ảnh 
 # nếu bạn không muốn đẩy code của thư viện bên thứ 3 lên

@@ -22,6 +22,7 @@ find_package(interfaces REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(industrial_msgs REQUIRED)
+find_package(motion_core REQUIRED)
 find_package(motoros2_interfaces QUIET)
 
 add_library(${PROJECT_NAME}_components SHARED
@@ -55,6 +56,10 @@ ament_target_dependencies(${PROJECT_NAME}_components
   moveit_msgs
   pluginlib
   industrial_msgs
+)
+# Link motion_core library only (not the node executable which is also in the export set)
+target_link_libraries(${PROJECT_NAME}_components
+  motion_core::motion_core_components
 )
 
 if(motoros2_interfaces_FOUND)
@@ -101,6 +106,7 @@ ament_export_dependencies(
   moveit_msgs
   pluginlib
   industrial_msgs
+  motion_core
 )
 
 if(motoros2_interfaces_FOUND)

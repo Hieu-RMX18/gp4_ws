@@ -20,24 +20,20 @@
 #define HW_ADAPTER_HAS_TOOL_IO_INTERFACES 0
 #endif
 
-namespace hw_adapter
-{
-struct ToolServiceNames
-{
+namespace hw_adapter {
+struct ToolServiceNames {
   std::string read_single_io;
   std::string write_single_io;
 };
 
-struct ToolState
-{
+struct ToolState {
   uint32_t address = 0U;
   int32_t raw_value = 0;
   bool active = false;
   std::string detail = "tool IO state available";
 };
 
-struct ToolStateSnapshot
-{
+struct ToolStateSnapshot {
   bool motoros2_interfaces_available = false;
   bool read_service_configured = false;
   bool write_service_configured = false;
@@ -47,14 +43,12 @@ struct ToolStateSnapshot
   std::string status_message = "tool IO is not configured";
 };
 
-class ToolStateMonitor
-{
+class ToolStateMonitor {
 public:
   explicit ToolStateMonitor(
-    rclcpp::Node & node,
-    ToolServiceNames service_names = {},
-    uint32_t tool_io_address = 0U,
-    std::chrono::milliseconds poll_period = std::chrono::milliseconds(250));
+      rclcpp::Node &node, ToolServiceNames service_names = {},
+      uint32_t tool_io_address = 0U,
+      std::chrono::milliseconds poll_period = std::chrono::milliseconds(250));
 
   ToolStateSnapshot snapshot() const;
   bool io_services_configured() const;
@@ -70,11 +64,10 @@ private:
 
   void polling_timer_callback();
 #if HW_ADAPTER_HAS_TOOL_IO_INTERFACES
-  void handle_read_response(
-    uint64_t request_sequence,
-    ReadSingleIOClient::SharedFuture future);
+  void handle_read_response(uint64_t request_sequence,
+                            ReadSingleIOClient::SharedFuture future);
 #endif
-  void set_unknown_state(const std::string & status_message);
+  void set_unknown_state(const std::string &status_message);
 
   rclcpp::Logger logger_;
   ToolServiceNames service_names_;
@@ -97,4 +90,4 @@ private:
 #endif
   rclcpp::TimerBase::SharedPtr poll_timer_;
 };
-}  // namespace hw_adapter
+} // namespace hw_adapter

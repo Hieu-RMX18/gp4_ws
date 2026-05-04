@@ -1,4 +1,5 @@
 """Canonical GP4 robot constants — single source of truth."""
+
 from __future__ import annotations
 
 GP4_JOINT_NAMES: tuple[str, ...] = (

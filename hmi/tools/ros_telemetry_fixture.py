@@ -35,6 +35,7 @@ try:
     from rclpy.executors import ExternalShutdownException
     from rclpy.node import Node
     from std_msgs.msg import String
+
     JointState = _load_joint_state_type()
 except Exception as exc:  # pragma: no cover - depends on sourced ROS environment
     print(f"ros_telemetry_fixture import error: {exc}", file=sys.stderr)
@@ -262,11 +263,21 @@ class TelemetryFixtureNode(Node):
         self._gateway_pub = self.create_publisher(String, "/gateway_status", 10)
         self._llm_debug_pub = self.create_publisher(String, "/llm_debug", 10)
         self._llm_command_pub = self.create_publisher(String, "/llm_command", 10)
-        self._readiness_pub = self.create_publisher(RobotReadiness, "/hw_adapter/ready", 10)
-        self._alerts_pub = self.create_publisher(DiagnosticStatus, "/supervisor/alerts", 10)
-        self._robot_status_pub = self.create_publisher(RobotStatus, "/yaskawa/robot_status", 10)
-        self._joint_primary_pub = self.create_publisher(JointState, "/yaskawa/joint_states", 10)
-        self._joint_fallback_pub = self.create_publisher(JointState, "/joint_states", 10)
+        self._readiness_pub = self.create_publisher(
+            RobotReadiness, "/hw_adapter/ready", 10
+        )
+        self._alerts_pub = self.create_publisher(
+            DiagnosticStatus, "/supervisor/alerts", 10
+        )
+        self._robot_status_pub = self.create_publisher(
+            RobotStatus, "/yaskawa/robot_status", 10
+        )
+        self._joint_primary_pub = self.create_publisher(
+            JointState, "/yaskawa/joint_states", 10
+        )
+        self._joint_fallback_pub = self.create_publisher(
+            JointState, "/joint_states", 10
+        )
 
         self.create_timer(0.01, self._tick)
 
@@ -290,9 +301,27 @@ class TelemetryFixtureNode(Node):
                 f"Scenario '{self._scenario_name}' entering phase '{phase.name}'."
             )
 
-        self._maybe_publish_string("gateway_status", phase.publish_gateway_status, phase.status_rate_hz, self._gateway_pub, phase.gateway_text)
-        self._maybe_publish_string("llm_debug", phase.publish_llm_debug, phase.status_rate_hz, self._llm_debug_pub, phase.llm_debug_text)
-        self._maybe_publish_string("llm_command", phase.publish_llm_command, phase.status_rate_hz, self._llm_command_pub, phase.llm_command_text)
+        self._maybe_publish_string(
+            "gateway_status",
+            phase.publish_gateway_status,
+            phase.status_rate_hz,
+            self._gateway_pub,
+            phase.gateway_text,
+        )
+        self._maybe_publish_string(
+            "llm_debug",
+            phase.publish_llm_debug,
+            phase.status_rate_hz,
+            self._llm_debug_pub,
+            phase.llm_debug_text,
+        )
+        self._maybe_publish_string(
+            "llm_command",
+            phase.publish_llm_command,
+            phase.status_rate_hz,
+            self._llm_command_pub,
+            phase.llm_command_text,
+        )
 
         if phase.publish_readiness:
             self._maybe_publish(
@@ -426,7 +455,9 @@ class TelemetryFixtureNode(Node):
 
 def build_parser() -> argparse.ArgumentParser:
     scenarios = build_scenarios()
-    parser = argparse.ArgumentParser(description="Read-only ROS telemetry fixture for HMI validation.")
+    parser = argparse.ArgumentParser(
+        description="Read-only ROS telemetry fixture for HMI validation."
+    )
     parser.add_argument(
         "--scenario",
         choices=sorted(scenarios.keys()),

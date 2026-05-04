@@ -23,6 +23,7 @@ properties:
       - ALARM_RESET
       - MOVE_JOINTS
       - BLENDED_SEQUENCE
+      - MACRO
   target_pose:
     type: object
     additionalProperties: false
@@ -371,3 +372,17 @@ allOf:
     then:
       required:
         - sequence_steps
+  - if:
+      properties:
+        primitive_type:
+          const: MACRO
+    then:
+      required:
+        - steps
+      properties:
+        steps:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items:
+            $ref: "#"

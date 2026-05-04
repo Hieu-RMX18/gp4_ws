@@ -44,6 +44,7 @@ _FROZEN_PUBLIC_PRIMITIVES = {
     "IO_SET",
     "ALARM_RESET",
     "BLENDED_SEQUENCE",
+    "MACRO",
 }
 # These primitives are operational/query commands and do not need planner defaults.
 _NON_PLANNING_PRIMITIVES = {
@@ -53,6 +54,7 @@ _NON_PLANNING_PRIMITIVES = {
     "STOP",
     "IO_SET",
     "ALARM_RESET",
+    "MACRO",
 }
 
 # Mapping from semantic intents to the primitive_type(s) they produce.
@@ -71,8 +73,8 @@ _INTENT_TO_PRIMITIVES = {
     "move_joint": {"MOVE_JOINT"},
     "move_joints": {"MOVE_JOINTS"},
     "io_set": {"IO_SET"},
-    "draw_shape": {"PTP", "CARTESIAN_PATH", "BLENDED_SEQUENCE"},  # macro expander
-    "draw_text": {"PTP", "CARTESIAN_PATH", "BLENDED_SEQUENCE"},  # macro expander
+    "draw_shape": {"PTP", "CARTESIAN_PATH", "BLENDED_SEQUENCE", "MACRO"},
+    "draw_text": {"PTP", "CARTESIAN_PATH", "BLENDED_SEQUENCE", "MACRO"},
 }
 
 

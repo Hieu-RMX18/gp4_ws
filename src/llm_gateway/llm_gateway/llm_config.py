@@ -15,6 +15,30 @@ _MODEL_PLACEHOLDER = "TEEN MODEL 9ROUTER"
 _DOTENV_FILENAME = ".env"
 
 
+def _default_safety_rules_path() -> str:
+    """Resolve safety_rules.yaml from installed package or local source tree."""
+    try:
+        pkg_share = get_package_share_directory("safety")
+        return os.path.join(pkg_share, "config", "safety_rules.yaml")
+    except Exception:
+        return str(
+            Path(__file__).resolve().parents[2] / "safety" / "config" / "safety_rules.yaml"
+        )
+
+
+def _load_safety_temperature() -> float:
+    """Read llm.react.temperature from safety_rules.yaml SSOT."""
+    try:
+        path = _default_safety_rules_path()
+        with open(path, "r", encoding="utf-8") as f:
+            rules = yaml.safe_load(f) or {}
+        llm = rules.get("llm", {})
+        react = llm.get("react", {})
+        return float(react.get("temperature", 0.0))
+    except Exception:
+        return 0.0
+
+
 def _default_config_path() -> str:
     try:
         pkg_share = get_package_share_directory("llm_gateway")
@@ -174,7 +198,7 @@ def load_llm_backend_config(config_path: str | None = None) -> LLMBackendConfig:
         api_key=str(raw_api_key),
         api_mode=str(backend.get("api_mode", "openai_compatible")),
         model=str(pick("model", _MODEL_PLACEHOLDER)),
-        temperature=float(pick("temperature", 0.0)),
+        temperature=float(pick("temperature", _load_safety_temperature())),
         max_tokens=int(pick("max_tokens", 500)),
         require_json_only=_as_bool(pick("require_json_only", True), True),
         fail_on_non_json=_as_bool(pick("fail_on_non_json", True), True),

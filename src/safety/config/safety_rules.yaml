@@ -106,6 +106,17 @@ drawing:
       position: {x: 0.30, y: 0.0, z: 0.20}
       orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}
 
+# W3: ReAct agent configuration
+llm:
+  react:
+    enabled: true
+    max_total_iterations: 5
+    max_motion_iterations: 3
+    max_readonly_iterations: 10
+    max_repair_iterations: 1
+    wall_clock_timeout_s: 30
+    temperature: 0.2
+
 # W2: CIRC degenerate arc tolerance
 circ:
   degenerate_tolerance: 1.0e-3   # cross-product ratio below this → colinear → reject

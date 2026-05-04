@@ -298,7 +298,7 @@ class Normalizer:
                 )
 
         # Non-motion primitives bypass planner and velocity defaults.
-        if primitive_type in {"ALARM_RESET", "STOP", "WAIT", "IO_SET", "GET_POSE"}:
+        if primitive_type in {"ALARM_RESET", "STOP", "WAIT", "IO_SET", "GET_POSE", "MACRO"}:
             normalized.setdefault("reference_frame", "base_link")
             return normalized
 

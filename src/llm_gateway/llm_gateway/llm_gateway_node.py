@@ -32,6 +32,21 @@ from llm_gateway.schema_validator import SchemaValidator
 from llm_gateway.semantic_validator import SemanticValidator
 from llm_gateway.sequence_validator import SequenceValidator
 
+# ReAct agent imports (W3)
+from llm_gateway.react.agent import ReActAgent
+from llm_gateway.react.iteration_budget import IterationBudget
+from llm_gateway.react.state_injector import StateInjector
+from llm_gateway.react.tool_registry import ToolRegistry
+from llm_gateway.react.tools.compute_arc_points import ComputeArcPointsTool
+from llm_gateway.react.tools.get_current_pose import GetCurrentPoseTool
+from llm_gateway.react.tools.gripper_close import GripperCloseTool
+from llm_gateway.react.tools.gripper_open import GripperOpenTool
+from llm_gateway.react.tools.plan_motion import PlanMotionTool
+from llm_gateway.react.tools.query_perception import QueryPerceptionTool
+from llm_gateway.react.tools.set_speed import SetSpeedTool
+from llm_gateway.react.tools.submit_motion import SubmitMotionTool
+from llm_gateway.react.tools.wait_for_state import WaitForStateTool
+
 
 @dataclass
 class _SequenceExecutionState:
@@ -110,6 +125,40 @@ class LLMGatewayNode(Node):
             llm_backend_config, self._schema_validator.schema_as_json()
         )
 
+        # ── ReAct agent init (W3) ─────────────────────────────────────────────
+        self._react_enabled = self._load_react_enabled()
+        self._react_state_injector = StateInjector()
+        if self._react_enabled:
+            tool_registry = (
+                ToolRegistry()
+                .register(GetCurrentPoseTool())
+                .register(PlanMotionTool())
+                .register(SubmitMotionTool())
+                .register(WaitForStateTool())
+                .register(SetSpeedTool())
+                .register(QueryPerceptionTool())
+                .register(GripperOpenTool())
+                .register(GripperCloseTool())
+                .register(ComputeArcPointsTool())
+            )
+            budget = IterationBudget(
+                max_total=5,
+                max_motion=3,
+                max_readonly=10,
+                max_repair=1,
+                wall_clock_timeout_s=30.0,
+            )
+            self._react_agent = ReActAgent(
+                llm_client=self._llm_client,
+                tool_registry=tool_registry,
+                state_injector=self._react_state_injector,
+                budget=budget,
+                schema_validator=self._schema_validator,
+            )
+            self._react_plan_cache: Dict[str, Any] = {}
+        else:
+            self._react_agent = None
+
         callback_group = ReentrantCallbackGroup()
         self._intent_subscriber = self.create_subscription(
             String,
@@ -183,6 +232,33 @@ class LLMGatewayNode(Node):
         )
         return runtime_mode or "hardware"
 
+    def _load_react_enabled(self) -> bool:
+        """Read llm.react.enabled from safety_rules.yaml SSOT."""
+        import os
+        from pathlib import Path
+
+        import yaml
+        from ament_index_python.packages import get_package_share_directory
+
+        try:
+            pkg_share = get_package_share_directory("safety")
+            path = os.path.join(pkg_share, "config", "safety_rules.yaml")
+        except Exception:
+            path = str(
+                Path(__file__).resolve().parents[2]
+                / "safety"
+                / "config"
+                / "safety_rules.yaml"
+            )
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                rules = yaml.safe_load(f) or {}
+            llm = rules.get("llm", {})
+            react = llm.get("react", {})
+            return bool(react.get("enabled", False))
+        except Exception:
+            return False
+
     def publish_status(self, status: str) -> None:
         if status != self._last_status:
             self.get_logger().info(f"gateway_status={status}")
@@ -205,6 +281,34 @@ class LLMGatewayNode(Node):
 
     def process_intent(self, intent_text: str) -> None:
         self.publish_status("received")
+
+        if self._react_enabled and self._react_agent is not None:
+            # W3 ReAct path: agent produces semantic IR, then IntentRouter downstream.
+            try:
+                react_result = self._react_agent.run(
+                    intent_text, request_id=""
+                )
+            except Exception as exc:
+                self._reject(
+                    "react_agent_failed", str(exc), intent_text=intent_text
+                )
+                return
+            if react_result.get("_handoff"):
+                self.get_logger().warning(
+                    "ReAct handoff "
+                    f"({react_result.get('reason', 'unknown')}); "
+                    "falling back to legacy /llm_intent path."
+                )
+                llm_response = self._llm_client.generate_response(intent_text)
+                self.publish_status("llm_response_received")
+                self._process_llm_payload(intent_text, llm_response)
+                return
+            # react_result is the final semantic IR dict — feed through existing pipeline
+            self._process_llm_payload(intent_text, json.dumps(react_result))
+            return
+
+        # DEPRECATED: removal_date=2026-06-01, reason=replaced_by_react_in_W3
+        # Legacy single-shot IntentRouter path (unchanged from W2).
         try:
             llm_response = self._llm_client.generate_response(intent_text)
         except Exception as exc:

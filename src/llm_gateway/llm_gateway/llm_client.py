@@ -95,9 +95,59 @@ class OpenAICompatibleLLMClient:
 
             self._sleep(self._backoff_delay(attempt))
 
-        # Defensive: loop always raises or returns, but keep a clear fallback.
+    def generate_response_from_messages(
+        self, messages: list[dict[str, str]]
+    ) -> str:
+        """Send a request with pre-constructed messages (ReAct multi-turn)."""
+        if not self._config.model_is_configured:
+            raise ValueError(
+                "llm_backend.model is not configured. Set the 9router model alias."
+            )
+        request = self._build_request_from_messages(messages)
+        max_attempts = max(1, 1 + int(self._config.max_retries))
+        last_exc: Exception | None = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                with urllib.request.urlopen(
+                    request, timeout=self._config.request_timeout_sec
+                ) as response:
+                    return response.read().decode("utf-8")
+            except urllib.error.HTTPError as exc:
+                error_body = exc.read().decode("utf-8", errors="replace")
+                wrapped = RuntimeError(
+                    f"LLM request failed with HTTP {exc.code}: {error_body}"
+                )
+                wrapped.__cause__ = exc
+                if not _is_transient_http(exc.code) or attempt >= max_attempts:
+                    raise wrapped from exc
+                last_exc = wrapped
+            except urllib.error.URLError as exc:
+                wrapped = RuntimeError(f"LLM request failed: {exc.reason}")
+                wrapped.__cause__ = exc
+                if attempt >= max_attempts:
+                    raise wrapped from exc
+                last_exc = wrapped
+            self._sleep(self._backoff_delay(attempt))
         assert last_exc is not None
         raise last_exc
+
+    def _build_request_from_messages(self, messages: list[dict[str, str]]) -> urllib.request.Request:
+        payload = {
+            "model": self._config.model,
+            "temperature": self._config.temperature,
+            "max_tokens": self._config.max_tokens,
+            "messages": messages,
+            "stream": False,
+        }
+        if self._config.require_json_only:
+            payload["response_format"] = {"type": "json_object"}
+        request_body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+        return urllib.request.Request(
+            url=f"{self._config.base_url}/chat/completions",
+            data=request_body,
+            headers=self._build_headers(),
+            method="POST",
+        )
 
     def _build_request(self, user_input: str) -> urllib.request.Request:
         payload = {

@@ -33,6 +33,7 @@ class SemanticValidator:
         "IO_SET",
         "ALARM_RESET",
         "BLENDED_SEQUENCE",
+        "MACRO",
     }
     _MIN_VELOCITY_SCALE = 0.01
     # Fail-safe only — active policy loaded from safety_rules.yaml at construction.
@@ -139,6 +140,14 @@ class SemanticValidator:
             duration = float(command.get("wait_duration_sec", -1.0))
             if duration < 0:
                 raise ValueError("WAIT: wait_duration_sec must be >= 0.")
+            return True
+
+        if primitive_type == "MACRO":
+            steps = command.get("steps")
+            if not isinstance(steps, list) or not steps:
+                raise ValueError("MACRO requires non-empty steps.")
+            if len(steps) > 10:
+                raise ValueError("MACRO supports at most 10 steps.")
             return True
 
         # ── IO_SET: address required, value must be 0 or 1 ──

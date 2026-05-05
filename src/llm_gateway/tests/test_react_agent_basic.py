@@ -55,7 +55,7 @@ def _make_agent(responses, tools=None):
 
 def test_agent_returns_final_semantic_ir():
     agent = _make_agent([json.dumps({"primitive_type": "HOME"})])
-    result = agent.run("go home", "req1")
+    result = agent.run("go home")
     assert result == {"primitive_type": "HOME"}
 
 
@@ -67,7 +67,7 @@ def test_agent_one_tool_call_then_final():
         ],
         tools=[EchoTool()],
     )
-    result = agent.run("go home", "req1")
+    result = agent.run("go home")
     assert result == {"primitive_type": "HOME"}
 
 
@@ -78,7 +78,7 @@ def test_agent_unknown_tool_continues():
             json.dumps({"primitive_type": "HOME"}),
         ]
     )
-    result = agent.run("go home", "req1")
+    result = agent.run("go home")
     assert result == {"primitive_type": "HOME"}
 
 
@@ -87,7 +87,7 @@ def test_agent_budget_exceeded():
         json.dumps({"tool_call": "echo", "args": {"msg": "1"}}),
     ] * 10
     agent = _make_agent(responses, tools=[EchoTool()])
-    result = agent.run("loop", "req1")
+    result = agent.run("loop")
     assert result.get("_handoff") is True
     assert "max_total exceeded" in result.get("reason", "")
 
@@ -117,7 +117,7 @@ def test_agent_schema_invalid_then_repair():
         budget=budget,
         schema_validator=schema_validator,
     )
-    result = agent.run("go home", "req1")
+    result = agent.run("go home")
     assert result == {"primitive_type": "HOME"}
 
 
@@ -140,6 +140,6 @@ def test_agent_repair_exhausted_handoff():
         budget=budget,
         schema_validator=schema_validator,
     )
-    result = agent.run("loop", "req1")
+    result = agent.run("loop")
     assert result.get("_handoff") is True
     assert "semantic_ir invalid after repair" in result.get("reason", "")

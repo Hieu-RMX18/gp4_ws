@@ -10,7 +10,6 @@ import json
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
 
 # Ensure llm_gateway is importable without a ROS environment
 _LLM_GATEWAY_SRC = Path(__file__).resolve().parents[1]
@@ -51,7 +50,7 @@ class TestHydrateWorkplaneHandler(unittest.TestCase):
             try:
                 hydrated = hydrate_draw_workplane(
                     payload,
-                    fetch_current_pose=fetch_current_pose or (lambda rf: None),
+                    fetch_current_pose=fetch_current_pose or (lambda _rf: None),
                 )
                 response.success = True
                 response.hydrated_payload_json = json.dumps(
@@ -122,9 +121,7 @@ class TestHydrateWorkplaneHandler(unittest.TestCase):
         hydrated = json.loads(resp.hydrated_payload_json)
         self.assertEqual(hydrated["workplane"]["mode"], "tool")
         self.assertIsInstance(hydrated["workplane"]["origin"], dict)
-        self.assertEqual(
-            hydrated["workplane"]["origin"]["position"]["x"], 0.5
-        )
+        self.assertEqual(hydrated["workplane"]["origin"]["position"]["x"], 0.5)
 
     def test_draw_shape_tool_mode_already_has_origin(self) -> None:
         """Tool-mode with existing origin should not be re-hydrated."""

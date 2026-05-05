@@ -5,7 +5,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import pytest
 import yaml
 
 
@@ -91,7 +90,9 @@ class TestSyntheticCalibration:
         R_true, _, R_est, _ = _solve_synthetic_hand_eye(num_samples=24)
         trace = np.trace(R_est.T @ R_true)
         angle_err = np.arccos(np.clip((trace - 1) / 2, -1.0, 1.0))
-        assert angle_err < np.deg2rad(5.0), f"Rotation error {np.rad2deg(angle_err):.2f} deg > 5 deg"
+        assert angle_err < np.deg2rad(
+            5.0
+        ), f"Rotation error {np.rad2deg(angle_err):.2f} deg > 5 deg"
 
     def test_yaml_written_with_iso_date(self):
         R_true, t_true, R_est, t_est = _solve_synthetic_hand_eye(num_samples=12)

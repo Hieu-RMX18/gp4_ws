@@ -457,7 +457,9 @@ class IntentResolutionService(IntentNormalizationMixin):
             import json
 
             result = ros.hydrate_workplane(
-                payload_json=json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+                payload_json=json.dumps(
+                    payload, ensure_ascii=True, separators=(",", ":")
+                )
             )
             if result.get("success"):
                 import json

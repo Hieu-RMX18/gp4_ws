@@ -77,9 +77,7 @@ class CalibrationService(Node):
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
         self._camera_info = None
-        self.create_subscription(
-            Image, "/camera/color/image_raw", self._on_image, 10
-        )
+        self.create_subscription(Image, "/camera/color/image_raw", self._on_image, 10)
         from sensor_msgs.msg import CameraInfo
 
         self.create_subscription(
@@ -101,7 +99,9 @@ class CalibrationService(Node):
 
         gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
         try:
-            corners, ids, _ = cv2.aruco.detectMarkers(gray, _ARUCO_DICT, parameters=_ARUCO_PARAMS)
+            corners, ids, _ = cv2.aruco.detectMarkers(
+                gray, _ARUCO_DICT, parameters=_ARUCO_PARAMS
+            )
         except Exception:
             return
         if ids is None or len(ids) == 0:

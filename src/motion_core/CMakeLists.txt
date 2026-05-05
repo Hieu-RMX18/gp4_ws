@@ -37,6 +37,7 @@ add_library(${PROJECT_NAME}_components SHARED
   src/manipulability_guard.cpp
   src/trajectory_post_processor.cpp
   src/quality_gate.cpp
+  src/trajectory_validator.cpp
   src/orientation_filter.cpp
   src/planning_scene_manager.cpp
   src/execute_motion_action_support.cpp

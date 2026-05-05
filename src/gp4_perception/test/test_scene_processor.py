@@ -1,7 +1,6 @@
 """Algorithmic unit tests for scene_processor pipeline functions."""
 
 import numpy as np
-import pytest
 
 from gp4_perception.scene_processor import (
     _euclidean_clusters,
@@ -62,8 +61,12 @@ class TestRansacPlane:
 
 class TestEuclideanClusters:
     def test_finds_two_clusters(self):
-        c1 = np.random.randn(100, 3).astype(np.float32) * 0.01 + np.array([0.3, 0.0, 0.1])
-        c2 = np.random.randn(100, 3).astype(np.float32) * 0.01 + np.array([0.4, 0.0, 0.1])
+        c1 = np.random.randn(100, 3).astype(np.float32) * 0.01 + np.array(
+            [0.3, 0.0, 0.1]
+        )
+        c2 = np.random.randn(100, 3).astype(np.float32) * 0.01 + np.array(
+            [0.4, 0.0, 0.1]
+        )
         pts = np.vstack([c1, c2])
         clusters = _euclidean_clusters(pts, tolerance=0.03, min_size=20, max_size=500)
         assert len(clusters) == 2

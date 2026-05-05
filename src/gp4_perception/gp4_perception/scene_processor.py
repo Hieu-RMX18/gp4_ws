@@ -24,7 +24,12 @@ from sensor_msgs.msg import CameraInfo, PointCloud2
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header
 from tf2_ros import Buffer, TransformListener
-from vision_msgs.msg import Detection3D, Detection3DArray, ObjectHypothesis, ObjectHypothesisWithPose
+from vision_msgs.msg import (
+    Detection3D,
+    Detection3DArray,
+    ObjectHypothesis,
+    ObjectHypothesisWithPose,
+)
 
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 
@@ -70,7 +75,9 @@ def _voxel_downsample(pts: np.ndarray, voxel_size: float) -> np.ndarray:
     return pts[idx]
 
 
-def _ransac_plane(pts: np.ndarray, threshold: float, max_iter: int = 100) -> tuple[np.ndarray, np.ndarray]:
+def _ransac_plane(
+    pts: np.ndarray, threshold: float, max_iter: int = 100
+) -> tuple[np.ndarray, np.ndarray]:
     """Return (inliers, outliers) for largest plane."""
     if len(pts) < 10:
         return pts, np.empty((0, 3), dtype=np.float32)
@@ -97,7 +104,9 @@ def _ransac_plane(pts: np.ndarray, threshold: float, max_iter: int = 100) -> tup
     return pts[best_inliers], pts[mask]
 
 
-def _euclidean_clusters(pts: np.ndarray, tolerance: float, min_size: int, max_size: int) -> list[np.ndarray]:
+def _euclidean_clusters(
+    pts: np.ndarray, tolerance: float, min_size: int, max_size: int
+) -> list[np.ndarray]:
     """DBSCAN-like clustering with cKDTree."""
     if len(pts) == 0:
         return []
@@ -145,8 +154,12 @@ def _pca_bbox(cluster: np.ndarray) -> tuple[Pose, Vector3]:
     rot = Rotation.from_matrix(eigvecs)
     quat = rot.as_quat()  # [x, y, z, w]
     pose = Pose()
-    pose.position = Point(x=float(centroid[0]), y=float(centroid[1]), z=float(centroid[2]))
-    pose.orientation = Quaternion(x=float(quat[0]), y=float(quat[1]), z=float(quat[2]), w=float(quat[3]))
+    pose.position = Point(
+        x=float(centroid[0]), y=float(centroid[1]), z=float(centroid[2])
+    )
+    pose.orientation = Quaternion(
+        x=float(quat[0]), y=float(quat[1]), z=float(quat[2]), w=float(quat[3])
+    )
     dims = Vector3(
         x=float(2 * np.sqrt(eigvals[0])),
         y=float(2 * np.sqrt(eigvals[1])),
@@ -188,20 +201,32 @@ class SceneProcessor(Node):
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
         self._cloud_sub = Subscriber(
-            self, PointCloud2, "/camera/depth/color/points", qos_profile=qos_profile_sensor_data
+            self,
+            PointCloud2,
+            "/camera/depth/color/points",
+            qos_profile=qos_profile_sensor_data,
         )
         self._info_sub = Subscriber(
-            self, CameraInfo, "/camera/color/camera_info", qos_profile=qos_profile_sensor_data
+            self,
+            CameraInfo,
+            "/camera/color/camera_info",
+            qos_profile=qos_profile_sensor_data,
         )
         self._sync = ApproximateTimeSynchronizer(
             [self._cloud_sub, self._info_sub], queue_size=10, slop=0.05
         )
         self._sync.registerCallback(self._on_synced)
 
-        self._det_pub = self.create_publisher(Detection3DArray, "/perception/detections", 10)
-        self._collision_pub = self.create_publisher(CollisionObject, "/collision_object", 10)
+        self._det_pub = self.create_publisher(
+            Detection3DArray, "/perception/detections", 10
+        )
+        self._collision_pub = self.create_publisher(
+            CollisionObject, "/collision_object", 10
+        )
         self._timer = self.create_timer(0.2, self._publish_detections)  # 5 Hz
-        self._last_detections: list[tuple[float, Detection3D]] = []  # (timestamp, detection)
+        self._last_detections: list[
+            tuple[float, Detection3D]
+        ] = []  # (timestamp, detection)
         self._last_stamp = Header()
         self._last_cloud_time = time.time()
         self._health_timer = self.create_timer(2.0, self._check_camera_health)
@@ -210,7 +235,8 @@ class SceneProcessor(Node):
         elapsed = time.time() - self._last_cloud_time
         if elapsed > 5.0:
             _LOGGER.warning(
-                "No point cloud received for %.1f s — check camera connection or QoS match", elapsed
+                "No point cloud received for %.1f s — check camera connection or QoS match",
+                elapsed,
             )
 
     def _on_synced(self, cloud: PointCloud2, _: CameraInfo) -> None:
@@ -251,7 +277,12 @@ class SceneProcessor(Node):
 
             threshold = _interpolate_threshold(dist, self._breakpoints)
             if threshold is not None and noise_mm > threshold:
-                _LOGGER.debug("Cluster %d rejected: noise %.2f mm > %.2f mm", i, noise_mm, threshold)
+                _LOGGER.debug(
+                    "Cluster %d rejected: noise %.2f mm > %.2f mm",
+                    i,
+                    noise_mm,
+                    threshold,
+                )
                 continue
 
             pose, dims = _pca_bbox(cluster)
@@ -293,7 +324,9 @@ class SceneProcessor(Node):
         self._det_pub.publish(arr)
         # Remove stale collision objects
         for i in range(20):
-            if not any(d for _, d in self._last_detections if f"cluster_{i}" in str(d.results)):
+            if not any(
+                d for _, d in self._last_detections if f"cluster_{i}" in str(d.results)
+            ):
                 co = CollisionObject()
                 co.header = arr.header
                 co.id = f"perception_obj_{i}"

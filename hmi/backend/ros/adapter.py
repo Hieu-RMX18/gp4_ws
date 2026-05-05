@@ -672,8 +672,7 @@ class WorkspaceRosAdapter(
     def _command_interfaces_ready(self) -> bool:
         with self._lock:
             return (
-                self._state.validate_command_ready
-                and self._state.execute_motion_ready
+                self._state.validate_command_ready and self._state.execute_motion_ready
             )
 
     def _command_interface_block_reason(self) -> str | None:

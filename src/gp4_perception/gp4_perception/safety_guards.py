@@ -27,7 +27,9 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-def check_calibration_freshness(extrinsics_yaml: dict, max_age_days: int) -> tuple[bool, str]:
+def check_calibration_freshness(
+    extrinsics_yaml: dict, max_age_days: int
+) -> tuple[bool, str]:
     """Return (ok, reason) for calibration age check."""
     date_str = extrinsics_yaml.get("hand_eye_extrinsics", {}).get("calibration_date")
     if not date_str or date_str == "<NOT_CALIBRATED>":
@@ -58,7 +60,9 @@ def check_reprojection_error(extrinsics_yaml: dict, max_mm: float) -> tuple[bool
     return True, ""
 
 
-def _interpolate_threshold(distance_m: float, breakpoints: list[dict[str, Any]]) -> float | None:
+def _interpolate_threshold(
+    distance_m: float, breakpoints: list[dict[str, Any]]
+) -> float | None:
     """Linear interpolation of noise threshold from breakpoints."""
     if not breakpoints:
         return None
@@ -84,7 +88,10 @@ def check_depth_noise(
     """Return (ok, reason) for depth noise at a given distance."""
     threshold = _interpolate_threshold(detection_distance_m, breakpoints)
     if threshold is None:
-        return False, f"distance {detection_distance_m:.2f} m outside calibrated breakpoints"
+        return (
+            False,
+            f"distance {detection_distance_m:.2f} m outside calibrated breakpoints",
+        )
     if observed_noise_mm > threshold:
         return (
             False,

@@ -40,7 +40,9 @@ def test_matching_qos_receives_messages():
     sub_node = Node("sub_qos_match")
     counter = _Counter()
 
-    pub = pub_node.create_publisher(CameraInfo, "/test/qos_match", qos_profile_sensor_data)
+    pub = pub_node.create_publisher(
+        CameraInfo, "/test/qos_match", qos_profile_sensor_data
+    )
     sub = sub_node.create_subscription(
         CameraInfo, "/test/qos_match", counter.cb, qos_profile_sensor_data
     )
@@ -51,9 +53,9 @@ def test_matching_qos_receives_messages():
         pub.publish(msg)
     _spin_for(sub_node, 1.0)
 
-    assert counter.count > 0, (
-        f"SensorDataQoS subscriber received 0 messages — QoS mismatch or ROS issue"
-    )
+    assert (
+        counter.count > 0
+    ), "SensorDataQoS subscriber received 0 messages — QoS mismatch or ROS issue"
     pub_node.destroy_node()
     sub_node.destroy_node()
 
@@ -70,7 +72,9 @@ def test_mismatched_qos_drops_most_messages():
     sub_node_match = Node("sub_match_count")
     match_counter = _Counter()
 
-    pub_match = pub_node_match.create_publisher(CameraInfo, "/test/qos_match_count", qos_profile_sensor_data)
+    pub_match = pub_node_match.create_publisher(
+        CameraInfo, "/test/qos_match_count", qos_profile_sensor_data
+    )
     sub_match = sub_node_match.create_subscription(
         CameraInfo, "/test/qos_match_count", match_counter.cb, qos_profile_sensor_data
     )
@@ -89,7 +93,9 @@ def test_mismatched_qos_drops_most_messages():
     sub_node = Node("sub_qos_mismatch")
     counter = _Counter()
 
-    pub = pub_node.create_publisher(CameraInfo, "/test/qos_mismatch", qos_profile_sensor_data)
+    pub = pub_node.create_publisher(
+        CameraInfo, "/test/qos_mismatch", qos_profile_sensor_data
+    )
     # Default QoS is RELIABLE, which is incompatible with BEST_EFFORT publisher
     sub = sub_node.create_subscription(
         CameraInfo, "/test/qos_mismatch", counter.cb, qos_profile_system_default

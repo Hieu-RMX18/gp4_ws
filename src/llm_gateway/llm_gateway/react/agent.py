@@ -48,7 +48,7 @@ class ReActAgent:
         self._budget = budget
         self._schema_validator = schema_validator
 
-    def run(self, user_text: str, request_id: str) -> dict:
+    def run(self, user_text: str) -> dict:
         """Run the ReAct loop and return final structured command (semantic IR)."""
         state = self._state_injector.snapshot()
         history: List[Tuple[str, Any]] = []

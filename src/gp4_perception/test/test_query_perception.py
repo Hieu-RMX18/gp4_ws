@@ -3,7 +3,6 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
 import yaml
 
 from gp4_perception.query_perception_tool import query_perception

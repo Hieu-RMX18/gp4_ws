@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import unittest
-from unittest.mock import MagicMock
 
 from hmi.backend.services.intent_resolution import (
     IntentResolutionError,
@@ -57,9 +56,7 @@ class TestIntentResolutionViaRpc(unittest.TestCase):
             "params": {"radius": 50},
         }
 
-        result = self.service._hydrate_draw_workplane(
-            payload, current_pose_loader=None
-        )
+        result = self.service._hydrate_draw_workplane(payload, current_pose_loader=None)
 
         self.assertEqual(len(self.mock_ros.hydrate_calls), 1)
         self.assertEqual(result["workplane"]["mode"], "tool")
@@ -69,9 +66,7 @@ class TestIntentResolutionViaRpc(unittest.TestCase):
         """Non-draw intents should skip the RPC call entirely."""
         payload = {"intent": "go_home"}
 
-        result = self.service._hydrate_draw_workplane(
-            payload, current_pose_loader=None
-        )
+        result = self.service._hydrate_draw_workplane(payload, current_pose_loader=None)
 
         self.assertEqual(len(self.mock_ros.hydrate_calls), 0)
         self.assertEqual(result["intent"], "go_home")
@@ -141,9 +136,7 @@ class TestIntentResolutionViaRpc(unittest.TestCase):
             "params": {"radius": 50},
         }
 
-        result = svc._hydrate_draw_workplane(
-            payload, current_pose_loader=pose_loader
-        )
+        result = svc._hydrate_draw_workplane(payload, current_pose_loader=pose_loader)
 
         self.assertEqual(result["workplane"]["origin"]["position"]["x"], 0.6)
 
@@ -158,9 +151,7 @@ class TestIntentResolutionViaRpc(unittest.TestCase):
             "font": {"type": "single_stroke_builtin", "height": 20},
         }
 
-        result = self.service._hydrate_draw_workplane(
-            payload, current_pose_loader=None
-        )
+        result = self.service._hydrate_draw_workplane(payload, current_pose_loader=None)
 
         self.assertEqual(result["intent"], "draw_text")
         self.assertEqual(result["text"], "ABC")

@@ -2,7 +2,6 @@
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
 from gp4_perception.safety_guards import (
     check_calibration_freshness,
@@ -35,8 +34,10 @@ class TestCalibrationFreshness:
         assert reason == ""
 
     def test_stale_rejects(self):
-        old = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat().replace(
-            "+00:00", "Z"
+        old = (
+            (datetime.now(timezone.utc) - timedelta(days=31))
+            .isoformat()
+            .replace("+00:00", "Z")
         )
         ok, reason = check_calibration_freshness(
             {"hand_eye_extrinsics": {"calibration_date": old}},

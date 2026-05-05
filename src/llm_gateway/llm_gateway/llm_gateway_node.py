@@ -311,7 +311,7 @@ class LLMGatewayNode(Node):
         if self._react_enabled and self._react_agent is not None:
             # W3 ReAct path: agent produces semantic IR, then IntentRouter downstream.
             try:
-                react_result = self._react_agent.run(intent_text, request_id="")
+                react_result = self._react_agent.run(intent_text)
             except Exception as exc:
                 self._reject("react_agent_failed", str(exc), intent_text=intent_text)
                 return
@@ -1094,7 +1094,12 @@ class LLMGatewayNode(Node):
         }
         _ALLOWED_FIELDS_BY_PRIMITIVE = {
             "HOME": sorted(
-                ["velocity_scale", "acceleration_scale", "planner_id", "reference_frame"]
+                [
+                    "velocity_scale",
+                    "acceleration_scale",
+                    "planner_id",
+                    "reference_frame",
+                ]
             ),
             "PTP": sorted(
                 [

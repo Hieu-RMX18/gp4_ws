@@ -117,7 +117,9 @@ def main() -> int:
             )
 
     # --- Check 5: Perception extrinsics YAML exists and is valid ---
-    extrinsics_path = repo_root / "src" / "gp4_perception" / "config" / "extrinsics.yaml"
+    extrinsics_path = (
+        repo_root / "src" / "gp4_perception" / "config" / "extrinsics.yaml"
+    )
     if extrinsics_path.exists():
         extrinsics = load_yaml(extrinsics_path)
         hee = extrinsics.get("hand_eye_extrinsics", {})

@@ -786,7 +786,8 @@ PrimitiveRouterDispatch::plan_for_primitive(const PlanningRequest &request) {
 
   std::string guard_reason;
   if (!joint_position_guard_.check_trajectory(
-          planned_trajectory_msg.joint_trajectory, guard_reason)) {
+          planned_trajectory_msg.joint_trajectory, guard_reason,
+          request.joint_position_guard_mode)) {
     result.reason = "pre-downsample " + guard_reason;
     return result;
   }
@@ -801,9 +802,8 @@ PrimitiveRouterDispatch::plan_for_primitive(const PlanningRequest &request) {
   result = post_process_trajectory(
       planned_trajectory_msg, plan_start_state_msg, has_plan_start_state,
       request.current_robot_state, request.velocity_scale,
-      request.acceleration_scale,
-      "failed to convert plan start_state for post-processing",
-      "time parameterization failed; ");
+      request.acceleration_scale, "failed to convert plan start_state",
+      "time-parameterization failed");
   if (result.status != PlanningStatus::kSuccess) {
     return result;
   }

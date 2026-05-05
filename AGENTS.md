@@ -28,6 +28,8 @@
   Use only states listed in docs/audit/NAMED_STATE_AUDIT.md status=`active`.
 - Never silently downsample a trajectory before QualityGate.
   Multi-stage placement is mandatory (W1.T4).
+- Never request extended_mode without all required tokens; never ship
+  default extended_mode = true. (W7)
 
 ## Deprecation lifecycle
 - Tag `# DEPRECATED: removal_date=<today+28d>, reason=<why>`.

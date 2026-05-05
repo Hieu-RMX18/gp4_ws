@@ -37,9 +37,10 @@ public:
       JointPositionGuard joint_position_guard = JointPositionGuard{},
       ManipulabilityGuard manipulability_guard = ManipulabilityGuard{});
 
-  bool validate_plan(const trajectory_msgs::msg::JointTrajectory &traj,
-                     double fraction, const std::string &primitive,
-                     std::string &reason) const;
+  bool validate_plan(
+      const trajectory_msgs::msg::JointTrajectory &traj, double fraction,
+      const std::string &primitive, std::string &reason,
+      JointPositionGuard::Mode mode = JointPositionGuard::Mode::Default) const;
 
 private:
   std::size_t max_trajectory_points_;

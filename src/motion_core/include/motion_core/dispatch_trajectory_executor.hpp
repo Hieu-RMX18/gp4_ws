@@ -39,6 +39,7 @@ public:
     std::string planner_id;
     builtin_interfaces::msg::Time source_joint_state_stamp;
     bool enforce_start_state_match = true;
+    bool extended_mode = false;
   };
 
   using InterruptReasonFn = std::function<std::string(const std::string &)>;
@@ -59,7 +60,8 @@ public:
       double cartesian_fraction, const InterruptReasonFn &interrupt_reason,
       const PublishFeedbackFn &publish_feedback,
       const UpdatePhaseFn &update_phase, std::size_t &reported_point_count,
-      std::size_t &reported_segment_count);
+      std::size_t &reported_segment_count,
+      JointPositionGuard::Mode mode = JointPositionGuard::Mode::Default);
 
 private:
   static bool is_geometry_sensitive_primitive(const std::string &primitive);

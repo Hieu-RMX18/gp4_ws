@@ -27,6 +27,7 @@ struct TrajectoryExecutionRequest {
   builtin_interfaces::msg::Time source_joint_state_stamp;
   std::vector<double> expected_start_positions;
   bool enforce_start_state_match = false;
+  bool extended_mode = false;
 };
 
 struct TrajectoryExecutionResult {

@@ -63,6 +63,8 @@ public:
     std::vector<std::string> active_joint_names;
     PlanWithInterruptionFn plan_with_interruption;
     InterruptReasonFn interrupt_reason;
+    JointPositionGuard::Mode joint_position_guard_mode =
+        JointPositionGuard::Mode::Default;
   };
 
   struct PlanningResult {

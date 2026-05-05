@@ -118,5 +118,47 @@ TEST(JointPositionGuardTest, DefaultConstructedPassesEverything) {
   EXPECT_TRUE(guard.check_trajectory(traj, reason));
 }
 
+TEST(JointPositionGuardTest, ModeDefaultRejectsExtendedRange) {
+  auto limits = make_operational_limits();
+  JointPositionGuard guard(limits);
+  auto traj = make_trajectory({"joint_6_t"}, {{5.0}});
+  std::string reason;
+  EXPECT_FALSE(
+      guard.check_trajectory(traj, reason, JointPositionGuard::Mode::Default));
+  EXPECT_NE(reason.find("mode=default"), std::string::npos);
+}
+
+TEST(JointPositionGuardTest, ModeExtendedAcceptsExtendedRange) {
+  std::unordered_map<std::string, TieredLimit> tiered;
+  tiered["joint_6_t"] = TieredLimit{{-3.142, 3.142}, JointLimit{-7.941, 7.941}};
+  JointPositionGuard guard(std::move(tiered));
+  auto traj = make_trajectory({"joint_6_t"}, {{5.0}});
+  std::string reason;
+  EXPECT_TRUE(
+      guard.check_trajectory(traj, reason, JointPositionGuard::Mode::Extended));
+}
+
+TEST(JointPositionGuardTest, ModeExtendedRejectsBeyondHardwareCap) {
+  std::unordered_map<std::string, TieredLimit> tiered;
+  tiered["joint_6_t"] = TieredLimit{{-3.142, 3.142}, JointLimit{-7.941, 7.941}};
+  JointPositionGuard guard(std::move(tiered));
+  auto traj = make_trajectory({"joint_6_t"}, {{8.0}});
+  std::string reason;
+  EXPECT_FALSE(
+      guard.check_trajectory(traj, reason, JointPositionGuard::Mode::Extended));
+  EXPECT_NE(reason.find("8.0000"), std::string::npos);
+  EXPECT_NE(reason.find("mode=extended"), std::string::npos);
+}
+
+TEST(JointPositionGuardTest, ModeExtendedFallsBackToDefaultForNonTiered) {
+  auto limits = make_operational_limits();
+  JointPositionGuard guard(limits);
+  auto traj = make_trajectory({"joint_6_t"}, {{5.0}});
+  std::string reason;
+  EXPECT_FALSE(
+      guard.check_trajectory(traj, reason, JointPositionGuard::Mode::Extended));
+  EXPECT_NE(reason.find("mode=extended"), std::string::npos);
+}
+
 } // namespace
 } // namespace motion_core

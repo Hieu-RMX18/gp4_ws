@@ -36,7 +36,8 @@ QualityGate::QualityGate(std::size_t max_trajectory_points,
 
 bool QualityGate::validate_plan(
     const trajectory_msgs::msg::JointTrajectory &traj, double fraction,
-    const std::string &primitive, std::string &reason) const {
+    const std::string &primitive, std::string &reason,
+    JointPositionGuard::Mode mode) const {
   reason.clear();
 
   if (!validate_trajectory_structure(traj, reason)) {
@@ -47,7 +48,7 @@ bool QualityGate::validate_plan(
     return false;
   }
 
-  if (!joint_position_guard_.check_trajectory(traj, reason)) {
+  if (!joint_position_guard_.check_trajectory(traj, reason, mode)) {
     return false;
   }
 

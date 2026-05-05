@@ -20,6 +20,17 @@ def load_yaml(path: Path) -> dict:
         return yaml.safe_load(f) or {}
 
 
+def extract_limit(joint_entry):
+    """Extract (min, max) from either flat {min, max} or tiered {default: {min, max}}."""
+    if isinstance(joint_entry, dict):
+        if "default" in joint_entry and isinstance(joint_entry["default"], dict):
+            d = joint_entry["default"]
+            return (d.get("min"), d.get("max"))
+        if "min" in joint_entry and "max" in joint_entry:
+            return (joint_entry["min"], joint_entry["max"])
+    return (None, None)
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parent.parent
     safety_rules_path = repo_root / "src" / "safety" / "config" / "safety_rules.yaml"
@@ -50,6 +61,11 @@ def main() -> int:
         jl_data = load_yaml(joint_limits_path)
         jl_limits = jl_data.get("joint_limits", {})
         for joint_name, op in op_limits.items():
+            if not isinstance(op, dict):
+                continue
+            op_min, op_max = extract_limit(op)
+            if op_min is None or op_max is None:
+                continue
             hw = jl_limits.get(joint_name)
             if hw is None:
                 errors.append(
@@ -59,14 +75,14 @@ def main() -> int:
                 continue
             hw_min = hw.get("min_position")
             hw_max = hw.get("max_position")
-            if hw_min is not None and op["min"] < hw_min:
+            if op_min is not None and hw_min is not None and op_min < hw_min:
                 errors.append(
-                    f"{joint_name}: operational min {op['min']:.4f} < "
+                    f"{joint_name}: operational min {op_min:.4f} < "
                     f"hardware min {hw_min:.4f}"
                 )
-            if hw_max is not None and op["max"] > hw_max:
+            if op_max is not None and hw_max is not None and op_max > hw_max:
                 errors.append(
-                    f"{joint_name}: operational max {op['max']:.4f} > "
+                    f"{joint_name}: operational max {op_max:.4f} > "
                     f"hardware max {hw_max:.4f}"
                 )
     else:
@@ -90,15 +106,26 @@ def main() -> int:
                 errors.append(
                     f"motoros2_config joint '{jn}' missing from operational_joint_limits"
                 )
+            else:
+                op_entry = op_limits[jn]
+                op_jn_min, op_jn_max = extract_limit(op_entry)
+                if op_jn_min is None or op_jn_max is None:
+                    errors.append(
+                        f"motoros2_config joint '{jn}' has no parseable limits in operational_joint_limits"
+                    )
 
     # --- Check 3: J5 hard limit ---
     j5 = op_limits.get("joint_5_b")
     if j5 is None:
         errors.append("joint_5_b missing from operational_joint_limits")
     else:
-        if abs(j5["min"] - (-1.603)) > 0.001 or abs(j5["max"] - 1.603) > 0.001:
+        j5_min, j5_max = extract_limit(j5)
+    if j5_min is None or j5_max is None:
+        errors.append("joint_5_b has no parseable limits in operational_joint_limits")
+    else:
+        if abs(j5_min - (-1.603)) > 0.001 or abs(j5_max - 1.603) > 0.001:
             errors.append(
-                f"joint_5_b limits are [{j5['min']}, {j5['max']}] — "
+                f"joint_5_b limits are [{j5_min}, {j5_max}] — "
                 f"expected ±1.603 (widened from ±1.571 per operator 2026-05-04)"
             )
 

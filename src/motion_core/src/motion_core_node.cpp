@@ -82,14 +82,28 @@ public:
         const auto root = YAML::LoadFile(safety_rules_yaml_path);
         const auto limits_node = root["operational_joint_limits"];
         if (limits_node && limits_node.IsMap()) {
-          std::unordered_map<std::string, JointLimit> limits;
+          std::unordered_map<std::string, TieredLimit> tiered_limits;
           for (const auto &pair : limits_node) {
             const auto name = pair.first.as<std::string>();
-            limits[name] = {pair.second["min"].as<double>(),
-                            pair.second["max"].as<double>()};
+            const auto &value = pair.second;
+            if (value.IsMap() && value["default"] && value["default"].IsMap()) {
+              TieredLimit tl;
+              tl.default_limit = {value["default"]["min"].as<double>(),
+                                  value["default"]["max"].as<double>()};
+              if (value["extended"] && value["extended"].IsMap()) {
+                tl.extended_limit =
+                    JointLimit{value["extended"]["min"].as<double>(),
+                               value["extended"]["max"].as<double>()};
+              }
+              tiered_limits[name] = tl;
+            } else if (value.IsMap() && value["min"] && value["max"]) {
+              JointLimit lim = {value["min"].as<double>(),
+                                value["max"].as<double>()};
+              tiered_limits[name] = TieredLimit{lim, std::nullopt};
+            }
           }
-          const auto count = limits.size();
-          joint_position_guard_ = JointPositionGuard(std::move(limits));
+          const auto count = tiered_limits.size();
+          joint_position_guard_ = JointPositionGuard(std::move(tiered_limits));
           quality_gate_ = QualityGate(kTrajectoryHardLimitPoints,
                                       QualityGate::kMinimumCartesianFraction,
                                       joint_position_guard_);

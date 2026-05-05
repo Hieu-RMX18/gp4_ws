@@ -113,6 +113,10 @@ MotionPrimitiveExecutor::Result MotionPrimitiveExecutor::execute(
   planning_request.plan_with_interruption =
       dependencies_.plan_with_interruption;
   planning_request.interrupt_reason = dependencies_.interrupt_reason;
+  if (goal->extended_mode) {
+    planning_request.joint_position_guard_mode =
+        JointPositionGuard::Mode::Extended;
+  }
 
   const auto planning_result =
       dependencies_.primitive_router_dispatch.plan_for_primitive(
@@ -143,6 +147,7 @@ MotionPrimitiveExecutor::Result MotionPrimitiveExecutor::execute(
   dispatch_metadata.planner_id = planning_result.planner_id;
   dispatch_metadata.source_joint_state_stamp = source_joint_state_stamp;
   dispatch_metadata.enforce_start_state_match = true;
+  dispatch_metadata.extended_mode = goal->extended_mode;
 
   std::size_t dispatched_point_count = 0U;
   std::size_t dispatched_segment_count = 0U;
@@ -152,7 +157,7 @@ MotionPrimitiveExecutor::Result MotionPrimitiveExecutor::execute(
           dispatch_metadata, planning_result.cartesian_fraction,
           dependencies_.interrupt_reason, dependencies_.publish_feedback,
           dependencies_.update_phase, dispatched_point_count,
-          dispatched_segment_count);
+          dispatched_segment_count, planning_request.joint_position_guard_mode);
 
   if (dispatch_result.status == DispatchTrajectoryExecutor::Status::kCanceled) {
     result.status = Status::kCanceled;

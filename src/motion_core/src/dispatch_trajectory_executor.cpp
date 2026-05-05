@@ -262,6 +262,7 @@ DispatchTrajectoryExecutor::dispatch_to_hw_adapter(
                                       ? std::vector<double>{}
                                       : trajectory.points.front().positions;
   goal.enforce_start_state_match = metadata.enforce_start_state_match;
+  goal.extended_mode = metadata.extended_mode;
 
   RCLCPP_INFO(
       logger_,
@@ -371,10 +372,10 @@ DispatchTrajectoryExecutor::Result
 DispatchTrajectoryExecutor::apply_budget_quality_and_dispatch(
     trajectory_msgs::msg::JointTrajectory trajectory,
     const std::string &primitive, const DispatchMetadata &dispatch_metadata,
-    const double cartesian_fraction, const InterruptReasonFn &interrupt_reason,
+    double cartesian_fraction, const InterruptReasonFn &interrupt_reason,
     const PublishFeedbackFn &publish_feedback,
     const UpdatePhaseFn &update_phase, std::size_t &reported_point_count,
-    std::size_t &reported_segment_count) {
+    std::size_t &reported_segment_count, JointPositionGuard::Mode mode) {
   Result result;
   std::ostringstream note_stream;
   const trajectory_msgs::msg::JointTrajectory original_trajectory = trajectory;
@@ -447,7 +448,7 @@ DispatchTrajectoryExecutor::apply_budget_quality_and_dispatch(
                       : QualityGate::kFractionNotApplicable;
     std::string quality_reason;
     if (!quality_gate_.validate_plan(segments[index], fraction_for_segment,
-                                     primitive, quality_reason)) {
+                                     primitive, quality_reason, mode)) {
       std::ostringstream quality_stream;
       quality_stream << "quality gate failed for dispatch segment "
                      << (index + 1U) << "/" << segments.size() << ": "

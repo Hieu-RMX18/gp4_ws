@@ -23,6 +23,10 @@ int32 io_value               # value to write (0 or 1 for digital)
 # When primitive_type == "BLENDED_SEQUENCE", sequence_steps carries the typed
 # steps.  When primitive_type is anything else, sequence_steps must be empty.
 SequenceStep[] sequence_steps
+# --- W7: T-axis tiered mode ---
+bool extended_mode           # opt-in extended ±455° joint_6_t envelope
+string[] mode_tokens         # [cable_inspection_signed_off_token, operator_confirm_token]
+float64 estimated_duration_s # estimated command duration for max_continuous_extended_time_s check
 ---
 # Result
 bool success

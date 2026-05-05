@@ -75,7 +75,15 @@ operational_joint_limits:
   joint_3_u: {min: -1.1344, max:  3.4906}  # = hardware U (asymmetric)
   joint_4_r: {min: -2.443, max:  2.443}   # +/-140 deg (hardware R is +/-200 deg, derated)
   joint_5_b: {min: -1.603, max:  1.603}   # ~+/-91.8 deg (hardware B is +/-123 deg, derated; widened from ±1.571 per operator 2026-05-04)
-  joint_6_t: {min: -3.142, max:  3.142}   # +/-180 deg (hardware T is +/-455 deg, derated; W7 may opt-in extended)
+  joint_6_t:
+    default:  {min: -3.142, max:  3.142}     # +/-180 deg (default safety envelope)
+    extended: {min: -7.941, max:  7.941}     # +/-455 deg (hardware T max; opt-in only)
+    extended_preconditions:
+      cable_inspection_signed_off: true       # operator certifies cable not at risk
+      max_velocity_scale: 0.10                # hard cap; runtime-enforced
+      requires_operator_confirm: true         # explicit confirm token per command
+      max_continuous_extended_time_s: 30      # cannot stay in extended mode beyond this
+      cool_down_s_between_runs: 60            # gap before next extended-mode command
 
 joint_position_guard:
   enabled: true

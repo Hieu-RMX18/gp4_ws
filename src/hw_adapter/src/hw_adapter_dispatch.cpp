@@ -189,6 +189,7 @@ void HwAdapterNode::execute_dispatch(
   execution_request.source_joint_state_stamp = goal->source_joint_state_stamp;
   execution_request.expected_start_positions = goal->expected_start_positions;
   execution_request.enforce_start_state_match = goal->enforce_start_state_match;
+  execution_request.extended_mode = goal->extended_mode;
 
   // Delegate to the existing execute_trajectory orchestration.
   const auto report = execute_trajectory_internal(execution_request, true);

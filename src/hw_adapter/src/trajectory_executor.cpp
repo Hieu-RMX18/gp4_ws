@@ -203,7 +203,11 @@ TrajectoryExecutionResult TrajectoryExecutor::execute_blocking(
   goal.trajectory = request.trajectory;
 
   std::string guard_reason;
-  if (!joint_position_guard_.check_trajectory(goal.trajectory, guard_reason)) {
+  const auto guard_mode = request.extended_mode
+                              ? motion_core::JointPositionGuard::Mode::Extended
+                              : motion_core::JointPositionGuard::Mode::Default;
+  if (!joint_position_guard_.check_trajectory(goal.trajectory, guard_reason,
+                                              guard_mode)) {
     result.failure_stage = "dispatch_joint_position_guard";
     result.message = "dispatch boundary " + guard_reason;
     return finalize();

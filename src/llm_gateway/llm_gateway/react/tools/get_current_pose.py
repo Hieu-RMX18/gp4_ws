@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, ClassVar
 
 from ..tool_registry import Tool, ToolResult

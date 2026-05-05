@@ -41,6 +41,13 @@ HMI frontend connects to the HMI backend via WebSocket (`/api/hmi/stream`), NOT 
 | `/reset_error` | Service | `adapter.py:382` [INFERRED] | Client | `std_srvs/Trigger` [INFERRED] | LOW |
 | Jog command topic | Topic | `jog_service.py:303` | Publish | `JogCommand` [INFERRED] | MEDIUM |
 | Jog activate/deactivate | Service | `jog_service.py:312,315` | Client | Unknown | MEDIUM |
+| `/perception/status` | Topic | — | Subscribe | `interfaces/PerceptionStatus` | LOW |
+| `/perception/calibrate_hand_eye` | Service | — | Client | `interfaces/CalibrateHandEye` | LOW |
+| `/perception/get_object_positions` | Service | — | Client | `interfaces/GetObjectPositions` | LOW |
+| `/perception/check_camera` | Service | — | Client | `interfaces/CheckCamera` | LOW |
+| `/llm_gateway/hydrate_workplane` | Service | `adapter.py:344` | Client | `interfaces/HydrateWorkplane` | MEDIUM |
+| `/llm_gateway/get_primitive_constants` | Service | `adapter.py:375` | Client | `interfaces/GetPrimitiveConstants` | LOW |
+| `/supervisor/confirm_execution` | Service | `adapter.py:411` | Client | `interfaces/ConfirmExecution` | HIGH |
 
 ## Change sensitivity definitions
 

@@ -1,0 +1,7 @@
+realsense:
+  device_serial: "<RUNTIME>"   # operator fills or auto-discovers
+  align_depth_enable: true
+  enable_sync: true
+  pointcloud_enable: true
+  depth_profile: "848x480x30"
+  emitter_enabled: true

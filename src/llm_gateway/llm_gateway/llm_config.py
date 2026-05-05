@@ -22,7 +22,10 @@ def _default_safety_rules_path() -> str:
         return os.path.join(pkg_share, "config", "safety_rules.yaml")
     except Exception:
         return str(
-            Path(__file__).resolve().parents[2] / "safety" / "config" / "safety_rules.yaml"
+            Path(__file__).resolve().parents[2]
+            / "safety"
+            / "config"
+            / "safety_rules.yaml"
         )
 
 

@@ -85,6 +85,13 @@ class _TelemetryState:
     execute_motion_ready: bool = False
     validate_command_detail: str = ""
     execute_motion_detail: str = ""
+    # W5.T4 — new HMI consolidation service readiness
+    hydrate_workplane_ready_at: datetime | None = None
+    get_primitive_constants_ready_at: datetime | None = None
+    confirm_execution_ready_at: datetime | None = None
+    hydrate_workplane_ready: bool = False
+    get_primitive_constants_ready: bool = False
+    confirm_execution_ready: bool = False
     command_interface_checked_at: datetime | None = None
     command_interface_check_inflight: bool = False
     command_interface_error: str | None = None

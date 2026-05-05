@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING, ClassVar
 
 from ..tool_registry import Tool, ToolResult
@@ -13,7 +12,9 @@ if TYPE_CHECKING:
 
 class WaitForStateTool(Tool):
     name = "wait_for_state"
-    description = "Wait until the robot reaches a given state (IDLE, MOVING, PLANNING, FAULT)."
+    description = (
+        "Wait until the robot reaches a given state (IDLE, MOVING, PLANNING, FAULT)."
+    )
     is_readonly = True
     input_schema: ClassVar[dict] = {
         "type": "object",

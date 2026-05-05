@@ -1,0 +1,9 @@
+fiducials:
+  # ArUco board specification used for hand-eye calibration
+  marker_dictionary: "DICT_5X5_100"
+  board_rows: 5
+  board_columns: 7
+  marker_length_m: 0.035
+  marker_separation_m: 0.007
+  # Physical square size for Charuco (if used instead of ArUco grid)
+  square_length_m: 0.040

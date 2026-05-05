@@ -1,0 +1,5 @@
+string class_filter          # empty = all classes
+---
+bool ok
+string failure_reason        # empty on success; e.g. "calibration_invalid", "perception_blocked_during_motion"
+vision_msgs/Detection3D[] detections   # poses already transformed to base_link

@@ -1,0 +1,6 @@
+# Request: fetch primitive constants (supported primitives, planner defaults, allowed fields)
+---
+# Response
+bool success
+string error                   # reason if !success
+string constants_json          # JSON object with SUPPORTED_PRIMITIVES, PLANNER_DEFAULTS, _ALLOWED_FIELDS_BY_PRIMITIVE, _OLD_ACTIONS

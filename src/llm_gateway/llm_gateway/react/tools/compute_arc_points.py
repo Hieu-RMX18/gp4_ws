@@ -101,9 +101,7 @@ class ComputeArcPointsTool(Tool):
         if sweep == 0.0:
             return ToolResult(ok=False, error="sweep_angle_rad must be non-zero")
         if abs(sweep) > 2.0 * math.pi:
-            return ToolResult(
-                ok=False, error="|sweep_angle_rad| must not exceed 2*pi"
-            )
+            return ToolResult(ok=False, error="|sweep_angle_rad| must not exceed 2*pi")
 
         n = _normalize([n_raw["x"], n_raw["y"], n_raw["z"]])
         if math.sqrt(sum(x * x for x in n)) < 1e-6:
@@ -118,9 +116,15 @@ class ComputeArcPointsTool(Tool):
         v = _cross(n, u)
 
         def _pose_at(angle: float) -> dict:
-            x = center["x"] + radius_m * (u[0] * math.cos(angle) + v[0] * math.sin(angle))
-            y = center["y"] + radius_m * (u[1] * math.cos(angle) + v[1] * math.sin(angle))
-            z = center["z"] + radius_m * (u[2] * math.cos(angle) + v[2] * math.sin(angle))
+            x = center["x"] + radius_m * (
+                u[0] * math.cos(angle) + v[0] * math.sin(angle)
+            )
+            y = center["y"] + radius_m * (
+                u[1] * math.cos(angle) + v[1] * math.sin(angle)
+            )
+            z = center["z"] + radius_m * (
+                u[2] * math.cos(angle) + v[2] * math.sin(angle)
+            )
             # Tangent vector = derivative w.r.t angle (counter-clockwise when sweep>0)
             tx = -u[0] * math.sin(angle) + v[0] * math.cos(angle)
             ty = -u[1] * math.sin(angle) + v[1] * math.cos(angle)

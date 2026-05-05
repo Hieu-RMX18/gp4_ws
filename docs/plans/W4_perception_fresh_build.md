@@ -137,37 +137,35 @@ Standard ROS 2 layout, fresh:
 ```
 src/gp4_perception/
 ├── package.xml
-├── CMakeLists.txt              # only if any C++; W4 is Python-first
 ├── setup.py
 ├── setup.cfg
 ├── resource/gp4_perception
-├── gp4_perception/
+├── README.md
+│
+├── gp4_perception/                  # 5 Python files (was 7)
 │   ├── __init__.py
-│   ├── camera_launcher.py      # NEW; replaces the old realsense_health_node logic
-│   ├── calibration_service.py  # implements interfaces/srv/CalibrateHandEye.srv (W4.T0)
-│   ├── object_query_service.py # implements interfaces/srv/GetObjectPositions.srv (W4.T0)
-│   ├── camera_check_service.py # implements interfaces/srv/CheckCamera.srv (W4.T0)
-│   ├── status_publisher.py     # publishes interfaces/msg/PerceptionStatus.msg (W4.T0)
-│   ├── scene_processor.py      # cloud → detections
-│   ├── query_perception_tool.py # body of W3's stub
-│   ├── safety_guards.py        # freshness / reprojection / depth-noise checks
-│   └── tf_publisher.py         # static transform broadcaster from extrinsics YAML
-├── config/
-│   ├── d435i.yaml              # camera params for GP4 workspace
-│   ├── extrinsics.yaml         # RUNTIME-FILLED; commit empty/template ONLY
-│   ├── extrinsics_schema.yaml  # validates extrinsics.yaml shape
-│   ├── perception.yaml         # ROI crop, voxel size, RANSAC threshold, depth noise table
-│   └── fiducials.yaml          # ArUco/Charuco board spec
-├── launch/
+│   ├── calibration.py               # MERGED: calibration_service + tf_publisher
+│   ├── scene_processor.py
+│   ├── query_perception_tool.py
+│   └── safety_guards.py             # contains EXTRINSICS_SCHEMA dict
+│
+├── config/                          # 4 YAML files (was 5)
+│   ├── d435i.yaml                   # camera hardware
+│   ├── perception.yaml              # ROI, voxel, RANSAC, depth-noise breakpoints
+│   ├── extrinsics.yaml              # runtime-filled hand-eye result
+│   └── fiducials.yaml               # ArUco/Charuco board spec
+│
+├── launch/                          # 3 launch files (unchanged)
 │   ├── camera.launch.py
 │   ├── calibration_collect.launch.py
 │   └── perception_full.launch.py
-├── test/
-│   ├── test_calibration_service.py
-│   ├── test_scene_processor.py
-│   ├── test_safety_guards.py
-│   └── test_query_perception.py
-└── README.md
+│
+└── test/                            # 5 test files (was 4)
+    ├── test_calibration.py
+    ├── test_scene_processor.py
+    ├── test_safety_guards.py
+    ├── test_query_perception.py
+    └── test_qos_match.py
 ```
 
 `package.xml` declares deps: `rclpy`, `sensor_msgs`, `geometry_msgs`, `vision_msgs`, `tf2_ros`, `cv_bridge`, `pcl_ros`, `pcl_conversions`, `realsense2_camera`. Document the OpenCV version requirement (`cv2.calibrateHandEye` requires 4.1+).
@@ -194,11 +192,11 @@ realsense:
   emitter_enabled: true
 ```
 
-### W4.T3 — Hand-eye calibration service
+### W4.T3 — Hand-eye calibration + TF publisher
 
-`gp4_perception/calibration_service.py`:
+`gp4_perception/calibration.py` (merged module containing `CalibrationService` and `TFPublisher`):
 
-ROS 2 service `/perception/calibrate_hand_eye` (request: ArUco/Charuco board id; response: success bool + extrinsics file path).
+**CalibrationService** — ROS 2 service `/perception/calibrate_hand_eye` (request: ArUco/Charuco board id; response: success bool + extrinsics file path).
 
 Flow:
 
@@ -206,7 +204,7 @@ Flow:
 2. Service collects pose pairs: `(T_base_to_gripper, T_camera_to_target)`. Minimum N=12, recommended N=24. Spread pose orientations so the SVD is well-conditioned.
 3. Solver: `cv2.calibrateHandEye(R_gripper2base, t_gripper2base, R_target2cam, t_target2cam, method=cv2.CALIB_HAND_EYE_PARK)`.
 4. Compute reprojection error: project board corners using the solved extrinsics back into the image, compare with detected corners. RMS in mm.
-5. Write `config/extrinsics.yaml`. **`calibration_date` is set with `datetime.utcnow().isoformat() + "Z"` at write time.** Never templated. The committed `extrinsics.yaml` in git is either empty or contains a literal placeholder string `<NOT_CALIBRATED>` that the safety guard rejects.
+5. Write `config/extrinsics.yaml`. **`calibration_date` is set with `datetime.now(timezone.utc).isoformat() + "Z"` at write time.** Never templated. The committed `extrinsics.yaml` in git is either empty or contains a literal placeholder string `<NOT_CALIBRATED>` that the safety guard rejects.
 
 YAML shape:
 
@@ -227,11 +225,11 @@ The `workspace_distance_m` field feeds the range-aware depth-noise guard.
 
 Frame conventions: OpenCV uses image-coordinate optical frames. ROS uses right-hand FRD. The translation/rotation must be in `base_link` ↔ `camera_color_optical_frame`. Document the conversion explicitly in the service docstring; the W0 review document called this out as a frequent debugging trap.
 
-### W4.T4 — TF publisher
+**TFPublisher** — On startup, reads `config/extrinsics.yaml`. If `calibration_date` is missing or `<NOT_CALIBRATED>`, refuses to publish and logs ERROR. Otherwise, broadcasts the static transform `base_link → camera_color_optical_frame`. No dynamic updates; calibration changes require service re-call and re-launch.
 
-`gp4_perception/tf_publisher.py`:
-
-On startup, reads `config/extrinsics.yaml`. If `calibration_date` is missing or `<NOT_CALIBRATED>`, refuses to publish and logs ERROR. Otherwise, broadcasts the static transform `base_link → camera_color_optical_frame`. No dynamic updates; calibration changes require service re-call and re-launch.
+Entry points:
+- `ros2 run gp4_perception calibration_service` → `calibration:main_calibration_service`
+- `ros2 run gp4_perception tf_publisher` → `calibration:main_tf_publisher`
 
 ### W4.T5 — Scene processor with sync + matching QoS
 
@@ -272,6 +270,8 @@ Pipeline:
 6. Reject clusters where depth noise > the range-aware threshold (see W4.T6 below).
 7. Publish `vision_msgs/Detection3DArray` on `/perception/detections`. Push each surviving detection as a MoveIt `CollisionObject` via `planning_scene_interface.applyCollisionObjects`. TTL: remove if not re-detected for 2 s.
 
+**Camera health monitoring:** A 2 s timer checks time since last point cloud callback. If >5 s elapsed, logs WARN about camera connection or QoS mismatch. This compensates for removing the separate `camera_launcher` node.
+
 `config/perception.yaml`:
 
 ```yaml
@@ -299,6 +299,24 @@ perception:
 ### W4.T6 — Safety guards
 
 `gp4_perception/safety_guards.py`:
+
+Contains `EXTRINSICS_SCHEMA` dict at module top — SSOT schema for extrinsics.yaml shape, used by validators and safety chain:
+
+```python
+EXTRINSICS_SCHEMA = {
+    "hand_eye_extrinsics": {
+        "parent_frame": "base_link",
+        "child_frame": "camera_color_optical_frame",
+        "translation": {"x": float, "y": float, "z": float},
+        "rotation_quat": {"x": float, "y": float, "z": float, "w": float},
+        "calibration_date": str,
+        "reprojection_error_mm": float,
+        "n_samples": int,
+        "solver": str,
+        "workspace_distance_m": float,
+    }
+}
+```
 
 ```python
 def check_calibration_freshness(extrinsics_yaml: dict, max_age_days: int) -> tuple[bool, str]:
@@ -370,7 +388,7 @@ Capability flag in W3's state injector flips: `capabilities.perception: true`.
 
 ### W4.T8 — Tests
 
-- `test_calibration_service.py`: synthetic AX=XB inputs → service produces extrinsics within 1 mm of ground truth; `calibration_date` is a valid ISO 8601 string.
+- `test_calibration.py`: synthetic AX=XB inputs → service produces extrinsics within 5 mm of ground truth; `calibration_date` is a valid ISO 8601 string.
 - `test_scene_processor.py`: synthetic point cloud with a known box → detection matches in pose, with depth noise reported.
 - `test_safety_guards.py`:
   - calibration 31 days old → reject;

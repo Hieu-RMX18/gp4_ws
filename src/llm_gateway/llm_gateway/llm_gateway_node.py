@@ -10,7 +10,13 @@ from typing import Any, Dict, List
 
 import rclpy
 from interfaces.action import ExecuteMotion
-from interfaces.srv import GetCurrentPose, ValidateCommand
+from interfaces.srv import (
+    ConfirmExecution,
+    GetCurrentPose,
+    GetPrimitiveConstants,
+    HydrateWorkplane,
+    ValidateCommand,
+)
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException
@@ -211,6 +217,26 @@ class LLMGatewayNode(Node):
             callback_group=callback_group,
         )
 
+        # W5.T2 — HMI consolidation service servers
+        self._hydrate_workplane_srv = self.create_service(
+            HydrateWorkplane,
+            "/llm_gateway/hydrate_workplane",
+            self._on_hydrate_workplane,
+            callback_group=callback_group,
+        )
+        self._get_primitive_constants_srv = self.create_service(
+            GetPrimitiveConstants,
+            "/llm_gateway/get_primitive_constants",
+            self._on_get_primitive_constants,
+            callback_group=callback_group,
+        )
+        self._confirm_execution_srv = self.create_service(
+            ConfirmExecution,
+            "/supervisor/confirm_execution",
+            self._on_confirm_execution,
+            callback_group=callback_group,
+        )
+
         self.publish_status(self._last_status)
         self.get_logger().info(f"LLMGatewayNode ready (runtime_mode={runtime_mode}).")
 
@@ -285,13 +311,9 @@ class LLMGatewayNode(Node):
         if self._react_enabled and self._react_agent is not None:
             # W3 ReAct path: agent produces semantic IR, then IntentRouter downstream.
             try:
-                react_result = self._react_agent.run(
-                    intent_text, request_id=""
-                )
+                react_result = self._react_agent.run(intent_text, request_id="")
             except Exception as exc:
-                self._reject(
-                    "react_agent_failed", str(exc), intent_text=intent_text
-                )
+                self._reject("react_agent_failed", str(exc), intent_text=intent_text)
                 return
             if react_result.get("_handoff"):
                 self.get_logger().warning(
@@ -1004,6 +1026,243 @@ class LLMGatewayNode(Node):
             payload,
             fetch_current_pose=self._request_current_pose_snapshot,
         )
+
+    # ── W5.T2 service handlers ────────────────────────────────────────────
+
+    def _on_hydrate_workplane(
+        self,
+        request: HydrateWorkplane.Request,
+        response: HydrateWorkplane.Response,
+    ) -> HydrateWorkplane.Response:
+        try:
+            payload = json.loads(request.payload_json)
+        except json.JSONDecodeError as exc:
+            response.success = False
+            response.error = f"invalid payload_json: {exc}"
+            return response
+
+        try:
+            hydrated = _pipeline_hydrate_draw_workplane(
+                payload,
+                fetch_current_pose=self._request_current_pose_snapshot,
+            )
+            response.success = True
+            response.hydrated_payload_json = json.dumps(
+                hydrated, ensure_ascii=True, separators=(",", ":")
+            )
+        except Exception as exc:
+            response.success = False
+            response.error = str(exc)
+
+        return response
+
+    def _on_get_primitive_constants(
+        self,
+        request: GetPrimitiveConstants.Request,
+        response: GetPrimitiveConstants.Response,
+    ) -> GetPrimitiveConstants.Response:
+        # Static primitive constants — canonical source.
+        # Mirrors hmi/backend/services/intent_constants.py.
+        # When these change, update both this handler and intent_constants.py.
+        _SUPPORTED_PRIMITIVES = sorted(
+            [
+                "HOME",
+                "PTP",
+                "LIN",
+                "CIRC",
+                "CARTESIAN_PATH",
+                "MOVE_REL",
+                "MOVE_JOINT",
+                "MOVE_JOINTS",
+                "WAIT",
+                "STOP",
+                "SET_SPEED",
+                "IO_SET",
+                "ALARM_RESET",
+                "GET_POSE",
+            ]
+        )
+        _PLANNER_DEFAULTS = {
+            "HOME": "PILZ_PTP",
+            "PTP": "PILZ_PTP",
+            "LIN": "PILZ_LIN",
+            "CIRC": "PILZ_CIRC",
+            "CARTESIAN_PATH": "PILZ_LIN",
+            "MOVE_REL": "PILZ_LIN",
+            "MOVE_JOINT": "PILZ_PTP",
+            "MOVE_JOINTS": "PILZ_PTP",
+        }
+        _ALLOWED_FIELDS_BY_PRIMITIVE = {
+            "HOME": sorted(
+                ["velocity_scale", "acceleration_scale", "planner_id", "reference_frame"]
+            ),
+            "PTP": sorted(
+                [
+                    "target_pose",
+                    "joint_target",
+                    "velocity_scale",
+                    "acceleration_scale",
+                    "planner_id",
+                    "reference_frame",
+                ]
+            ),
+            "LIN": sorted(
+                [
+                    "target_pose",
+                    "velocity_scale",
+                    "acceleration_scale",
+                    "planner_id",
+                    "reference_frame",
+                ]
+            ),
+            "CIRC": sorted(
+                [
+                    "target_pose",
+                    "waypoints",
+                    "velocity_scale",
+                    "acceleration_scale",
+                    "planner_id",
+                    "reference_frame",
+                ]
+            ),
+            "CARTESIAN_PATH": sorted(
+                [
+                    "waypoints",
+                    "velocity_scale",
+                    "acceleration_scale",
+                    "planner_id",
+                    "reference_frame",
+                ]
+            ),
+            "MOVE_REL": sorted(
+                [
+                    "delta_x",
+                    "delta_y",
+                    "delta_z",
+                    "velocity_scale",
+                    "acceleration_scale",
+                    "planner_id",
+                    "reference_frame",
+                ]
+            ),
+            "MOVE_JOINT": sorted(
+                [
+                    "joint_index",
+                    "joint_angle",
+                    "velocity_scale",
+                    "acceleration_scale",
+                    "planner_id",
+                ]
+            ),
+            "MOVE_JOINTS": sorted(
+                [
+                    "joint_target",
+                    "velocity_scale",
+                    "acceleration_scale",
+                    "planner_id",
+                ]
+            ),
+            "WAIT": sorted(["wait_duration_sec", "reference_frame"]),
+            "STOP": sorted(["reference_frame"]),
+            "SET_SPEED": sorted(["velocity_scale"]),
+            "IO_SET": sorted(["io_address", "io_value", "reference_frame"]),
+            "ALARM_RESET": sorted(["reference_frame"]),
+            "GET_POSE": sorted(["reference_frame"]),
+        }
+        _OLD_ACTIONS = {
+            "move_home": "HOME",
+            "home": "HOME",
+            "stop": "STOP",
+            "move_rel": "MOVE_REL",
+            "move_cartesian_delta": "MOVE_REL",
+            "move_joint": "MOVE_JOINT",
+            "move_joint_delta": "MOVE_JOINT",
+            "move_joints": "MOVE_JOINTS",
+            "wait": "WAIT",
+            "set_speed": "SET_SPEED",
+            "io_set": "IO_SET",
+            "alarm_reset": "ALARM_RESET",
+            "get_pose": "GET_POSE",
+            "ptp": "PTP",
+            "lin": "LIN",
+            "circ": "CIRC",
+            "cartesian_path": "CARTESIAN_PATH",
+        }
+
+        try:
+            constants = {
+                "SUPPORTED_PRIMITIVES": _SUPPORTED_PRIMITIVES,
+                "PLANNER_DEFAULTS": _PLANNER_DEFAULTS,
+                "_ALLOWED_FIELDS_BY_PRIMITIVE": _ALLOWED_FIELDS_BY_PRIMITIVE,
+                "_OLD_ACTIONS": _OLD_ACTIONS,
+            }
+            response.success = True
+            response.constants_json = json.dumps(
+                constants, ensure_ascii=True, separators=(",", ":")
+            )
+        except Exception as exc:
+            response.success = False
+            response.error = str(exc)
+
+        return response
+
+    def _on_confirm_execution(
+        self,
+        request: ConfirmExecution.Request,
+        response: ConfirmExecution.Response,
+    ) -> ConfirmExecution.Response:
+        # Re-validate the parsed intent against current runtime state.
+        # This is a stateless gate: the HMI owns the state machine;
+        # this service only answers "is execution safe right now?"
+        try:
+            parsed_intent = json.loads(request.parsed_intent_json)
+        except json.JSONDecodeError as exc:
+            response.accepted = False
+            response.reason = f"invalid parsed_intent_json: {exc}"
+            return response
+
+        if not self._validate_client.wait_for_service(
+            timeout_sec=self._safety_service_timeout_sec
+        ):
+            response.accepted = False
+            response.reason = "ValidateCommand service unavailable"
+            return response
+
+        command_payload = self._goal_mapper.to_command_payload(parsed_intent)
+        validate_req = ValidateCommand.Request()
+        validate_req.command_json = json.dumps(
+            command_payload, ensure_ascii=True, separators=(",", ":")
+        )
+        validate_req.primitive_type = parsed_intent.get("primitive_type", "")
+        validate_req.velocity_scale = parsed_intent.get("velocity_scale", 0.0)
+
+        try:
+            validate_future = self._validate_client.call_async(validate_req)
+            rclpy.spin_until_future_complete(
+                self, validate_future, timeout_sec=self._safety_service_timeout_sec
+            )
+            if not validate_future.done():
+                response.accepted = False
+                response.reason = "ValidateCommand service timed out"
+                return response
+            validate_resp = validate_future.result()
+        except Exception as exc:
+            response.accepted = False
+            response.reason = f"ValidateCommand call failed: {exc}"
+            return response
+
+        if not validate_resp.valid:
+            response.accepted = False
+            response.reason = str(validate_resp.reason)
+            return response
+
+        response.accepted = True
+        response.execution_summary = (
+            f"Command {request.command_id} confirmed by {request.operator_id}; "
+            f"fingerprint {request.plan_fingerprint[:12]}..."
+        )
+        response.dispatched_to_ros = False
+        return response
 
     def _request_current_pose_snapshot(
         self, reference_frame: str

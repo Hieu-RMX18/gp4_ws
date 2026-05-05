@@ -3,7 +3,6 @@
 import json
 from unittest.mock import MagicMock
 
-import pytest
 
 from llm_gateway.react.agent import ReActAgent
 from llm_gateway.react.iteration_budget import IterationBudget
@@ -36,7 +35,11 @@ def _make_agent(responses, tools=None):
         for t in tools:
             registry.register(t)
     budget = IterationBudget(
-        max_total=5, max_motion=3, max_readonly=10, max_repair=1, wall_clock_timeout_s=30
+        max_total=5,
+        max_motion=3,
+        max_readonly=10,
+        max_repair=1,
+        wall_clock_timeout_s=30,
     )
     schema_validator = MagicMock()
     schema_validator.validate_against_schema.return_value = (True, "")
@@ -101,7 +104,11 @@ def test_agent_schema_invalid_then_repair():
     ]
     client = FakeLLMClient(responses)
     budget = IterationBudget(
-        max_total=5, max_motion=3, max_readonly=10, max_repair=1, wall_clock_timeout_s=30
+        max_total=5,
+        max_motion=3,
+        max_readonly=10,
+        max_repair=1,
+        wall_clock_timeout_s=30,
     )
     agent = ReActAgent(
         llm_client=client,
@@ -120,7 +127,11 @@ def test_agent_repair_exhausted_handoff():
     schema_validator.validate_against_schema.return_value = (False, "bad schema")
     client = FakeLLMClient(responses)
     budget = IterationBudget(
-        max_total=5, max_motion=3, max_readonly=10, max_repair=1, wall_clock_timeout_s=30
+        max_total=5,
+        max_motion=3,
+        max_readonly=10,
+        max_repair=1,
+        wall_clock_timeout_s=30,
     )
     agent = ReActAgent(
         llm_client=client,

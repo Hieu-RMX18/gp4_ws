@@ -83,7 +83,9 @@ class SupervisorService(
         self._hardware_gate_evaluator = (
             hardware_gate_evaluator or HardwareGateEvaluator()
         )
-        self._intent_resolution = intent_resolution_service or IntentResolutionService()
+        self._intent_resolution = intent_resolution_service or IntentResolutionService(
+            ros_adapter=ros_adapter
+        )
         self._sim_auto_confirm = bool(sim_auto_confirm)
         self._telemetry: TelemetryBridgeService | None = None
         self._confirmation_window = timedelta(seconds=confirmation_window_sec)

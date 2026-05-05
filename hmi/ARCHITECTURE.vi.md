@@ -1,6 +1,6 @@
 # GP4 HMI — Tổng quan kiến trúc (vi)
 
-> Ngày cập nhật: 2026-04-27.
+> Ngày cập nhật: 2026-05-04 (W5).
 > Tài liệu này là pointer ngắn gọn cho operator nói tiếng Việt.
 > **Source of truth là các tài liệu được liệt kê ở mục 1.**
 
@@ -37,6 +37,11 @@ RECEIVED -> PARSING -> VALIDATING -> NEEDS_CONFIRMATION
 Browser **không** gọi trực tiếp `/llm_text_input`, `/validate_command`, hay
 `/execute_motion`. Toàn bộ command đi qua HMI supervisor service.
 
+**W5:** HMI backend là thin layer over ROS services. `_hydrate_draw_workplane`
+gọi `/llm_gateway/hydrate_workplane` (fallback local khi ROS unavailable).
+Primitive constants fetch được từ `/llm_gateway/get_primitive_constants`.
+Confirm gate gọi `/supervisor/confirm_execution` để re-validate.
+
 ---
 
 ## 3. Approval & lease
@@ -71,6 +76,10 @@ freshness-critical (block command UI khi stale):
 - joint source đang active (`/yaskawa/joint_states` ưu tiên, fallback `/joint_states`)
 
 `llm_debug` và `llm_command` là non-blocking telemetry chỉ.
+
+**W5:** Adapter readiness tracks 5 command interfaces: `/validate_command`,
+`/execute_motion`, `/llm_gateway/hydrate_workplane`,
+`/llm_gateway/get_primitive_constants`, `/supervisor/confirm_execution`.
 
 ---
 

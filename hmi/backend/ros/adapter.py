@@ -42,7 +42,13 @@ try:
     from industrial_msgs.msg import RobotStatus as IndustrialRobotStatus
     from interfaces.action import ExecuteMotion
     from interfaces.msg import RobotReadiness as RobotReadinessMsg
-    from interfaces.srv import GetCurrentPose, ValidateCommand
+    from interfaces.srv import (
+        ConfirmExecution,
+        GetCurrentPose,
+        GetPrimitiveConstants,
+        HydrateWorkplane,
+        ValidateCommand,
+    )
     from rclpy.action import ActionClient
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import qos_profile_sensor_data
@@ -57,7 +63,10 @@ except Exception as exc:  # pragma: no cover - depends on sourced ROS environmen
     IndustrialRobotStatus = None
     ExecuteMotion = None
     RobotReadinessMsg = None
+    ConfirmExecution = None
     GetCurrentPose = None
+    GetPrimitiveConstants = None
+    HydrateWorkplane = None
     ValidateCommand = None
     ActionClient = None
     SingleThreadedExecutor = None
@@ -102,6 +111,9 @@ KNOWN_WORKSPACE_ENDPOINTS = {
         "/llm_text_input",
         "/validate_command",
         "/execute_motion",
+        "/llm_gateway/hydrate_workplane",
+        "/llm_gateway/get_primitive_constants",
+        "/supervisor/confirm_execution",
     ],
 }
 
@@ -134,6 +146,9 @@ class WorkspaceRosAdapter(
         validate_command_service: str = "/validate_command",
         execute_motion_action: str = "/execute_motion",
         get_current_pose_service: str = "/get_current_pose",
+        hydrate_workplane_service: str = "/llm_gateway/hydrate_workplane",
+        get_primitive_constants_service: str = "/llm_gateway/get_primitive_constants",
+        confirm_execution_service: str = "/supervisor/confirm_execution",
     ) -> None:
         self._node_name = node_name
         self._gateway_status_topic = gateway_status_topic
@@ -147,6 +162,9 @@ class WorkspaceRosAdapter(
         self._validate_command_service = validate_command_service
         self._execute_motion_action = execute_motion_action
         self._get_current_pose_service = get_current_pose_service
+        self._hydrate_workplane_service = hydrate_workplane_service
+        self._get_primitive_constants_service = get_primitive_constants_service
+        self._confirm_execution_service = confirm_execution_service
 
         self._lock = Lock()
         self._state = _TelemetryState(start_error=_ROS_IMPORT_ERROR)
@@ -159,6 +177,9 @@ class WorkspaceRosAdapter(
         self._validate_client: Any = None
         self._execute_client: Any = None
         self._get_pose_client: Any = None
+        self._hydrate_workplane_client: Any = None
+        self._get_primitive_constants_client: Any = None
+        self._confirm_execution_client: Any = None
         self._start_traj_client: Any = None
         self._stop_traj_client: Any = None
         self._goal_handles: dict[str, Any] = {}
@@ -222,6 +243,9 @@ class WorkspaceRosAdapter(
         self._validate_client = None
         self._execute_client = None
         self._get_pose_client = None
+        self._hydrate_workplane_client = None
+        self._get_primitive_constants_client = None
+        self._confirm_execution_client = None
         self._start_traj_client = None
         self._stop_traj_client = None
         self._executor = None
@@ -313,6 +337,129 @@ class WorkspaceRosAdapter(
                 "z": float(pose.orientation.z),
                 "w": float(pose.orientation.w),
             },
+        }
+
+    # ── W5.T4 new service clients ─────────────────────────────────────────
+
+    def hydrate_workplane(self, *, payload_json: str) -> dict[str, Any]:
+        """Call /llm_gateway/hydrate_workplane to hydrate draw workplane origin."""
+        if (
+            self._node is None
+            or HydrateWorkplane is None
+            or self._hydrate_workplane_client is None
+        ):
+            return {"success": False, "error": "hydrate_workplane service unavailable"}
+        if not self._hydrate_workplane_client.wait_for_service(
+            timeout_sec=DEFAULT_VALIDATE_TIMEOUT_SEC
+        ):
+            return {"success": False, "error": "hydrate_workplane service not ready"}
+
+        request = HydrateWorkplane.Request()
+        request.payload_json = payload_json
+        try:
+            response = self._wait_for_future(
+                self._hydrate_workplane_client.call_async(request),
+                DEFAULT_VALIDATE_TIMEOUT_SEC,
+            )
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+        if response is None:
+            return {"success": False, "error": "no response"}
+        return {
+            "success": getattr(response, "success", False),
+            "error": getattr(response, "error", ""),
+            "hydrated_payload_json": getattr(response, "hydrated_payload_json", ""),
+        }
+
+    def get_primitive_constants(self) -> dict[str, Any]:
+        """Call /llm_gateway/get_primitive_constants to fetch primitive config."""
+        if (
+            self._node is None
+            or GetPrimitiveConstants is None
+            or self._get_primitive_constants_client is None
+        ):
+            return {
+                "success": False,
+                "error": "get_primitive_constants service unavailable",
+            }
+        if not self._get_primitive_constants_client.wait_for_service(
+            timeout_sec=DEFAULT_VALIDATE_TIMEOUT_SEC
+        ):
+            return {
+                "success": False,
+                "error": "get_primitive_constants service not ready",
+            }
+
+        request = GetPrimitiveConstants.Request()
+        try:
+            response = self._wait_for_future(
+                self._get_primitive_constants_client.call_async(request),
+                DEFAULT_VALIDATE_TIMEOUT_SEC,
+            )
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+        if response is None:
+            return {"success": False, "error": "no response"}
+        return {
+            "success": getattr(response, "success", False),
+            "error": getattr(response, "error", ""),
+            "constants_json": getattr(response, "constants_json", ""),
+        }
+
+    def confirm_execution(
+        self,
+        *,
+        command_id: str,
+        plan_fingerprint: str,
+        operator_id: str,
+        session_id: str,
+        lease_id: str,
+        parsed_intent_json: str,
+        requested_mode: str,
+    ) -> dict[str, Any]:
+        """Call /supervisor/confirm_execution to gate execution dispatch."""
+        if (
+            self._node is None
+            or ConfirmExecution is None
+            or self._confirm_execution_client is None
+        ):
+            return {
+                "accepted": False,
+                "reason": "confirm_execution service unavailable",
+            }
+        if not self._confirm_execution_client.wait_for_service(
+            timeout_sec=DEFAULT_VALIDATE_TIMEOUT_SEC
+        ):
+            return {
+                "accepted": False,
+                "reason": "confirm_execution service not ready",
+            }
+
+        request = ConfirmExecution.Request()
+        request.command_id = command_id
+        request.plan_fingerprint = plan_fingerprint
+        request.operator_id = operator_id
+        request.session_id = session_id
+        request.lease_id = lease_id
+        request.parsed_intent_json = parsed_intent_json
+        request.requested_mode = requested_mode
+        try:
+            response = self._wait_for_future(
+                self._confirm_execution_client.call_async(request),
+                DEFAULT_VALIDATE_TIMEOUT_SEC,
+            )
+        except Exception as exc:
+            return {"accepted": False, "reason": str(exc)}
+
+        if response is None:
+            return {"accepted": False, "reason": "no response"}
+        return {
+            "accepted": getattr(response, "accepted", False),
+            "reason": getattr(response, "reason", ""),
+            "execution_summary": getattr(response, "execution_summary", ""),
+            "dispatched_to_ros": getattr(response, "dispatched_to_ros", False),
         }
 
     def start_traj_mode(self) -> dict[str, Any]:
@@ -423,6 +570,21 @@ class WorkspaceRosAdapter(
                 GetCurrentPose,
                 self._get_current_pose_service,
             )
+        if HydrateWorkplane is not None:
+            self._hydrate_workplane_client = self._node.create_client(
+                HydrateWorkplane,
+                self._hydrate_workplane_service,
+            )
+        if GetPrimitiveConstants is not None:
+            self._get_primitive_constants_client = self._node.create_client(
+                GetPrimitiveConstants,
+                self._get_primitive_constants_service,
+            )
+        if ConfirmExecution is not None:
+            self._confirm_execution_client = self._node.create_client(
+                ConfirmExecution,
+                self._confirm_execution_service,
+            )
         if StartTrajModeSrv is not None:
             self._start_traj_client = self._node.create_client(
                 StartTrajModeSrv,
@@ -462,10 +624,28 @@ class WorkspaceRosAdapter(
 
         validate_ready = self._validate_client.service_is_ready()
         execute_ready = self._execute_client.server_is_ready()
+        hydrate_ready = (
+            self._hydrate_workplane_client.service_is_ready()
+            if self._hydrate_workplane_client is not None
+            else False
+        )
+        constants_ready = (
+            self._get_primitive_constants_client.service_is_ready()
+            if self._get_primitive_constants_client is not None
+            else False
+        )
+        confirm_ready = (
+            self._confirm_execution_client.service_is_ready()
+            if self._confirm_execution_client is not None
+            else False
+        )
 
         with self._lock:
             self._state.validate_command_ready = validate_ready
             self._state.execute_motion_ready = execute_ready
+            self._state.hydrate_workplane_ready = hydrate_ready
+            self._state.get_primitive_constants_ready = constants_ready
+            self._state.confirm_execution_ready = confirm_ready
             self._state.validate_command_detail = (
                 f"ready at {self._validate_command_service}"
                 if validate_ready
@@ -480,13 +660,20 @@ class WorkspaceRosAdapter(
                 self._state.validate_command_ready_at = now
             if execute_ready:
                 self._state.execute_motion_ready_at = now
+            if hydrate_ready:
+                self._state.hydrate_workplane_ready_at = now
+            if constants_ready:
+                self._state.get_primitive_constants_ready_at = now
+            if confirm_ready:
+                self._state.confirm_execution_ready_at = now
             if validate_ready and execute_ready:
                 self._state.command_interface_error = None
 
     def _command_interfaces_ready(self) -> bool:
         with self._lock:
             return (
-                self._state.validate_command_ready and self._state.execute_motion_ready
+                self._state.validate_command_ready
+                and self._state.execute_motion_ready
             )
 
     def _command_interface_block_reason(self) -> str | None:

@@ -92,12 +92,14 @@ class IntentResolutionService(IntentNormalizationMixin):
         min_velocity_scale: float = 0.01,
         max_velocity_scale: float = 0.06,
         max_acceleration_scale: float = 0.06,
+        ros_adapter: Any | None = None,
     ) -> None:
         self._default_velocity_scale = float(default_velocity_scale)
         self._default_acceleration_scale = float(default_acceleration_scale)
         self._min_velocity_scale = float(min_velocity_scale)
         self._max_velocity_scale = float(max_velocity_scale)
         self._max_acceleration_scale = float(max_acceleration_scale)
+        self._ros_adapter = ros_adapter
 
     def prepare_sequence_submission(
         self,
@@ -437,8 +439,7 @@ class IntentResolutionService(IntentNormalizationMixin):
             metadata["text"] = str(payload.get("text") or "").strip().upper()
         return metadata
 
-    # DEPRECATED: removal_date=2026-06-01, reason=consolidated_to_llm_gateway_via_W5
-    # TODO(W5): replace with ROS service call to llm_gateway's canonical hydrate_draw_workplane
+    # W5.T3 — replaced local logic with ROS service call to /llm_gateway/hydrate_workplane
     def _hydrate_draw_workplane(
         self,
         payload: dict[str, Any],
@@ -451,6 +452,24 @@ class IntentResolutionService(IntentNormalizationMixin):
         if intent not in {"draw_shape", "draw_text"}:
             return payload
 
+        ros = self._ros_adapter
+        if ros is not None and hasattr(ros, "hydrate_workplane"):
+            import json
+
+            result = ros.hydrate_workplane(
+                payload_json=json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+            )
+            if result.get("success"):
+                import json
+
+                hydrated = json.loads(result["hydrated_payload_json"])
+                if isinstance(hydrated, dict):
+                    return hydrated
+            raise IntentResolutionError(
+                f"workplane hydration failed: {result.get('error', 'unknown error')}"
+            )
+
+        # Fallback: local hydration when ROS adapter is unavailable (sim/test mode)
         working_payload = dict(payload)
         workplane = working_payload.get("workplane")
         if workplane is None:

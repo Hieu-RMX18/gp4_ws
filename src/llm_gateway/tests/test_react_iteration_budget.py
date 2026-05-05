@@ -1,7 +1,5 @@
 """Tests for ReAct iteration budget tiering."""
 
-import pytest
-
 from llm_gateway.react.iteration_budget import IterationBudget, IterationCounters
 from llm_gateway.react.tool_registry import Tool
 

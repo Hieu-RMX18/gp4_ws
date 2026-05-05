@@ -5,7 +5,6 @@ import math
 import pytest
 
 from llm_gateway.react.tools.compute_arc_points import ComputeArcPointsTool
-from llm_gateway.react.tool_registry import ToolResult
 
 
 @pytest.fixture

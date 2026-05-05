@@ -1,0 +1,98 @@
+# gp4_perception
+
+RealSense D435i eye-to-hand perception stack for the GP4 workcell.
+
+## Dependencies
+
+### apt
+```bash
+sudo apt install ros-humble-realsense2-camera ros-humble-vision-msgs \
+  ros-humble-cv-bridge ros-humble-pcl-ros ros-humble-pcl-conversions \
+  ros-humble-message-filters ros-humble-moveit-ros-planning-interface \
+  python3-opencv python3-numpy python3-scipy python3-yaml
+```
+
+### pip (user install)
+```bash
+pip install --user pyyaml numpy scipy
+```
+
+### OpenCV version check
+`cv2.calibrateHandEye` requires OpenCV 4.1+. Verify:
+```bash
+python3 -c "import cv2; print(cv2.__version__); assert hasattr(cv2, 'calibrateHandEye'), 'calibrateHandEye missing'"
+```
+
+## Camera bring-up
+
+```bash
+ros2 launch gp4_perception camera.launch.py
+```
+
+Verify topics:
+```bash
+ros2 topic list | rg camera
+ros2 topic info /camera/depth/color/points -v
+# Confirm Reliability=BEST_EFFORT, Durability=VOLATILE (SensorDataQoS)
+```
+
+## Calibration
+
+1. Attach ArUco/Charuco board to the gripper (eye-to-hand setup).
+2. Launch calibration collection:
+   ```bash
+   ros2 launch gp4_perception calibration_collect.launch.py
+   ```
+3. Jog the robot through varied poses (12–24 recommended). Spread orientations.
+4. Call the service:
+   ```bash
+   ros2 service call /perception/calibrate_hand_eye interfaces/srv/CalibrateHandEye \
+     "{fiducial_id: 'board_5x7', min_samples: 12}"
+   ```
+5. Verify extrinsics:
+   ```bash
+   cat src/gp4_perception/config/extrinsics.yaml
+   # calibration_date must be a real ISO 8601 timestamp, not <NOT_CALIBRATED>
+   ```
+
+## Full perception stack
+
+```bash
+ros2 launch gp4_perception perception_full.launch.py
+```
+
+## QoS verification
+
+RealSense publishes with `SensorDataQoS` (BEST_EFFORT, VOLATILE). The scene processor
+subscribes with matching QoS. Mismatched QoS (RELIABLE subscriber) causes silent
+message drops — the callback never fires.
+
+Verify after launch:
+```bash
+ros2 topic info /camera/depth/color/points -v
+```
+
+## Common failure modes
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Stale calibration error on launch | extrinsics.yaml has `<NOT_CALIBRATED>` or date >30 days | Re-run calibration service |
+| Frame mismatch in TF tree | OpenCV optical frame vs ROS frame conversion error | Check `camera_color_optical_frame` orientation in extrinsics |
+| Random missing depth pixels | IR projector cross-talk with fluorescent lighting | Set `emitter_enabled:=false` in launch |
+| Scene processor callback never fires | QoS mismatch (RELIABLE subscriber vs BEST_EFFORT publisher) | Ensure `qos_profile_sensor_data` is used |
+| MoveIt becomes unresponsive | Collision objects published too frequently | Lower detection rate or increase TTL in perception.yaml |
+
+## Safety guards
+
+Three guards run before any perception result is used:
+1. **Calibration freshness** — rejects if >30 days old
+2. **Reprojection error** — rejects if >3 mm
+3. **Depth noise** — range-aware interpolated threshold from perception.yaml breakpoints
+
+These are also checked by `tools/validate_safety_chain.py` at CI time.
+
+## Testing
+
+```bash
+colcon test --packages-select gp4_perception
+```

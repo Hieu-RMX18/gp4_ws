@@ -126,3 +126,8 @@ require_human_approval:
   # the HMI supervisor lease/confirm flow, not by the ExecuteMotion action.
   velocity_scale_threshold: 0.05
   distance_from_home_threshold: 0.30
+
+# W4: Perception calibration quality gates
+calibration:
+  max_age_days: 30
+  max_reprojection_error_mm: 3.0

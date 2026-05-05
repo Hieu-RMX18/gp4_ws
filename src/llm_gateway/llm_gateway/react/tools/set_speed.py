@@ -12,7 +12,9 @@ if TYPE_CHECKING:
 
 class SetSpeedTool(Tool):
     name = "set_speed"
-    description = "Set the global velocity scale (0.0–1.0). Affects future motion commands."
+    description = (
+        "Set the global velocity scale (0.0–1.0). Affects future motion commands."
+    )
     is_motion = True
     input_schema: ClassVar[dict] = {
         "type": "object",

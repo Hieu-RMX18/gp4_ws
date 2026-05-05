@@ -12,7 +12,7 @@ import jsonschema
 
 from .iteration_budget import IterationBudget, IterationCounters
 from .state_injector import StateInjector
-from .tool_registry import Tool, ToolRegistry, ToolResult
+from .tool_registry import ToolRegistry, ToolResult
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -97,15 +97,11 @@ class ReActAgent:
             try:
                 tool.validate_input(tool_call.args)
             except jsonschema.ValidationError as exc:
-                history.append(
-                    ("observation", f"tool_input_invalid: {exc.message}")
-                )
+                history.append(("observation", f"tool_input_invalid: {exc.message}"))
                 counters.repair += 1
                 continue
             except Exception as exc:
-                history.append(
-                    ("observation", f"tool_input_invalid: {exc}")
-                )
+                history.append(("observation", f"tool_input_invalid: {exc}"))
                 counters.repair += 1
                 continue
 
@@ -203,8 +199,5 @@ class ReActAgent:
         return {
             "_handoff": True,
             "reason": reason,
-            "history": [
-                {"role": r, "content": _serialize(c)}
-                for r, c in history
-            ],
+            "history": [{"role": r, "content": _serialize(c)} for r, c in history],
         }

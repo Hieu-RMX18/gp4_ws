@@ -95,9 +95,7 @@ class OpenAICompatibleLLMClient:
 
             self._sleep(self._backoff_delay(attempt))
 
-    def generate_response_from_messages(
-        self, messages: list[dict[str, str]]
-    ) -> str:
+    def generate_response_from_messages(self, messages: list[dict[str, str]]) -> str:
         """Send a request with pre-constructed messages (ReAct multi-turn)."""
         if not self._config.model_is_configured:
             raise ValueError(
@@ -131,7 +129,9 @@ class OpenAICompatibleLLMClient:
         assert last_exc is not None
         raise last_exc
 
-    def _build_request_from_messages(self, messages: list[dict[str, str]]) -> urllib.request.Request:
+    def _build_request_from_messages(
+        self, messages: list[dict[str, str]]
+    ) -> urllib.request.Request:
         payload = {
             "model": self._config.model,
             "temperature": self._config.temperature,

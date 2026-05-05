@@ -70,22 +70,18 @@ W5 must come after W3+W4 because aggressive HMI consolidation changes which ROS 
 
 ## Wave list at a glance
 
-| Wave | Title | Effort | Risk | Pain points addressed |
-|---|---|---|---|---|
-| [W0](W0_governance_branch_perception_review.md) | Governance, branch consolidation, perception review | 3–4 d | Zero runtime | #5 (bloat root cause) |
-| [W1](W1_kill_silent_fallback_joint_guard.md) | Kill silent CARTESIAN_PATH fallback, add JointPositionGuard | 3–4 d | Medium (sim required first) | #4 (J4–J6 unsafe poses) |
-| [W2](W2_drawing_rewire_blended_sequence.md) | Rewire drawing to BLENDED_SEQUENCE, consolidate workplane, CIRC degenerate check | 3–5 d | Medium | #2 (CIRC/draw broken) |
-| [W3](W3_react_agent_on_llm_intent.md) | ReAct agent on `/llm_intent`, chained commands, tool registry | 5–7 d | Medium | #1 (LLM is not reasoning) |
-| [W4](W4_perception_fresh_build.md) | RealSense D435i eye-to-hand, calibration, scene processor, query_perception | 5–7 d | High (hardware dep) | #3 (vision missing) |
-| [W5](W5_hmi_aggressive_consolidation.md) | HMI backend gives up local intent/supervisor logic, calls ROS services | 3–5 d | Medium-High | #5 (HMI duplicates src/) |
-| [W6](W6_first_cleanup_wave.md) | Hard-delete aged DEPRECATED, jscpd full audit, file-budget enforcement | 2–3 d | Low | #5 (sustained anti-bloat) |
-| [W7](W7_t_axis_tiered_mode.md) | Optional: joint_6_t default ±180° / extended ±455° opt-in | 2–3 d | Low | safety extension |
+| Wave | Title | Effort | Risk | Status | Pain points addressed |
+|---|---|---|---|---|---|
+| [W0](W0_governance_branch_perception_review.md) | Governance, branch consolidation, perception review | 3–4 d | Zero runtime | ✅ COMPLETE | #5 (bloat root cause) |
+| [W1](W1_kill_silent_fallback_joint_guard.md) | Kill silent CARTESIAN_PATH fallback, add JointPositionGuard | 3–4 d | Medium (sim required first) | ✅ COMPLETE | #4 (J4–J6 unsafe poses) |
+| [W2](W2_drawing_rewire_blended_sequence.md) | Rewire drawing to BLENDED_SEQUENCE, consolidate workplane, CIRC degenerate check | 3–5 d | Medium | ✅ COMPLETE | #2 (CIRC/draw broken) |
+| [W3](W3_react_agent_on_llm_intent.md) | ReAct agent on `/llm_intent`, chained commands, tool registry | 5–7 d | Medium | ✅ COMPLETE | #1 (LLM is not reasoning) |
+| [W4](W4_perception_fresh_build.md) | RealSense D435i eye-to-hand, calibration, scene processor, query_perception | 5–7 d | High (hardware dep) | ✅ COMPLETE | #3 (vision missing) |
+| [W5](W5_hmi_aggressive_consolidation.md) | HMI backend gives up local intent/supervisor logic, calls ROS services | 3–5 d | Medium-High | ✅ COMPLETE | #5 (HMI duplicates src/) |
+| [W6](W6_first_cleanup_wave.md) | Hard-delete aged DEPRECATED, jscpd full audit, file-budget enforcement | 2–3 d | Low | ✅ COMPLETE | #5 (sustained anti-bloat) |
+| [W7](W7_t_axis_tiered_mode.md) | Optional: joint_6_t default ±180° / extended ±455° opt-in | 2–3 d | Low | ⬜ PENDING | safety extension |
+| [W8](W8_second_cleanup_wave.md) | Second cleanup wave (scheduled 2026-05-19) | 2–3 d | Low | ⬜ PENDING | #5 (sustained anti-bloat) |
 
-
-#NOTES: 
-| W2 | Drawing rewire to BLENDED_SEQUENCE; W2.T0 first wires the interface contract (interfaces/msg/SequenceStep.msg + ExecuteMotion.action extension + llm_schema enum); then drawing pipeline emits BLENDED_SEQUENCE; consolidate workplane; CIRC degenerate check; conditional plan_only fix | 3-5 d | Medium | #2 (CIRC/draw broken) |
-Update W4:
-| W4 | W4.T0 first defines perception interfaces (CalibrateHandEye.srv, GetObjectPositions.srv, CheckCamera.srv, PerceptionStatus.msg); then RealSense D435i eye-to-hand, calibration, scene processor, query_perception | 5-7 d | High (hardware dep) | #3 (vision missing) |
 Update W1:
 | W1 | W1.T0 first deletes park_safe and reconciles named states per W0.T8 audit; kill silent CARTESIAN_PATH fallback; JointPositionGuard with multi-stage placement (A: pre-downsample, B: QualityGate, C: hw_adapter); ManipulabilityGuard; CumulativeRotationGuard | 3-4 d | Medium | #4 (J4-J6 unsafe poses) |
 ---

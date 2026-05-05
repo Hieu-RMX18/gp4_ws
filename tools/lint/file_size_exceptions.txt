@@ -1,13 +1,16 @@
 # Format: <path> <current_loc> <reason> <target_wave_for_split>
-src/llm_gateway/llm_gateway/draw_router.py 889 emits CARTESIAN_PATH; will be split when rewired in W2 W2
-src/llm_gateway/llm_gateway/llm_gateway_node.py 869 god-node; will be split when ReAct lands W3
-src/llm_gateway/llm_gateway/drawing_geometry.py 729 will be split alongside draw_router rewire W2
-src/motion_core/src/primitive_router_dispatch.cpp 939 contains the silent fallback being removed in W1 W1
-src/jog_pendant/src/servo_bridge_node.cpp 842 separate domain; revisit in W6 W6
-src/primitives/src/primitive_blended_sequence.cpp 827 dispatcher complexity; revisit after W2 wires it W6
-src/motion_core/src/motion_core_node.cpp 784 god-node; revisit in W6 W6
-src/hw_adapter/src/hw_adapter_node.cpp 666 boundary file; revisit in W6 W6
-src/hw_adapter/test/test_hw_adapter_node.cpp 650 mirrors hw_adapter_node W6
-src/hw_adapter/src/trajectory_executor.cpp 624 revisit W6
-src/supervisor/src/execution_monitor.cpp 594 revisit W6
-src/motion_core/src/dispatch_trajectory_executor.cpp 590 revisit W6
+# W6.T4: drawing_geometry.py split into drawing_geometry.py (781) + drawing_command_emitter.py (329). Both under budget.
+# drawing_geometry.py still 780 LOC (80 over 700 limit); geometry math + path gen tightly coupled. Further split in W8.
+src/llm_gateway/llm_gateway/drawing_geometry.py 780 geometry math + path generation; further split W8
+# Remaining entries deferred to W8 (next cleanup wave, scheduled 2026-05-19).
+src/llm_gateway/llm_gateway/draw_router.py 1013 single mixin class; split into sub-mixins W8
+src/llm_gateway/llm_gateway/llm_gateway_node.py 1318 god-node; split into intent/raw handlers W8
+src/motion_core/src/primitive_router_dispatch.cpp 816 contains dispatch logic; split if >=700 W8
+src/jog_pendant/src/servo_bridge_node.cpp 855 jog logic; split into command/streaming W8
+src/primitives/src/primitive_blended_sequence.cpp 827 dispatcher complexity W8
+src/motion_core/src/motion_core_node.cpp 784 god-node W8
+src/hw_adapter/src/hw_adapter_node.cpp 666 boundary file W8
+src/hw_adapter/test/test_hw_adapter_node.cpp 650 mirrors hw_adapter_node W8
+src/hw_adapter/src/trajectory_executor.cpp 624 W8
+src/supervisor/src/execution_monitor.cpp 594 W8
+src/motion_core/src/dispatch_trajectory_executor.cpp 590 W8

@@ -354,15 +354,13 @@ PrimitiveRouterDispatch::plan_for_primitive(const PlanningRequest &request) {
       const std::string step_primitive =
           ExecuteMotionActionSupport::normalize_primitive(step.primitive_type);
       if (step_primitive != "LIN" && step_primitive != "PTP") {
-        result.reason = "BLENDED_SEQUENCE step[" +
-                        std::to_string(step_index) +
+        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
                         "] unsupported primitive_type '" + step.primitive_type +
                         "'; only LIN/PTP are supported in motion_core";
         return result;
       }
       if (step.blend_radius_m < 0.0) {
-        result.reason = "BLENDED_SEQUENCE step[" +
-                        std::to_string(step_index) +
+        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
                         "] blend_radius_m must be >= 0.0";
         return result;
       }
@@ -371,8 +369,7 @@ PrimitiveRouterDispatch::plan_for_primitive(const PlanningRequest &request) {
       std::string orientation_reason;
       if (!orientation_filter_.normalize_and_validate(step_pose,
                                                       orientation_reason)) {
-        result.reason = "BLENDED_SEQUENCE step[" +
-                        std::to_string(step_index) +
+        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
                         "] orientation rejected: " + orientation_reason;
         return result;
       }
@@ -382,8 +379,7 @@ PrimitiveRouterDispatch::plan_for_primitive(const PlanningRequest &request) {
         step_planner_id = planner_router_.route_planner(step_primitive, false);
       }
       if (step_planner_id.empty()) {
-        result.reason = "BLENDED_SEQUENCE step[" +
-                        std::to_string(step_index) +
+        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
                         "] has no planner_id";
         return result;
       }
@@ -403,24 +399,22 @@ PrimitiveRouterDispatch::plan_for_primitive(const PlanningRequest &request) {
         move_group->setPlanningPipelineId(step_selection.pipeline_id);
       }
       move_group->setPlannerId(step_selection.planner_id);
-      move_group->setMaxVelocityScalingFactor(
-          step.velocity_scale > 0.0 ? step.velocity_scale
-                                    : request.velocity_scale);
+      move_group->setMaxVelocityScalingFactor(step.velocity_scale > 0.0
+                                                  ? step.velocity_scale
+                                                  : request.velocity_scale);
       move_group->setMaxAccelerationScalingFactor(
           step.acceleration_scale > 0.0 ? step.acceleration_scale
                                         : request.acceleration_scale);
       move_group->setStartState(staged_state);
       move_group->clearPoseTargets();
       if (!move_group->setPoseTarget(step_pose)) {
-        result.reason = "BLENDED_SEQUENCE step[" +
-                        std::to_string(step_index) +
+        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
                         "] MoveGroupInterface rejected target pose";
         return result;
       }
 
-      const std::string step_interrupt =
-          request.interrupt_reason("blended_sequence_step_" +
-                                   std::to_string(step_index));
+      const std::string step_interrupt = request.interrupt_reason(
+          "blended_sequence_step_" + std::to_string(step_index));
       if (!step_interrupt.empty()) {
         result.status = PlanningStatus::kCanceled;
         result.reason = step_interrupt;
@@ -429,24 +423,22 @@ PrimitiveRouterDispatch::plan_for_primitive(const PlanningRequest &request) {
 
       moveit::planning_interface::MoveGroupInterface::Plan step_plan;
       const auto step_plan_result = request.plan_with_interruption(
-          step_plan, "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
-                         "] planning");
+          step_plan,
+          "BLENDED_SEQUENCE step[" + std::to_string(step_index) + "] planning");
       if (step_plan_result.status == PlanningStatus::kCanceled) {
         result.status = PlanningStatus::kCanceled;
         result.reason = step_plan_result.reason;
         return result;
       }
       if (step_plan_result.status != PlanningStatus::kSuccess) {
-        result.reason = "BLENDED_SEQUENCE step[" +
-                        std::to_string(step_index) +
+        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
                         "] planning failed: " + step_plan_result.reason;
         return result;
       }
 
       const auto &segment = step_plan.trajectory_.joint_trajectory;
       if (segment.points.empty()) {
-        result.reason = "BLENDED_SEQUENCE step[" +
-                        std::to_string(step_index) +
+        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
                         "] returned empty joint trajectory";
         return result;
       }
@@ -458,8 +450,7 @@ PrimitiveRouterDispatch::plan_for_primitive(const PlanningRequest &request) {
         has_stitched_start_state = true;
       } else if (stitched_trajectory_msg.joint_trajectory.joint_names !=
                  segment.joint_names) {
-        result.reason = "BLENDED_SEQUENCE step[" +
-                        std::to_string(step_index) +
+        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
                         "] joint_names changed between planned segments";
         return result;
       }
@@ -474,8 +465,7 @@ PrimitiveRouterDispatch::plan_for_primitive(const PlanningRequest &request) {
 
       const auto &last_point = segment.points.back();
       if (last_point.positions.size() != request.active_joint_names.size()) {
-        result.reason = "BLENDED_SEQUENCE step[" +
-                        std::to_string(step_index) +
+        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
                         "] final point joint count does not match planning "
                         "group";
         return result;

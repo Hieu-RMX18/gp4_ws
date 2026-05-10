@@ -16,7 +16,7 @@ from ..domain.models import (
     PlanMetrics,
     RuntimeMode,
     TelemetryFreshnessState,
-    )
+)
 
 
 def _utcnow() -> datetime:

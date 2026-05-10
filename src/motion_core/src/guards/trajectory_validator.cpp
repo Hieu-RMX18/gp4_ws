@@ -78,4 +78,4 @@ bool validate_trajectory_structure(
   return true;
 }
 
-}  // namespace motion_core
+} // namespace motion_core

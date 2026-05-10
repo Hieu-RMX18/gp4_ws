@@ -52,12 +52,8 @@ def generate_launch_description() -> LaunchDescription:
                     "camera_namespace": "",
                     "camera_name": "camera",
                     "serial_no": LaunchConfiguration("serial"),
-                    "depth_module.depth_profile": LaunchConfiguration(
-                        "depth_profile"
-                    ),
-                    "rgb_camera.color_profile": LaunchConfiguration(
-                        "color_profile"
-                    ),
+                    "depth_module.depth_profile": LaunchConfiguration("depth_profile"),
+                    "rgb_camera.color_profile": LaunchConfiguration("color_profile"),
                     "align_depth.enable": "true",
                     "enable_sync": "true",
                     # Point cloud not needed for calibration (saves CPU)
@@ -80,4 +76,3 @@ def generate_launch_description() -> LaunchDescription:
             ),
         ]
     )
-

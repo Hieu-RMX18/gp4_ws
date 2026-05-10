@@ -75,7 +75,9 @@ class SupervisorSubmissionMixin:
             command_id=command_id,
             correlation_id=correlation_id,
         )
-        effective_structured_intent = self._semantic_ir_from_review_result(review_result)
+        effective_structured_intent = self._semantic_ir_from_review_result(
+            review_result
+        )
         if effective_structured_intent is None:
             review_error = (
                 review_result.get("error")

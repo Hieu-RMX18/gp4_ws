@@ -311,7 +311,9 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         adapter._review_intent_client = client  # pylint: disable=protected-access
 
         with (
-            patch.object(adapter_module, "ReviewIntent", _FakeReviewIntent, create=True),
+            patch.object(
+                adapter_module, "ReviewIntent", _FakeReviewIntent, create=True
+            ),
             patch.dict(os.environ, {"GP4_REVIEW_INTENT_TOKEN": "review-token"}),
         ):
             result = adapter.submit_text_for_review(
@@ -634,7 +636,9 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertEqual(len(goal.sequence_steps), 2)
         for index, expected_step in enumerate(payload["sequence_steps"]):
             actual_step = goal.sequence_steps[index]
-            self.assertEqual(actual_step.primitive_type, expected_step["primitive_type"])
+            self.assertEqual(
+                actual_step.primitive_type, expected_step["primitive_type"]
+            )
             self.assertAlmostEqual(
                 actual_step.blend_radius_m, expected_step["blend_radius_m"]
             )
@@ -646,9 +650,15 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
                 actual_step.acceleration_scale, expected_step["acceleration_scale"]
             )
             expected_position = expected_step["target_pose"]["position"]
-            self.assertAlmostEqual(actual_step.target_pose.position.x, expected_position["x"])
-            self.assertAlmostEqual(actual_step.target_pose.position.y, expected_position["y"])
-            self.assertAlmostEqual(actual_step.target_pose.position.z, expected_position["z"])
+            self.assertAlmostEqual(
+                actual_step.target_pose.position.x, expected_position["x"]
+            )
+            self.assertAlmostEqual(
+                actual_step.target_pose.position.y, expected_position["y"]
+            )
+            self.assertAlmostEqual(
+                actual_step.target_pose.position.z, expected_position["z"]
+            )
 
     def test_hardware_preflight_detects_missing_primary_joint_source(self) -> None:
         adapter = WorkspaceRosAdapter()

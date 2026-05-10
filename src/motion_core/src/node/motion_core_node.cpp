@@ -333,14 +333,14 @@ private:
             guard_node["reference_length_m"]
                 ? guard_node["reference_length_m"].as<double>()
                 : 1.0);
-        RCLCPP_INFO(
-            get_logger(),
-            "ManipulabilityGuard loaded from %s with floor %.4f and "
-            "reference_length_m %.4f",
-            safety_rules_yaml_path_.c_str(), guard_node["floor"].as<double>(),
-            guard_node["reference_length_m"]
-                ? guard_node["reference_length_m"].as<double>()
-                : 1.0);
+        RCLCPP_INFO(get_logger(),
+                    "ManipulabilityGuard loaded from %s with floor %.4f and "
+                    "reference_length_m %.4f",
+                    safety_rules_yaml_path_.c_str(),
+                    guard_node["floor"].as<double>(),
+                    guard_node["reference_length_m"]
+                        ? guard_node["reference_length_m"].as<double>()
+                        : 1.0);
       }
     } catch (const YAML::Exception &ex) {
       RCLCPP_ERROR(get_logger(),

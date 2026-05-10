@@ -13,6 +13,7 @@ from ament_index_python.packages import get_package_share_directory
 _MODEL_PLACEHOLDER = "TEEN MODEL 9ROUTER"
 _DOTENV_FILENAME = ".env"
 
+
 def _default_safety_rules_path() -> str:
     """Resolve safety_rules.yaml from installed package or local source tree."""
     try:
@@ -26,6 +27,7 @@ def _default_safety_rules_path() -> str:
             / "safety_rules.yaml"
         )
 
+
 def _load_safety_temperature() -> float:
     """Read llm.react.temperature from safety_rules.yaml SSOT."""
     try:
@@ -38,12 +40,14 @@ def _load_safety_temperature() -> float:
     except Exception:
         return 0.0
 
+
 def _default_config_path() -> str:
     try:
         pkg_share = get_package_share_directory("llm_gateway")
         return os.path.join(pkg_share, "config", "llm.yaml")
     except Exception:
         return str(Path(__file__).resolve().parents[1] / "config" / "llm.yaml")
+
 
 def _as_bool(value: Any, default: bool) -> bool:
     if value is None:
@@ -53,6 +57,7 @@ def _as_bool(value: Any, default: bool) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
 
 def _parse_dotenv_file(dotenv_path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -81,6 +86,7 @@ def _parse_dotenv_file(dotenv_path: Path) -> dict[str, str]:
 
     return values
 
+
 def _iter_candidate_dotenv_paths(config_path: str) -> list[Path]:
     explicit_env_file = os.getenv("GP4_LLM_ENV_FILE", "").strip()
     candidates: list[Path] = []
@@ -105,11 +111,13 @@ def _iter_candidate_dotenv_paths(config_path: str) -> list[Path]:
 
     return candidates
 
+
 def _load_dotenv_values(config_path: str) -> dict[str, str]:
     for candidate in _iter_candidate_dotenv_paths(config_path):
         if candidate.is_file():
             return _parse_dotenv_file(candidate)
     return {}
+
 
 def _pick_first_non_empty(*values: Any) -> str:
     for value in values:
@@ -119,6 +127,7 @@ def _pick_first_non_empty(*values: Any) -> str:
         if text:
             return text
     return ""
+
 
 @dataclass(frozen=True)
 class LLMBackendConfig:
@@ -142,6 +151,7 @@ class LLMBackendConfig:
     @property
     def model_is_configured(self) -> bool:
         return bool(self.model) and self.model != _MODEL_PLACEHOLDER
+
 
 def load_llm_backend_config(config_path: str | None = None) -> LLMBackendConfig:
     resolved_path = config_path or _default_config_path()
@@ -200,6 +210,8 @@ def load_llm_backend_config(config_path: str | None = None) -> LLMBackendConfig:
         retry_base_delay_sec=float(pick("retry_base_delay_sec", 0.5)),
         retry_max_delay_sec=float(pick("retry_max_delay_sec", 4.0)),
     )
+
+
 """Prompt construction — Semantic IR output (v2.1).
 
 The LLM always outputs Semantic IR JSON with an ``intent`` field.
@@ -213,10 +225,8 @@ part of this prompt's output contract.
 """
 
 import logging
-from pathlib import Path
 from uuid import uuid4
 
-import yaml
 
 # ── Frozen semantic intent list ─────────────────────────────────────────────
 # Must match IntentRouter._route_single_intent exactly.
@@ -255,6 +265,7 @@ _DEFAULT_WORKSPACE_BOUNDS = {
 
 _LOGGER = logging.getLogger(__name__)
 
+
 def _coerce_workspace_bounds(raw: dict | None) -> dict[str, float]:
     if not isinstance(raw, dict):
         raw = {}
@@ -262,6 +273,7 @@ def _coerce_workspace_bounds(raw: dict | None) -> dict[str, float]:
         key: float(raw.get(key, default))
         for key, default in _DEFAULT_WORKSPACE_BOUNDS.items()
     }
+
 
 def _load_yaml(path: Path) -> dict:
     if not path.exists():
@@ -272,6 +284,7 @@ def _load_yaml(path: Path) -> dict:
     except Exception as ex:
         _LOGGER.warning("PromptBuilder: failed to parse YAML '%s': %s", path, ex)
         return {}
+
 
 def _load_workspace_bounds() -> dict[str, float]:
     try:
@@ -304,12 +317,14 @@ def _load_workspace_bounds() -> dict[str, float]:
         )
     return _coerce_workspace_bounds(safety_rules.get("workspace_bounds"))
 
+
 def _format_workspace_bounds(bounds: dict[str, float]) -> str:
     return (
         f"x: {bounds['x_min']:.2f}–{bounds['x_max']:.2f}, "
         f"y: {bounds['y_min']:.2f}–{bounds['y_max']:.2f}, "
         f"z: {bounds['z_min']:.2f}–{bounds['z_max']:.2f}"
     )
+
 
 _SYSTEM_PROMPT_TEMPLATE = """\
 You are the llm_gateway for a Yaskawa GP4 robot arm.
@@ -663,17 +678,19 @@ Schema (for reference — your output is Semantic IR, NOT direct primitive):
 __JSON_SCHEMA__
 """
 
+
 def build_system_prompt(schema_json: str) -> str:
     """Build the system prompt for the LLM, injecting the JSON schema."""
     workspace_limits = _format_workspace_bounds(_load_workspace_bounds())
     return _SYSTEM_PROMPT_TEMPLATE.replace(
         "__WORKSPACE_LIMITS__", workspace_limits
     ).replace("__JSON_SCHEMA__", schema_json)
+
+
 """OpenAI-compatible client for a local 9router backend."""
 
 import json
 import logging
-import os
 import random
 import time
 import urllib.error
@@ -686,8 +703,10 @@ _LOGGER = logging.getLogger(__name__)
 # 408 Request Timeout, 429 Too Many Requests, 500/502/503/504 server/upstream errors.
 _TRANSIENT_HTTP_STATUS = {408, 429, 500, 502, 503, 504}
 
+
 def _is_transient_http(status: int) -> bool:
     return status in _TRANSIENT_HTTP_STATUS
+
 
 class OpenAICompatibleLLMClient:
     """Minimal chat/completions client for a local OpenAI-compatible backend.
@@ -867,9 +886,13 @@ class OpenAICompatibleLLMClient:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
+
+
 """Iteration budget for ReAct agent — tiered limits."""
 
 from dataclasses import dataclass
+
+
 @dataclass
 class IterationBudget:
     max_total: int = 5
@@ -877,6 +900,7 @@ class IterationBudget:
     max_readonly: int = 10
     max_repair: int = 1
     wall_clock_timeout_s: float = 30.0
+
 
 @dataclass
 class IterationCounters:
@@ -908,12 +932,15 @@ class IterationCounters:
             self.motion += 1
         if tool.is_readonly:
             self.readonly += 1
+
+
 """State injector — pulls live robot state from ROS topics for ReAct prompt context."""
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 _LOGGER = logging.getLogger(__name__)
+
 
 class StateInjector:
     """Maintains a snapshot of robot state from ROS subscriptions.
@@ -980,13 +1007,15 @@ class StateInjector:
                 },
             }
         }
+
+
 """Tool registry and base classes for ReAct agent tools."""
 
-import json
 from dataclasses import dataclass
-from typing import ClassVar, Dict, List
+from typing import ClassVar
 
 import jsonschema
+
 
 @dataclass
 class ToolResult:
@@ -998,6 +1027,7 @@ class ToolResult:
         if self.ok:
             return json.dumps({"ok": True, "payload": self.payload})
         return json.dumps({"ok": False, "error": self.error})
+
 
 class Tool:
     name: ClassVar[str] = ""
@@ -1012,6 +1042,7 @@ class Tool:
     def validate_input(self, args: dict) -> None:
         if self.input_schema:
             jsonschema.validate(instance=args, schema=self.input_schema)
+
 
 class ToolRegistry:
     """Registry of ReAct tools by name."""
@@ -1045,10 +1076,12 @@ class ToolRegistry:
         for t in self._tools.values():
             lines.append(f"- {t.name}: {t.description}")
         return "\n".join(lines)
+
+
 """Compute arc points — local geometry tool for CIRC auxiliary poses."""
 
 import math
-from typing import ClassVar
+
 
 def _normalize(v: list[float]) -> list[float]:
     norm = math.sqrt(sum(x * x for x in v))
@@ -1056,12 +1089,14 @@ def _normalize(v: list[float]) -> list[float]:
         raise ValueError("zero vector")
     return [x / norm for x in v]
 
+
 def _cross(a: list[float], b: list[float]) -> list[float]:
     return [
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
         a[0] * b[1] - a[1] * b[0],
     ]
+
 
 def _quaternion_from_vectors(forward: list[float], up: list[float]) -> dict:
     """Build a quaternion that rotates +Z to `up` and +X to `forward`."""
@@ -1084,6 +1119,7 @@ def _quaternion_from_vectors(forward: list[float], up: list[float]) -> dict:
     if cy[2] < cz[1]:
         z = -z
     return {"x": x, "y": y, "z": z, "w": w}
+
 
 class ComputeArcPointsTool(Tool):
     name = "compute_arc_points"
@@ -1186,9 +1222,10 @@ class ComputeArcPointsTool(Tool):
                 "target_pose": _pose_at(end_angle),
             },
         )
+
+
 """Get current robot pose tool — calls existing ROS service."""
 
-from typing import ClassVar
 
 class GetCurrentPoseTool(Tool):
     name = "get_current_pose"
@@ -1232,9 +1269,10 @@ class GetCurrentPoseTool(Tool):
                 }
             },
         )
+
+
 """Gripper close tool — stub until gripper capability is wired."""
 
-from typing import ClassVar
 
 class GripperCloseTool(Tool):
     name = "gripper_close"
@@ -1253,9 +1291,10 @@ class GripperCloseTool(Tool):
             error="capability_unavailable",
             payload={"capability": "gripper"},
         )
+
+
 """Gripper open tool — stub until gripper capability is wired."""
 
-from typing import ClassVar
 
 class GripperOpenTool(Tool):
     name = "gripper_open"
@@ -1272,10 +1311,10 @@ class GripperOpenTool(Tool):
             error="capability_unavailable",
             payload={"capability": "gripper"},
         )
+
+
 """Plan motion tool — validates a motion target through /validate_command."""
 
-import json
-from typing import ClassVar
 
 class PlanMotionTool(Tool):
     name = "plan_motion"
@@ -1340,7 +1379,9 @@ class PlanMotionTool(Tool):
             "acceleration_scale": float(
                 args.get(
                     "acceleration_scale",
-                    getattr(node, "_default_acceleration_scale", default_velocity_scale),
+                    getattr(
+                        node, "_default_acceleration_scale", default_velocity_scale
+                    ),
                 )
             ),
         }
@@ -1387,7 +1428,8 @@ class PlanMotionTool(Tool):
         if resp is None or not getattr(resp, "valid", False):
             return ToolResult(
                 ok=False,
-                error=getattr(resp, "reason", "") or "validate_command rejected the plan",
+                error=getattr(resp, "reason", "")
+                or "validate_command rejected the plan",
             )
 
         plan_id = f"plan-{uuid4().hex}"
@@ -1461,9 +1503,10 @@ class PlanMotionTool(Tool):
                 ),
             }
         return {"command": normalized_command or command}
+
+
 """Perception query tool — delegates to gp4_perception.query_perception_tool (W4)."""
 
-from typing import ClassVar
 
 # Attempt W4 import; fall back to stub error if gp4_perception is not built/installed.
 try:
@@ -1476,6 +1519,7 @@ try:
 except Exception:
     _W4_AVAILABLE = False
     _format_detections_from_ros = None  # type: ignore[assignment]
+
 
 class QueryPerceptionTool(Tool):
     name = "query_perception"
@@ -1519,7 +1563,8 @@ class QueryPerceptionTool(Tool):
                     class_filter = args.get("class_filter", "").strip().lower()
                     if class_filter:
                         formatted = [
-                            d for d in formatted
+                            d
+                            for d in formatted
                             if class_filter in d.get("class_id", "").lower()
                             or class_filter in d.get("description", "").lower()
                         ]
@@ -1527,7 +1572,9 @@ class QueryPerceptionTool(Tool):
                     result["payload"] = {
                         "detections": formatted,
                         "count": len(formatted),
-                        "summary": "; ".join(summary_parts) if summary_parts else "No objects detected.",
+                        "summary": "; ".join(summary_parts)
+                        if summary_parts
+                        else "No objects detected.",
                     }
                 except Exception:
                     pass  # Fallback to raw detections.
@@ -1552,9 +1599,10 @@ class QueryPerceptionTool(Tool):
             error=result.get("error"),
             payload=result.get("payload"),
         )
+
+
 """Set speed tool — validates and records velocity_scale for future motion."""
 
-from typing import ClassVar
 
 class SetSpeedTool(Tool):
     name = "set_speed"
@@ -1586,9 +1634,10 @@ class SetSpeedTool(Tool):
             ok=True,
             payload={"applied": True, "velocity_scale": velocity_scale},
         )
+
+
 """Submit motion tool — hands a plan to HMI/operator confirmation."""
 
-from typing import ClassVar
 
 class SubmitMotionTool(Tool):
     name = "submit_motion"
@@ -1646,9 +1695,10 @@ class SubmitMotionTool(Tool):
                 "command": command,
             },
         )
+
+
 """Wait for robot state tool — polls robot status topic."""
 
-from typing import ClassVar
 
 class WaitForStateTool(Tool):
     name = "wait_for_state"
@@ -1693,24 +1743,26 @@ class WaitForStateTool(Tool):
                 "timeout_s": timeout_s,
             },
         )
+
+
 """ReAct loop driver — reasoning + tool use for LLM intent resolution."""
 
-import json
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Tuple
 
-import jsonschema
 
 from llm_gateway.intent_engine import LLMParser
 
 _LOGGER = logging.getLogger(__name__)
 
+
 @dataclass
 class ToolCall:
     name: str
     args: dict
+
 
 @dataclass
 class AgentContext:
@@ -1718,6 +1770,7 @@ class AgentContext:
 
     state_injector: StateInjector
     ros_node: Any = None
+
 
 class ReActAgent:
     """ReAct agent: iteratively calls tools until a valid semantic IR is produced."""
@@ -1885,7 +1938,9 @@ class ReActAgent:
         if not isinstance(data, dict):
             return data
 
-        if any(key in data for key in ("tool_call", "intent", "primitive_type", "error")):
+        if any(
+            key in data for key in ("tool_call", "intent", "primitive_type", "error")
+        ):
             return data
 
         tool_call = self._extract_provider_tool_call(data)

@@ -131,7 +131,9 @@ class TestFrameTransform:
         processor = object.__new__(SceneProcessor)
         processor._last_detections = []
         processor._published_collision_ids = set()
-        processor._collision_pub = type("Publisher", (), {"publish": lambda *_args: None})()
+        processor._collision_pub = type(
+            "Publisher", (), {"publish": lambda *_args: None}
+        )()
         processor._calibration_status = lambda: (True, "", "2026-05-09T00:00:00Z", 1.0)
         processor._tf_buffer = type(
             "TfBuffer",
@@ -151,7 +153,9 @@ class TestFrameTransform:
             "_read_xyz_rgb",
             lambda _cloud: (np.array([[0.1, 0.2, 0.3]], dtype=np.float32), None),
         )
-        monkeypatch.setattr(scene_processor, "_roi_crop", fail_if_roi_receives_camera_points)
+        monkeypatch.setattr(
+            scene_processor, "_roi_crop", fail_if_roi_receives_camera_points
+        )
 
         fake_cloud = type(
             "Cloud",
@@ -228,7 +232,9 @@ class TestPerceptionContracts:
         def fail_if_point_cloud_is_read(_cloud):
             raise AssertionError("uncalibrated scene processing must fail closed")
 
-        monkeypatch.setattr(scene_processor, "_read_xyz_rgb", fail_if_point_cloud_is_read)
+        monkeypatch.setattr(
+            scene_processor, "_read_xyz_rgb", fail_if_point_cloud_is_read
+        )
 
         fake_cloud = type("Cloud", (), {"header": object()})()
         processor._on_synced(fake_cloud, object())

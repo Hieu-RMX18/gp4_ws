@@ -777,7 +777,9 @@ class SupervisorServiceTests(unittest.TestCase):
         )
         self.assertEqual(response["sequence"]["intentSource"], "text")
         self.assertTrue(
-            all(step["intentSource"] == "text" for step in response["sequence"]["steps"])
+            all(
+                step["intentSource"] == "text" for step in response["sequence"]["steps"]
+            )
         )
 
     def test_gateway_review_named_pose_sequence_confirms_in_order(

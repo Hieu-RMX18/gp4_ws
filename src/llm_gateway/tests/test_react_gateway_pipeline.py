@@ -76,10 +76,8 @@ def _make_gateway_shell(react_result):
             {"command": command, "intent": intent_text}
         )
     )
-    node._reject = (
-        lambda stage, reason, **_: (_ for _ in ()).throw(
-            AssertionError(f"{stage}: {reason}")
-        )
+    node._reject = lambda stage, reason, **_: (_ for _ in ()).throw(
+        AssertionError(f"{stage}: {reason}")
     )
     return node, statuses, dispatched
 
@@ -319,10 +317,8 @@ def test_direct_gateway_topics_reject_by_default_without_dispatching():
     node._direct_topic_execution_enabled = False
     rejections = []
     dispatched = []
-    node._reject = (
-        lambda stage, reason, **kwargs: rejections.append(
-            {"stage": stage, "reason": reason, "intent": kwargs.get("intent_text")}
-        )
+    node._reject = lambda stage, reason, **kwargs: rejections.append(
+        {"stage": stage, "reason": reason, "intent": kwargs.get("intent_text")}
     )
     node.process_intent = lambda intent_text: dispatched.append(intent_text)
     node.process_raw_command = lambda raw_payload: dispatched.append(raw_payload)

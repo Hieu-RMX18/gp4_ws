@@ -339,7 +339,9 @@ def test_submit_motion_fails_closed_when_execute_motion_unavailable():
 
 def test_submit_motion_returns_confirmation_handoff_without_sending_goal():
     goal = SimpleNamespace(primitive_type="HOME")
-    node = _SubmitNodeWithReadyAction({"goal": goal, "command": {"primitive_type": "HOME"}})
+    node = _SubmitNodeWithReadyAction(
+        {"goal": goal, "command": {"primitive_type": "HOME"}}
+    )
     result = SubmitMotionTool().invoke(
         {"plan_id": "plan-001"},
         AgentContext(

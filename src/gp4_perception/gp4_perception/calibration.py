@@ -277,9 +277,7 @@ class CalibrationService(Node):
                 T_base2grip[:3, 3] = t_b2g.flatten()
 
                 # Positional error between the two paths
-                err = np.linalg.norm(
-                    T_target_via_cam[:3, 3] - T_base2grip[:3, 3]
-                )
+                err = np.linalg.norm(T_target_via_cam[:3, 3] - T_base2grip[:3, 3])
                 errors.append(err)
 
             reproj_mm = float(np.mean(errors)) * 1000.0 if errors else 0.0

@@ -177,7 +177,9 @@ def test_calibration_service_uses_marker_length_from_fiducials_yaml(
                 )
             )
 
-    def estimate_pose_single_markers(corners, marker_length, camera_matrix, dist_coeffs):
+    def estimate_pose_single_markers(
+        corners, marker_length, camera_matrix, dist_coeffs
+    ):
         captured_marker_lengths.append(marker_length)
         return (
             np.zeros((1, 1, 3), dtype=np.float64),

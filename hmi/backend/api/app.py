@@ -65,7 +65,8 @@ class LoopbackControlMiddleware:
         if (
             scope.get("type") == "http"
             and str(scope.get("path", "")).startswith("/api/hmi/")
-            and str(scope.get("method", "")).upper() in {"POST", "PUT", "PATCH", "DELETE"}
+            and str(scope.get("method", "")).upper()
+            in {"POST", "PUT", "PATCH", "DELETE"}
             and not _remote_control_api_allowed()
         ):
             client = scope.get("client") or (None, None)

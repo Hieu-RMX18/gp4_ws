@@ -111,7 +111,10 @@ def _assert_launch_child_exit_records_clean(
         process = match.group("process")
         if exit_code == EXPECTED_SIGINT_EXIT_CODE:
             continue
-        if process.startswith("move_group-") and exit_code == EXPECTED_SIGTERM_EXIT_CODE:
+        if (
+            process.startswith("move_group-")
+            and exit_code == EXPECTED_SIGTERM_EXIT_CODE
+        ):
             continue
         if (
             scenario_completed
@@ -190,9 +193,17 @@ def _move_rel_delta(current_pose, safety_rules: dict) -> tuple[float, float, flo
     max_delta = safety_rules["motion_limits"]["max_move_rel_translation"]
     candidate = max_delta / MOVE_REL_DELTA_DIVISOR
     if current_pose.position.z < bounds["z_min"]:
-        return 0.0, 0.0, min(max_delta, bounds["z_min"] - current_pose.position.z + candidate)
+        return (
+            0.0,
+            0.0,
+            min(max_delta, bounds["z_min"] - current_pose.position.z + candidate),
+        )
     if current_pose.position.z > bounds["z_max"]:
-        return 0.0, 0.0, -min(max_delta, current_pose.position.z - bounds["z_max"] + candidate)
+        return (
+            0.0,
+            0.0,
+            -min(max_delta, current_pose.position.z - bounds["z_max"] + candidate),
+        )
     z_margin_down = current_pose.position.z - bounds["z_min"]
     if z_margin_down > candidate:
         return 0.0, 0.0, -candidate

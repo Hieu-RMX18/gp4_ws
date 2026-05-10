@@ -507,7 +507,9 @@ class LLMGatewayNode(Node):
             response.error = "review result must be Semantic IR with an intent field."
             return response
         try:
-            routed = IntentRouter(runtime_mode=effective_runtime_mode).route(semantic_ir)
+            routed = IntentRouter(runtime_mode=effective_runtime_mode).route(
+                semantic_ir
+            )
         except Exception as exc:
             response.accepted = False
             response.error = str(exc)
@@ -1290,7 +1292,9 @@ class LLMGatewayNode(Node):
         return {
             "class_id": str(getattr(hypothesis, "class_id", "")),
             "score": float(getattr(hypothesis, "score", 0.0)),
-            "frame_id": str(getattr(getattr(detection, "header", None), "frame_id", "")),
+            "frame_id": str(
+                getattr(getattr(detection, "header", None), "frame_id", "")
+            ),
             "position": {
                 "x": float(getattr(position, "x", 0.0)),
                 "y": float(getattr(position, "y", 0.0)),

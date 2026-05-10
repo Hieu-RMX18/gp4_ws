@@ -12,7 +12,6 @@ import sys
 from threading import Lock, Thread
 from typing import Any
 
-from ..domain.constants import GP4_JOINT_NAMES as DEFAULT_JOINT_NAMES
 from .command_dispatch import CommandDispatchMixin
 from .jog_dispatch import JogDispatchMixin
 from .telemetry_snapshot import (
@@ -808,8 +807,7 @@ class WorkspaceRosAdapter(
     def _command_interfaces_ready(self) -> bool:
         with self._lock:
             return (
-                self._state.validate_command_ready
-                and self._state.execute_motion_ready
+                self._state.validate_command_ready and self._state.execute_motion_ready
             )
 
     def _command_interface_block_reason(self) -> str | None:

@@ -276,17 +276,19 @@ def test_servo_routes_dispatch_after_valid_hardware_gate_and_lease():
 def test_command_intent_http_rejects_structured_intent_ingress():
     temp_dir, _adapter, _supervisor, app = _build_test_app()
     try:
-        response = asyncio.run(_post_json(
-            app,
-            "/api/hmi/commands/intent",
-            {
-                "sessionId": "session-a",
-                "operatorId": "operator-a",
-                "leaseToken": "lease-token",
-                "mode": "sim",
-                "structuredIntent": {"intent": "go_home"},
-            },
-        ))
+        response = asyncio.run(
+            _post_json(
+                app,
+                "/api/hmi/commands/intent",
+                {
+                    "sessionId": "session-a",
+                    "operatorId": "operator-a",
+                    "leaseToken": "lease-token",
+                    "mode": "sim",
+                    "structuredIntent": {"intent": "go_home"},
+                },
+            )
+        )
 
         assert response.status_code == 422
         assert "structuredIntent" in response.text
@@ -297,17 +299,19 @@ def test_command_intent_http_rejects_structured_intent_ingress():
 def test_command_intent_http_rejects_unknown_mode():
     temp_dir, _adapter, _supervisor, app = _build_test_app()
     try:
-        response = asyncio.run(_post_json(
-            app,
-            "/api/hmi/commands/intent",
-            {
-                "sessionId": "session-a",
-                "operatorId": "operator-a",
-                "leaseToken": "lease-token",
-                "mode": "unknown",
-                "intentText": "go home",
-            },
-        ))
+        response = asyncio.run(
+            _post_json(
+                app,
+                "/api/hmi/commands/intent",
+                {
+                    "sessionId": "session-a",
+                    "operatorId": "operator-a",
+                    "leaseToken": "lease-token",
+                    "mode": "unknown",
+                    "intentText": "go home",
+                },
+            )
+        )
 
         assert response.status_code == 422
         assert "mode" in response.text
@@ -343,9 +347,7 @@ def test_command_intent_route_review_and_confirm_flow():
         assert submit_payload["command"]["lifecycleState"] == "NEEDS_CONFIRMATION"
         assert adapter.confirm_calls == []
 
-        confirm_command = _route_endpoint(
-            app, "/api/hmi/commands/{command_id}/confirm"
-        )
+        confirm_command = _route_endpoint(app, "/api/hmi/commands/{command_id}/confirm")
         confirm_payload = confirm_command(
             submit_payload["commandId"],
             CommandConfirmRequestModel(
@@ -353,7 +355,7 @@ def test_command_intent_route_review_and_confirm_flow():
                 operatorId="api-command-operator",
                 leaseToken=lease_token,
                 planFingerprint=submit_payload["command"]["planFingerprint"],
-            )
+            ),
         )
         assert confirm_payload["accepted"] is True
         assert confirm_payload["command"]["finalState"] == "SUCCEEDED"
@@ -470,24 +472,28 @@ def test_servo_http_dispatches_after_valid_hardware_gate_and_lease():
         )
         lease_token = lease_payload["lease"]["leaseToken"]
         adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
-        start_response = asyncio.run(_post_json(
-            app,
-            "/api/hmi/servo/start",
-            {
-                "sessionId": "api-servo-session",
-                "operatorId": "api-servo-operator",
-                "leaseToken": lease_token,
-            },
-        ))
-        stop_response = asyncio.run(_post_json(
-            app,
-            "/api/hmi/servo/stop",
-            {
-                "sessionId": "api-servo-session",
-                "operatorId": "api-servo-operator",
-                "leaseToken": lease_token,
-            },
-        ))
+        start_response = asyncio.run(
+            _post_json(
+                app,
+                "/api/hmi/servo/start",
+                {
+                    "sessionId": "api-servo-session",
+                    "operatorId": "api-servo-operator",
+                    "leaseToken": lease_token,
+                },
+            )
+        )
+        stop_response = asyncio.run(
+            _post_json(
+                app,
+                "/api/hmi/servo/stop",
+                {
+                    "sessionId": "api-servo-session",
+                    "operatorId": "api-servo-operator",
+                    "leaseToken": lease_token,
+                },
+            )
+        )
 
         assert start_response.status_code == 200
         assert stop_response.status_code == 200

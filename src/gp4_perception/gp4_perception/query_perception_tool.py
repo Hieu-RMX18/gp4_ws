@@ -140,13 +140,15 @@ def _format_detections_from_ros(detections: list) -> list[dict]:
             f"(~{max_dim_cm} cm)"
         )
 
-        formatted.append({
-            "class_id": class_id,
-            "description": description,
-            "position": position,
-            "size_m": size,
-            "frame_id": "base_link",
-        })
+        formatted.append(
+            {
+                "class_id": class_id,
+                "description": description,
+                "position": position,
+                "size_m": size,
+                "frame_id": "base_link",
+            }
+        )
 
     return formatted
 

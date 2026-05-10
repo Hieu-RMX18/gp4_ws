@@ -177,9 +177,10 @@ def test_move_group_launch_disables_moveit_owned_trajectory_execution(tmp_path):
     parameters = module._normalized_move_group_parameters(fake_moveit_config)
 
     assert parameters["allow_trajectory_execution"] is False
-    assert "move_group/MoveGroupExecuteTrajectoryAction" in parameters[
-        "disable_capabilities"
-    ]
+    assert (
+        "move_group/MoveGroupExecuteTrajectoryAction"
+        in parameters["disable_capabilities"]
+    )
     assert "move_group/MoveGroupExecuteService" in parameters["disable_capabilities"]
     assert "trajectory_execution" not in parameters
     assert "moveit_controller_manager" not in parameters

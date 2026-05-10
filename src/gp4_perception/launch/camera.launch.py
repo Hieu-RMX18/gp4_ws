@@ -91,12 +91,8 @@ def generate_launch_description() -> LaunchDescription:
                     "camera_name": "camera",
                     "serial_no": LaunchConfiguration("serial"),
                     # Stream profiles (ros2-master format)
-                    "depth_module.depth_profile": LaunchConfiguration(
-                        "depth_profile"
-                    ),
-                    "rgb_camera.color_profile": LaunchConfiguration(
-                        "color_profile"
-                    ),
+                    "depth_module.depth_profile": LaunchConfiguration("depth_profile"),
+                    "rgb_camera.color_profile": LaunchConfiguration("color_profile"),
                     # Alignment and sync
                     "align_depth.enable": LaunchConfiguration("align_depth"),
                     "enable_sync": LaunchConfiguration("enable_sync"),
@@ -107,12 +103,8 @@ def generate_launch_description() -> LaunchDescription:
                         "emitter_enabled"
                     ),
                     # Post-processing filters
-                    "spatial_filter.enable": LaunchConfiguration(
-                        "spatial_filter"
-                    ),
-                    "temporal_filter.enable": LaunchConfiguration(
-                        "temporal_filter"
-                    ),
+                    "spatial_filter.enable": LaunchConfiguration("spatial_filter"),
+                    "temporal_filter.enable": LaunchConfiguration("temporal_filter"),
                     # QoS — must match subscriber side (BEST_EFFORT / SENSOR_DATA)
                     "depth_qos": LaunchConfiguration("depth_qos"),
                     "color_qos": LaunchConfiguration("color_qos"),

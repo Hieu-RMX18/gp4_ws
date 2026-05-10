@@ -63,13 +63,13 @@ _SHAPE_FLAT_R01_MAX = 0.3
 # ── Color classification (HSV ranges) ──────────────────────────────────────
 _COLOR_RANGES = [
     # (name, h_min, h_max, s_min, v_min)
-    ("red",     0,   10, 80, 60),
-    ("red",   170,  180, 80, 60),
-    ("orange",  10,   25, 80, 60),
-    ("yellow",  25,   35, 80, 60),
-    ("green",   35,   85, 50, 40),
-    ("blue",    85,  130, 50, 40),
-    ("purple", 130,  170, 50, 40),
+    ("red", 0, 10, 80, 60),
+    ("red", 170, 180, 80, 60),
+    ("orange", 10, 25, 80, 60),
+    ("yellow", 25, 35, 80, 60),
+    ("green", 35, 85, 50, 40),
+    ("blue", 85, 130, 50, 40),
+    ("purple", 130, 170, 50, 40),
 ]
 REPROJECTION_ERROR_MAX_MM = 3.0
 
@@ -98,9 +98,11 @@ def _read_xyz_rgb(cloud: PointCloud2) -> tuple[np.ndarray | None, np.ndarray | N
         has_rgb = "rgb" in field_names_available or "r" in field_names_available
 
         if has_rgb and "r" in field_names_available:
-            pts = list(read_points(
-                cloud, field_names=("x", "y", "z", "r", "g", "b"), skip_nans=True
-            ))
+            pts = list(
+                read_points(
+                    cloud, field_names=("x", "y", "z", "r", "g", "b"), skip_nans=True
+                )
+            )
             if not pts:
                 return None, None
             xyz = np.array([(p[0], p[1], p[2]) for p in pts], dtype=np.float32)
@@ -161,6 +163,7 @@ def _dominant_color_name(
     mean_rgb = cluster_rgb.mean(axis=0).astype(np.uint8).reshape(1, 1, 3)
     try:
         import cv2
+
         mean_hsv = cv2.cvtColor(mean_rgb, cv2.COLOR_RGB2HSV)[0, 0]
     except Exception:
         return "unknown"
@@ -298,9 +301,7 @@ def _transform_points(pts: np.ndarray, transform) -> np.ndarray:
     """Apply a geometry_msgs TransformStamped to Nx3 points."""
     translation = transform.transform.translation
     rotation = transform.transform.rotation
-    rot = Rotation.from_quat(
-        [rotation.x, rotation.y, rotation.z, rotation.w]
-    )
+    rot = Rotation.from_quat([rotation.x, rotation.y, rotation.z, rotation.w])
     offset = np.array([translation.x, translation.y, translation.z], dtype=np.float64)
     return (rot.apply(pts.astype(np.float64)) + offset).astype(np.float32)
 
@@ -498,16 +499,21 @@ class SceneProcessor(Node):
                     cluster_indices_approx = None
                     if len(indices) > 0:
                         from scipy.spatial import cKDTree as _cKDTree
+
                         tree = _cKDTree(xyz_all)
                         _, cluster_indices_approx = tree.query(
-                            cluster[:min(200, len(cluster))]
+                            cluster[: min(200, len(cluster))]
                         )
                     color_name = _dominant_color_name(rgb_all, cluster_indices_approx)
                 except Exception:
                     color_name = "unknown"
 
             # Build descriptive class_id: "red_sphere", "blue_box", etc.
-            class_id = f"{color_name}_{shape_class}" if color_name != "unknown" else shape_class
+            class_id = (
+                f"{color_name}_{shape_class}"
+                if color_name != "unknown"
+                else shape_class
+            )
 
             hyp = ObjectHypothesis()
             hyp.class_id = class_id
@@ -685,9 +691,7 @@ class SceneProcessor(Node):
         return float(np.percentile(np.asarray(self._depth_noise_samples_mm), 95))
 
     def _depth_in_range(self) -> bool:
-        return bool(self._depth_in_range_samples) and all(
-            self._depth_in_range_samples
-        )
+        return bool(self._depth_in_range_samples) and all(self._depth_in_range_samples)
 
     def _calibration_allows_scene_output(self) -> bool:
         calibration_valid, failure_reason, _, _ = self._calibration_status()

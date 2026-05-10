@@ -23,9 +23,7 @@ def _subscription_qos_arg(constructor: ast.FunctionDef, topic: str) -> ast.AST:
 
 def test_react_state_subscriptions_use_sensor_qos():
     node_path = (
-        Path(__file__).resolve().parents[1]
-        / "llm_gateway"
-        / "llm_gateway_node.py"
+        Path(__file__).resolve().parents[1] / "llm_gateway" / "llm_gateway_node.py"
     )
     module = ast.parse(node_path.read_text(encoding="utf-8"))
     node_class = next(

@@ -327,10 +327,7 @@ class TelemetrySnapshotMixin:
             return ConnectionHealth.DOWN
         if runtime_mode not in {RuntimeMode.SIM, RuntimeMode.HARDWARE}:
             return ConnectionHealth.DOWN
-        if (
-            snapshot.validate_command_ready
-            and snapshot.execute_motion_ready
-        ):
+        if snapshot.validate_command_ready and snapshot.execute_motion_ready:
             return ConnectionHealth.HEALTHY
         if snapshot.ros_started_at is not None:
             return ConnectionHealth.DEGRADED

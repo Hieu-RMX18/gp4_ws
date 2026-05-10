@@ -196,9 +196,7 @@ def main() -> int:
         hee = extrinsics.get("hand_eye_extrinsics", {})
         date_str = hee.get("calibration_date", "")
         if not date_str or date_str == "<NOT_CALIBRATED>":
-            errors.append(
-                UNCALIBRATED_EXTRINSICS_ERROR
-            )
+            errors.append(UNCALIBRATED_EXTRINSICS_ERROR)
         else:
             try:
                 from datetime import datetime, timezone

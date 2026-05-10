@@ -203,12 +203,14 @@ class LLMParser:
 
     def parse(self, text: str) -> Dict[str, Any]:
         return parse_llm_output(text)
+
+
 """Unit normalizer for poses and joints."""
 
 
 import logging
 import math
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from geometry_msgs.msg import Pose, Quaternion
 
@@ -284,9 +286,7 @@ def _normalize_single_joint_angle(
     if angular_unit is not None:
         angle = _convert_angular(angle, angular_unit, field)
     elif _COMPAT_UNIT_HEURISTIC and _is_likely_degrees([angle]):
-        _LOGGER.warning(
-            "Legacy heuristic: treating %s=%.4f as degrees.", field, angle
-        )
+        _LOGGER.warning("Legacy heuristic: treating %s=%.4f as degrees.", field, angle)
         angle = math.radians(angle)
     return _wrap_to_pi(angle)
 
@@ -580,13 +580,14 @@ class Normalizer:
             self._PLANNER_DEFAULTS.get(primitive_type, "OMPL_RRTConnect"),
         )
         return normalized
+
+
 """JSON schema validator for LLM command payloads."""
 
 
-import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Tuple
 
 import jsonschema
 import yaml
@@ -644,12 +645,12 @@ class SchemaValidator:
     def schema_as_json(self) -> str:
         """Return the loaded schema in compact JSON form for prompt injection."""
         return json.dumps(self._schema, ensure_ascii=True, separators=(",", ":"))
+
+
 """Semantic validation for phase-9 LLM motion commands."""
 
 
 import logging
-import math
-from typing import Any, Dict
 
 import numpy as np
 
@@ -1015,12 +1016,12 @@ class SemanticValidator:
             # Zero quaternion is a supported sentinel for position-only intents.
             # motion_core resolves this to current tool orientation before IK.
             return
+
+
 """Full-sequence prevalidation for routed primitive command sequences."""
 
 
 from dataclasses import dataclass, field
-import math
-from typing import Any, Dict, List
 
 
 _QUERY_PRIMITIVES = {"GET_POSE"}
@@ -1067,13 +1068,10 @@ class SequenceValidator:
         max_cumulative_move_rel_distance_m: float = 0.40,
     ) -> None:
         if schema_validator is None:
-
             schema_validator = SchemaValidator()
         if normalizer is None:
-
             normalizer = Normalizer()
         if semantic_validator is None:
-
             semantic_validator = SemanticValidator()
 
         self._schema_validator = schema_validator
@@ -1259,11 +1257,6 @@ __all__ = [
 """Mapping helpers from validated command dictionaries to ROS interfaces."""
 
 
-from typing import Any, Dict
-
-from geometry_msgs.msg import Pose
-
-
 class GoalMapper:
     """Create action goals and JSON-safe payloads from normalized commands."""
 
@@ -1434,6 +1427,8 @@ class GoalMapper:
                 payload["sequence_steps"].append(step_payload)
 
         return payload
+
+
 """Pure command-transformation helpers extracted from LLMGatewayNode.
 
 These helpers have no ROS2 dependencies and are unit-testable in isolation.
@@ -1444,9 +1439,8 @@ is pure data transformation versus which logic is ROS-coupled orchestration.
 """
 
 
-import json
 import logging
-from typing import Any, Callable, Dict, Optional, Protocol
+from typing import Callable, Protocol
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1561,6 +1555,8 @@ def hydrate_draw_workplane(
     hydrated_workplane["origin"] = current_pose
     working_payload["workplane"] = hydrated_workplane
     return working_payload
+
+
 """Command emitter for drawing strokes — builds PTP/LIN/BLENDED_SEQUENCE commands.
 
 This module depends on drawing_geometry for data classes and vector math helpers.
@@ -1569,7 +1565,7 @@ file-size budget.
 """
 
 
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 
 def lift_points_to_poses(
@@ -1887,8 +1883,6 @@ __all__ = [
 
 
 from copy import deepcopy
-import math
-from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 from safety.policy_loader import load_safety_rules as _load_safety_rules
 
@@ -2894,23 +2888,19 @@ class DrawRouterMixin:
             keep_current_orientation=False,
             allow_orientation_default=True,
         )
+
+
 """Route Semantic IR into public primitive commands without executing motion."""
 
 
-from copy import deepcopy
 from dataclasses import dataclass, field
-import os
-from pathlib import Path
-from typing import Any, Dict, List
 import xml.etree.ElementTree as ET
 
-import yaml
 
 try:  # pragma: no cover - optional in source-only test environments
     from ament_index_python.packages import get_package_share_directory
 except ImportError:  # pragma: no cover - exercised implicitly in tests
     get_package_share_directory = None
-
 
 
 _ORIENTATION_PRESETS: Dict[str, Dict[str, float]] = {

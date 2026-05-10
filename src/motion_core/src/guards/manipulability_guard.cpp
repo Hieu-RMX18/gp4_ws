@@ -41,9 +41,8 @@ bool check_manipulability_samples(
       if (sample.value + kRecoveryTolerance < start_w) {
         std::ostringstream stream;
         stream << "manipulability_guard recovery rejected at point["
-               << sample.index << "]: w=" << std::fixed
-               << std::setprecision(4) << sample.value
-               << " below recovery start " << std::fixed
+               << sample.index << "]: w=" << std::fixed << std::setprecision(4)
+               << sample.value << " below recovery start " << std::fixed
                << std::setprecision(4) << start_w;
         reason = stream.str();
         return false;

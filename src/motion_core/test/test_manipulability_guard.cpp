@@ -66,10 +66,10 @@ TEST(ManipulabilityGuardTest, NormalizationFailsClosedForInvalidInputs) {
 
 TEST(ManipulabilityGuardTest, EnabledGuardWithoutModelRejectsTrajectory) {
   ManipulabilityGuard guard(nullptr, "gp4_arm", 0.05, 1);
-  auto traj = make_trajectory({"joint_1_s", "joint_2_l", "joint_3_u",
-                               "joint_4_r", "joint_5_b", "joint_6_t"},
-                              {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
-                               {0.0, 0.0, 0.1, 0.0, 0.0, 0.0}});
+  auto traj = make_trajectory(
+      {"joint_1_s", "joint_2_l", "joint_3_u", "joint_4_r", "joint_5_b",
+       "joint_6_t"},
+      {{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}, {0.0, 0.0, 0.1, 0.0, 0.0, 0.0}});
   std::string reason;
   EXPECT_FALSE(guard.check_trajectory(traj, reason));
   EXPECT_EQ(reason, "manipulability_guard enabled without robot model");

@@ -16,6 +16,7 @@ import type {
   ReplayListQuery,
   ReplayListResponse,
   RuntimeStateResponse,
+  ServoControlRequest,
   ServoControlResponse,
   TransportState,
 } from '../shared/contracts';
@@ -25,6 +26,19 @@ const RECONNECT_BASE_DELAY_MS = 500;
 const RECONNECT_MAX_DELAY_MS = 8000;
 const SOCKET_STALE_TIMEOUT_MS = 15000;
 const MAX_LOG_TEXT_LEN = 480;
+const REDACTED_LOG_VALUE = '[redacted]';
+const SENSITIVE_LOG_KEYS = new Set([
+  'leasetoken',
+  'lease_token',
+  'planfingerprint',
+  'plan_fingerprint',
+  'sessionid',
+  'session_id',
+  'operatorid',
+  'operator_id',
+  'socketurl',
+]);
+const SENSITIVE_QUERY_RE = /([?&](?:leaseToken|lease_token|planFingerprint|plan_fingerprint|sessionId|session_id|operatorId|operator_id)=)[^&\s)]+/gi;
 
 function shortenText(value: string): string {
   if (value.length <= MAX_LOG_TEXT_LEN) {
@@ -33,12 +47,16 @@ function shortenText(value: string): string {
   return `${value.slice(0, MAX_LOG_TEXT_LEN)}...(truncated)`;
 }
 
+function redactLogText(value: string): string {
+  return shortenText(value.replace(SENSITIVE_QUERY_RE, `$1${REDACTED_LOG_VALUE}`));
+}
+
 function toPrintable(payload: unknown): unknown {
   if (payload === null || payload === undefined) {
     return payload;
   }
   if (typeof payload === 'string') {
-    return shortenText(payload);
+    return redactLogText(payload);
   }
   if (typeof payload === 'number' || typeof payload === 'boolean') {
     return payload;
@@ -50,7 +68,9 @@ function toPrintable(payload: unknown): unknown {
     const source = payload as Record<string, unknown>;
     const next: Record<string, unknown> = {};
     Object.entries(source).forEach(([key, value]) => {
-      next[key] = toPrintable(value);
+      next[key] = SENSITIVE_LOG_KEYS.has(key.toLowerCase())
+        ? REDACTED_LOG_VALUE
+        : toPrintable(value);
     });
     return next;
   }
@@ -58,11 +78,12 @@ function toPrintable(payload: unknown): unknown {
 }
 
 function traceClient(level: 'info' | 'warn' | 'error', label: string, payload?: unknown): void {
+  const safeLabel = redactLogText(label);
   if (payload === undefined) {
-    console[level](`[HMI bridge] ${label}`);
+    console[level](`[HMI bridge] ${safeLabel}`);
     return;
   }
-  console[level](`[HMI bridge] ${label}`, toPrintable(payload));
+  console[level](`[HMI bridge] ${safeLabel}`, toPrintable(payload));
 }
 
 function toWebSocketUrl(baseUrl: string, sessionId: string, operatorId: string): string {
@@ -402,12 +423,12 @@ export function createBridgeClient(basePath = '/api/hmi'): GP4BridgeClient {
       return postJson(`${basePath}/jog/command`, cmd);
     },
 
-    async startServo(): Promise<ServoControlResponse> {
-      return postJson(`${basePath}/servo/start`, {});
+    async startServo(request: ServoControlRequest): Promise<ServoControlResponse> {
+      return postJson(`${basePath}/servo/start`, request);
     },
 
-    async stopServo(): Promise<ServoControlResponse> {
-      return postJson(`${basePath}/servo/stop`, {});
+    async stopServo(request: ServoControlRequest): Promise<ServoControlResponse> {
+      return postJson(`${basePath}/servo/stop`, request);
     },
   };
 }

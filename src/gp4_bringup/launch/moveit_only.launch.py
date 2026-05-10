@@ -1,53 +1,63 @@
 from pathlib import Path
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    EmitEvent,
+    LogInfo,
     OpaqueFunction,
     RegisterEventHandler,
     SetEnvironmentVariable,
 )
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit, OnProcessStart
+from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from moveit_configs_utils import MoveItConfigsBuilder
 
 
-def _load_yaml(file_path: Path):
-    with open(file_path, "r", encoding="utf-8") as stream:
-        return yaml.safe_load(stream)
+MOVE_GROUP_SIGTERM_TIMEOUT_SEC = "20.0"
+MOVE_GROUP_SIGKILL_TIMEOUT_SEC = "5.0"
+
+
+def _strip_trajectory_execution_parameters(parameters, moveit_config):
+    trajectory_execution = getattr(moveit_config, "trajectory_execution", {}) or {}
+    controller_names = set()
+    manager_config = trajectory_execution.get("moveit_simple_controller_manager", {})
+    controller_names.update(manager_config.get("controller_names", []))
+
+    for key in trajectory_execution:
+        parameters.pop(key, None)
+    for key in (
+        "trajectory_execution",
+        "moveit_controller_manager",
+        "moveit_simple_controller_manager",
+    ):
+        parameters.pop(key, None)
+
+    for controller_name in controller_names:
+        parameters.pop(controller_name, None)
+        controller_prefix = f"{controller_name}."
+        for key in list(parameters):
+            if key.startswith(controller_prefix):
+                parameters.pop(key, None)
+
+    parameters["moveit_manage_controllers"] = False
 
 
 def _normalized_move_group_parameters(moveit_config):
     parameters = moveit_config.to_dict()
-    controllers_config = _load_yaml(
-        moveit_config.package_path / "config" / "moveit_controllers.yaml"
+    _strip_trajectory_execution_parameters(parameters, moveit_config)
+    parameters["allow_trajectory_execution"] = False
+    parameters["disable_capabilities"] = " ".join(
+        [
+            "move_group/MoveGroupExecuteTrajectoryAction",
+            "move_group/MoveGroupExecuteService",
+        ]
     )
-    manager_key = "moveit_simple_controller_manager"
-    manager_config = dict(controllers_config.get(manager_key, {}))
-    controller_names = list(manager_config.get("controller_names", []))
-
-    for controller_name in controller_names:
-        if controller_name in manager_config:
-            continue
-        controller_config = controllers_config.get(controller_name)
-        if controller_config is not None:
-            manager_config[controller_name] = controller_config
-            parameters.pop(controller_name, None)
-
-    parameters["trajectory_execution"] = controllers_config.get(
-        "trajectory_execution",
-        parameters.get("trajectory_execution", {}),
-    )
-    parameters["moveit_controller_manager"] = controllers_config.get(
-        "moveit_controller_manager",
-        parameters.get("moveit_controller_manager"),
-    )
-    parameters[manager_key] = manager_config
     parameters["planning_plugin"] = "pilz_industrial_motion_planner/CommandPlanner"
     parameters["default_planning_pipeline"] = "pilz_industrial_motion_planner"
     parameters.setdefault("ompl", {})["planning_plugin"] = "ompl_interface/OMPLPlanner"
@@ -80,8 +90,24 @@ def _create_move_group(context, *, move_group_parameters):
             output="screen",
             parameters=[move_group_parameters],
             remappings=_move_group_remappings(use_fake_hardware),
+            sigterm_timeout=MOVE_GROUP_SIGTERM_TIMEOUT_SEC,
+            sigkill_timeout=MOVE_GROUP_SIGKILL_TIMEOUT_SEC,
         )
     ]
+
+
+def _continue_after_successful_spawner_exit(*, next_actions, spawner_label: str):
+    def _handler(event, _context):
+        returncode = getattr(event, "returncode", 1)
+        if returncode == 0:
+            return list(next_actions)
+        reason = f"{spawner_label} spawner exited with code {returncode}"
+        return [
+            LogInfo(msg=f"ERROR: {reason}"),
+            EmitEvent(event=Shutdown(reason=reason)),
+        ]
+
+    return _handler
 
 
 def generate_launch_description():
@@ -207,13 +233,19 @@ def generate_launch_description():
             RegisterEventHandler(
                 OnProcessExit(
                     target_action=joint_state_broadcaster_spawner,
-                    on_exit=[gp4_arm_controller_spawner],
+                    on_exit=_continue_after_successful_spawner_exit(
+                        next_actions=[gp4_arm_controller_spawner],
+                        spawner_label="joint_state_broadcaster",
+                    ),
                 )
             ),
             RegisterEventHandler(
                 OnProcessExit(
                     target_action=gp4_arm_controller_spawner,
-                    on_exit=[move_group, rviz],
+                    on_exit=_continue_after_successful_spawner_exit(
+                        next_actions=[move_group, rviz],
+                        spawner_label="gp4_arm_controller",
+                    ),
                 )
             ),
         ]

@@ -168,3 +168,8 @@ Before moving past Phase A, store:
 4. recommended threshold updates, if any
 
 If any row remains unproven, hardware execution must stay disabled.
+The committed `hmi/data/hardware_gate.json` is intentionally locked and must
+not be treated as hardware approval. Any local commissioning approval must point
+to a regular, non-empty capture report with a matching SHA256 digest; use
+`HMI_HARDWARE_GATE_EVIDENCE_FILE` to point the backend at that local approval
+record.

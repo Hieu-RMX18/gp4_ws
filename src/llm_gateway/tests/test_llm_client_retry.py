@@ -20,11 +20,11 @@ from unittest.mock import patch
 
 import pytest
 
-from llm_gateway.llm_client import (
+from llm_gateway.react_planner import (
     OpenAICompatibleLLMClient,
     _TRANSIENT_HTTP_STATUS,
 )
-from llm_gateway.llm_config import LLMBackendConfig
+from llm_gateway.react_planner import LLMBackendConfig
 
 
 def _make_config(**overrides) -> LLMBackendConfig:

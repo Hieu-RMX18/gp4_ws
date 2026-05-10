@@ -4,8 +4,8 @@
   <name>interfaces</name>
   <version>0.1.0</version>
   <description>Custom messages, services, and actions for AI Agentic GP4 setup</description>
-  <maintainer email="hieu@todo.todo">hieu2</maintainer>
-  <license>Apache License 2.0</license>
+  <maintainer email="hieu2@example.com">hieu2</maintainer>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

@@ -3,7 +3,7 @@ hand_eye_extrinsics:
   child_frame: camera_color_optical_frame
   translation: {x: 0.0, y: 0.0, z: 0.0}
   rotation_quat: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
-  calibration_date: "<NOT_CALIBRATED>"
+  calibration_date: "<NOT_CALIBRATED>" #Codex calibrate
   reprojection_error_mm: 0.0
   n_samples: 0
   solver: PARK

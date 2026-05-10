@@ -340,8 +340,17 @@ TEST_F(ExecutionMonitorFixture, ConsecutiveFailuresPublishWarnAlert) {
   const auto snapshot = monitor_->snapshot();
   EXPECT_EQ(snapshot.current_state, "IDLE");
   EXPECT_EQ(snapshot.consecutive_failure_count, 3U);
-  EXPECT_EQ(snapshot.last_alert_level,
-            diagnostic_msgs::msg::DiagnosticStatus::WARN);
+  const auto alerts = alerts_copy();
+  bool saw_threshold_warning = false;
+  for (const auto &alert : alerts) {
+    if (alert.level == diagnostic_msgs::msg::DiagnosticStatus::WARN &&
+        alert.message ==
+            "execute_motion consecutive failure threshold reached") {
+      saw_threshold_warning = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(saw_threshold_warning);
 }
 
 TEST_F(ExecutionMonitorFixture, FailedExecutionHeartbeatReturnsToOkIdle) {

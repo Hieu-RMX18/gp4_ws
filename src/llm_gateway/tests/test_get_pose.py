@@ -18,10 +18,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from llm_gateway.normalizer import Normalizer
-from llm_gateway.parser import LLMParser
-from llm_gateway.schema_validator import SchemaValidator
-from llm_gateway.semantic_validator import SemanticValidator
+from llm_gateway.intent_engine import Normalizer
+from llm_gateway.intent_engine import LLMParser
+from llm_gateway.intent_engine import SchemaValidator
+from llm_gateway.intent_engine import SemanticValidator
 
 
 # ── Tier 1: Pure-logic tests (no ROS dependencies) ──────────────────────────

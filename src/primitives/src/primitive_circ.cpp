@@ -130,7 +130,9 @@ public:
                 .automatically_declare_parameters_from_overrides(true))),
         quality_gate_(
             motion_core::TrajectoryPostProcessor::kMaxTrajectoryPoints,
-            motion_core::QualityGate::kMinimumCartesianFraction) {
+            motion_core::QualityGate::kMinimumCartesianFraction,
+            motion_core::JointPositionGuard{},
+            motion_core::ManipulabilityGuard::disabled()) {
     mgi_.setPoseReferenceFrame("world");
   }
 

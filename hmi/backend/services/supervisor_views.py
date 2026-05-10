@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -14,7 +15,8 @@ from ..domain.models import (
     LeaseRole,
     PlanMetrics,
     RuntimeMode,
-)
+    TelemetryFreshnessState,
+    )
 
 
 def _utcnow() -> datetime:
@@ -22,15 +24,33 @@ def _utcnow() -> datetime:
 
 
 class SupervisorViewsMixin:
+    def _review_intent_ready(self, runtime_mode: RuntimeMode) -> bool:
+        _ = runtime_mode
+        review_token = os.getenv("GP4_REVIEW_INTENT_TOKEN", "").strip()
+        if not review_token:
+            return False
+        source_reader = getattr(self._ros, "read_source_statuses", None)
+        if not callable(source_reader):
+            return False
+        for source in source_reader():
+            if source.name != "review_intent_service":
+                continue
+            return (
+                source.active
+                and source.freshness_state == TelemetryFreshnessState.FRESH
+            )
+        return False
+
     def _bridge_capabilities(self) -> BridgeCapabilities:
         runtime = self._current_runtime()
         hardware_gate = self._hardware_gate_evaluator.evaluate()
+        review_intent_ready = self._review_intent_ready(runtime.mode)
         if runtime.mode == RuntimeMode.SIM:
-            command_ingress_available = True
+            command_ingress_available = review_intent_ready
             confirmation_available = True
             sim_only = True
         elif runtime.mode == RuntimeMode.HARDWARE:
-            command_ingress_available = hardware_gate.unlocked
+            command_ingress_available = hardware_gate.unlocked and review_intent_ready
             confirmation_available = hardware_gate.unlocked
             sim_only = not hardware_gate.unlocked
         else:
@@ -87,7 +107,7 @@ class SupervisorViewsMixin:
         owns_control = (
             lease.session_id == session_id and lease.operator_id == operator_id
         )
-        if capabilities.read_only:
+        if not capabilities.confirmation_available:
             role = LeaseRole.OBSERVER.value
             lease_token: str | None = None
             owns_control = False
@@ -234,7 +254,7 @@ class SupervisorViewsMixin:
             "sessionId": row["session_id"],
             "operatorId": row["operator_id"],
             "rawText": row["raw_text"],
-            "intentSource": "structured" if structured_intent else "text",
+            "intentSource": "text" if row["raw_text"] else "structured",
             "structuredIntent": structured_intent,
             "lifecycleState": row.get("lifecycle_state")
             or row.get("final_state")
@@ -276,7 +296,7 @@ class SupervisorViewsMixin:
             "sessionId": row["session_id"],
             "operatorId": row["operator_id"],
             "rawText": row["raw_text"],
-            "intentSource": "structured" if structured_intent else "text",
+            "intentSource": "text" if row["raw_text"] else "structured",
             "structuredIntent": structured_intent,
             "lifecycleState": row.get("lifecycle_state")
             or row.get("final_state")

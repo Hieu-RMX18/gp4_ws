@@ -15,10 +15,10 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    maintainer="user",
-    maintainer_email="user@todo.todo",
+    maintainer="hieu2",
+    maintainer_email="hieu2@example.com",
     description="Safety layer for Yaskawa GP4 robot.",
-    license="TODO: License declaration",
+    license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [

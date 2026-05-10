@@ -360,8 +360,7 @@ export interface CommandIntentRequest {
   operatorId: string;
   leaseToken: string | null;
   intentText?: string | null;
-  structuredIntent?: Record<string, unknown> | null;
-  mode: RuntimeMode;
+  mode: 'sim' | 'hardware';
 }
 
 export interface CommandConfirmRequest {
@@ -467,6 +466,12 @@ export interface ServoControlResponse {
   message: string;
 }
 
+export interface ServoControlRequest {
+  sessionId: string;
+  operatorId: string;
+  leaseToken: string | null;
+}
+
 export interface GP4BridgeClient {
   connect(params: {
     sessionId: string;
@@ -493,6 +498,6 @@ export interface GP4BridgeClient {
   deactivateJogBridge(): Promise<{ accepted: boolean; message: string }>;
   sendJogCommand(cmd: JogCommandRequest): Promise<{ accepted: boolean; message: string }>;
   // Servo control
-  startServo(): Promise<ServoControlResponse>;
-  stopServo(): Promise<ServoControlResponse>;
+  startServo(request: ServoControlRequest): Promise<ServoControlResponse>;
+  stopServo(request: ServoControlRequest): Promise<ServoControlResponse>;
 }

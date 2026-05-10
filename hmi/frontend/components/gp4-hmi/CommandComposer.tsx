@@ -52,6 +52,16 @@ export function CommandComposer({
 
   return (
     <div className="chat-input-wrap">
+      {!canSubmit ? (
+        <div className="input-blocked-banner">
+          <span className="input-blocked-icon">⊘</span>
+          <span>
+            {readOnlyBridge
+              ? 'Command ingress is blocked. Check telemetry freshness, hardware gate, and runtime state.'
+              : 'Submit disabled — waiting for command-capable conditions.'}
+          </span>
+        </div>
+      ) : null}
       <div className="input-row">
         <textarea
           className="chat-input"

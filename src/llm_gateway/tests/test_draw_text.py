@@ -10,7 +10,7 @@ def _macro_policy_path() -> str:
 
 
 def _router(runtime_mode: str = "hardware"):
-    from llm_gateway.intent_router import IntentRouter
+    from llm_gateway.intent_engine import IntentRouter
 
     return IntentRouter(
         macro_policy_path=_macro_policy_path(), runtime_mode=runtime_mode
@@ -39,7 +39,7 @@ def _draw_text_payload(text: str = "GP4", **overrides) -> dict:
 
 
 def test_macro_policy_declares_draw_text_contract():
-    from llm_gateway.intent_router import load_macro_policy
+    from llm_gateway.intent_engine import load_macro_policy
 
     policy = load_macro_policy(_macro_policy_path())
     draw_text = policy["macros"]["draw_text"]

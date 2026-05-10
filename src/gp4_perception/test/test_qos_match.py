@@ -43,7 +43,7 @@ def test_matching_qos_receives_messages():
     pub = pub_node.create_publisher(
         CameraInfo, "/test/qos_match", qos_profile_sensor_data
     )
-    sub = sub_node.create_subscription(
+    _sub = sub_node.create_subscription(
         CameraInfo, "/test/qos_match", counter.cb, qos_profile_sensor_data
     )
 
@@ -75,7 +75,7 @@ def test_mismatched_qos_drops_most_messages():
     pub_match = pub_node_match.create_publisher(
         CameraInfo, "/test/qos_match_count", qos_profile_sensor_data
     )
-    sub_match = sub_node_match.create_subscription(
+    _sub_match = sub_node_match.create_subscription(
         CameraInfo, "/test/qos_match_count", match_counter.cb, qos_profile_sensor_data
     )
 
@@ -97,7 +97,7 @@ def test_mismatched_qos_drops_most_messages():
         CameraInfo, "/test/qos_mismatch", qos_profile_sensor_data
     )
     # Default QoS is RELIABLE, which is incompatible with BEST_EFFORT publisher
-    sub = sub_node.create_subscription(
+    _sub = sub_node.create_subscription(
         CameraInfo, "/test/qos_mismatch", counter.cb, qos_profile_system_default
     )
 

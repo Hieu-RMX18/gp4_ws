@@ -23,6 +23,7 @@ SUPPORTED_PRIMITIVES = {
     "IO_SET",
     "ALARM_RESET",
     "GET_POSE",
+    "BLENDED_SEQUENCE",
 }
 HARDWARE_WHITELIST = set(SUPPORTED_PRIMITIVES)
 PLANNER_DEFAULTS = {
@@ -34,6 +35,7 @@ PLANNER_DEFAULTS = {
     "MOVE_REL": "PILZ_LIN",
     "MOVE_JOINT": "PILZ_PTP",
     "MOVE_JOINTS": "PILZ_PTP",
+    "BLENDED_SEQUENCE": "PILZ_LIN",
 }
 MOTION_PRIMITIVES = {
     "HOME",
@@ -44,6 +46,7 @@ MOTION_PRIMITIVES = {
     "MOVE_REL",
     "MOVE_JOINT",
     "MOVE_JOINTS",
+    "BLENDED_SEQUENCE",
 }
 _OLD_ACTIONS = {
     "move_home": "HOME",
@@ -124,6 +127,13 @@ _ALLOWED_FIELDS_BY_PRIMITIVE = {
     "IO_SET": {"io_address", "io_value", "reference_frame"},
     "ALARM_RESET": {"reference_frame"},
     "GET_POSE": {"reference_frame"},
+    "BLENDED_SEQUENCE": {
+        "sequence_steps",
+        "velocity_scale",
+        "acceleration_scale",
+        "planner_id",
+        "reference_frame",
+    },
 }
 _CARTESIAN_DIRECTIONS = {
     "up": (0.0, 0.0, 1.0),

@@ -27,25 +27,25 @@ find_package(tf2_geometry_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 
 add_library(${PROJECT_NAME}_components SHARED
-  src/angle_branch_utils.cpp
-  src/execution_orchestrator.cpp
-  src/planner_router.cpp
-  src/ik_selector.cpp
-  src/seed_manager.cpp
-  src/wrist_flip_guard.cpp
-  src/joint_position_guard.cpp
-  src/manipulability_guard.cpp
-  src/trajectory_post_processor.cpp
-  src/quality_gate.cpp
-  src/trajectory_validator.cpp
-  src/orientation_filter.cpp
-  src/planning_scene_manager.cpp
-  src/execute_motion_action_support.cpp
-  src/non_motion_primitive_executor.cpp
-  src/dispatch_trajectory_executor.cpp
-  src/motion_primitive_executor.cpp
-  src/primitive_router_dispatch.cpp
-  src/query_handler.cpp
+  src/planning/angle_branch_utils.cpp
+  src/execution/execution_orchestrator.cpp
+  src/planning/planner_router.cpp
+  src/planning/ik_selector.cpp
+  src/planning/seed_manager.cpp
+  src/guards/wrist_flip_guard.cpp
+  src/guards/joint_position_guard.cpp
+  src/guards/manipulability_guard.cpp
+  src/planning/trajectory_post_processor.cpp
+  src/guards/quality_gate.cpp
+  src/guards/trajectory_validator.cpp
+  src/planning/orientation_filter.cpp
+  src/planning/planning_scene_manager.cpp
+  src/node/execute_motion_action_support.cpp
+  src/execution/non_motion_primitive_executor.cpp
+  src/execution/dispatch_trajectory_executor.cpp
+  src/execution/motion_primitive_executor.cpp
+  src/planning/primitive_router_dispatch.cpp
+  src/node/query_handler.cpp
 )
 
 target_include_directories(${PROJECT_NAME}_components PUBLIC
@@ -76,7 +76,7 @@ target_link_libraries(${PROJECT_NAME}_components
 )
 
 add_executable(motion_core_node
-  src/motion_core_node.cpp
+  src/node/motion_core_node.cpp
 )
 
 target_link_libraries(motion_core_node

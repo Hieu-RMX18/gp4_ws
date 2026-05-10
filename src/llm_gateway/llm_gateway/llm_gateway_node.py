@@ -5,53 +5,92 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
+import hmac
 import json
+import os
+import threading
 from typing import Any, Dict, List
 
 import rclpy
+from industrial_msgs.msg import RobotStatus, TriState
 from interfaces.action import ExecuteMotion
 from interfaces.srv import (
     ConfirmExecution,
     GetCurrentPose,
+    GetObjectPositions,
     GetPrimitiveConstants,
     HydrateWorkplane,
+    ReviewIntent,
     ValidateCommand,
 )
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
-from rclpy.executors import ExternalShutdownException
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
-from llm_gateway.command_pipeline import (
+from llm_gateway.intent_engine import (
+    GoalMapper,
+    IntentRouter,
+    LLMParser,
+    Normalizer,
+    SchemaValidator,
+    SemanticValidator,
+    SequenceValidator,
     command_from_sanitized_json as _pipeline_command_from_sanitized_json,
     hydrate_draw_workplane as _pipeline_hydrate_draw_workplane,
     prepare_execution_command as _pipeline_prepare_execution_command,
 )
-from llm_gateway.goal_mapper import GoalMapper
-from llm_gateway.intent_router import IntentRouter
-from llm_gateway.llm_client import OpenAICompatibleLLMClient
-from llm_gateway.llm_config import load_llm_backend_config
-from llm_gateway.normalizer import Normalizer
-from llm_gateway.parser import LLMParser
-from llm_gateway.schema_validator import SchemaValidator
-from llm_gateway.semantic_validator import SemanticValidator
-from llm_gateway.sequence_validator import SequenceValidator
+from llm_gateway.react_planner import (
+    ComputeArcPointsTool,
+    GetCurrentPoseTool,
+    GripperCloseTool,
+    GripperOpenTool,
+    IterationBudget,
+    OpenAICompatibleLLMClient,
+    PlanMotionTool,
+    QueryPerceptionTool,
+    ReActAgent,
+    SetSpeedTool,
+    StateInjector,
+    SubmitMotionTool,
+    ToolRegistry,
+    WaitForStateTool,
+    load_llm_backend_config,
+)
 
-# ReAct agent imports (W3)
-from llm_gateway.react.agent import ReActAgent
-from llm_gateway.react.iteration_budget import IterationBudget
-from llm_gateway.react.state_injector import StateInjector
-from llm_gateway.react.tool_registry import ToolRegistry
-from llm_gateway.react.tools.compute_arc_points import ComputeArcPointsTool
-from llm_gateway.react.tools.get_current_pose import GetCurrentPoseTool
-from llm_gateway.react.tools.gripper_close import GripperCloseTool
-from llm_gateway.react.tools.gripper_open import GripperOpenTool
-from llm_gateway.react.tools.plan_motion import PlanMotionTool
-from llm_gateway.react.tools.query_perception import QueryPerceptionTool
-from llm_gateway.react.tools.set_speed import SetSpeedTool
-from llm_gateway.react.tools.submit_motion import SubmitMotionTool
-from llm_gateway.react.tools.wait_for_state import WaitForStateTool
+
+EXECUTOR_SHUTDOWN_TIMEOUT_SEC = 2.0
+_REVIEW_INTENT_HMAC_VERSION = "v1"
+
+
+def build_review_intent_token(
+    *,
+    shared_secret: str,
+    raw_text: str,
+    runtime_mode: str,
+    session_id: str,
+    operator_id: str,
+    command_id: str,
+) -> str:
+    """Build the signed ReviewIntent token expected from the HMI backend."""
+    normalized_fields = [
+        str(raw_text or "").strip(),
+        str(runtime_mode or "").strip(),
+        str(session_id or "").strip(),
+        str(operator_id or "").strip(),
+        str(command_id or "").strip(),
+    ]
+    message = "\0".join(normalized_fields).encode("utf-8")
+    digest = hmac.new(
+        str(shared_secret or "").encode("utf-8"),
+        message,
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{_REVIEW_INTENT_HMAC_VERSION}:{digest}"
 
 
 @dataclass
@@ -108,6 +147,11 @@ class LLMGatewayNode(Node):
             .get_parameter_value()
             .double_value
         )
+        self._direct_topic_execution_enabled = (
+            self.get_parameter("allow_direct_topic_execution")
+            .get_parameter_value()
+            .bool_value
+        )
 
         self._parser = parser or LLMParser()
         self._schema_validator = schema_validator or SchemaValidator(schema_path)
@@ -120,6 +164,9 @@ class LLMGatewayNode(Node):
             default_acceleration_scale=self._default_acceleration_scale,
         )
         runtime_mode = self._resolve_runtime_mode()
+        self._runtime_mode = runtime_mode
+        self._review_intent_token = os.getenv("GP4_REVIEW_INTENT_TOKEN", "").strip()
+        self._review_intent_requires_token = True
         self._intent_router = intent_router or IntentRouter(runtime_mode=runtime_mode)
         self._sequence_validator = sequence_validator or SequenceValidator(
             schema_validator=self._schema_validator,
@@ -160,8 +207,10 @@ class LLMGatewayNode(Node):
                 state_injector=self._react_state_injector,
                 budget=budget,
                 schema_validator=self._schema_validator,
+                ros_node=self,
             )
             self._react_plan_cache: Dict[str, Any] = {}
+            self._react_plan_cache_max_entries = 64
         else:
             self._react_agent = None
 
@@ -185,6 +234,20 @@ class LLMGatewayNode(Node):
             "/llm_raw_command",
             self.raw_command_callback,
             10,
+            callback_group=callback_group,
+        )
+        self._react_joint_state_subscriber = self.create_subscription(
+            JointState,
+            "/yaskawa/joint_states",
+            self._react_joint_state_callback,
+            qos_profile_sensor_data,
+            callback_group=callback_group,
+        )
+        self._react_robot_status_subscriber = self.create_subscription(
+            RobotStatus,
+            "/yaskawa/robot_status",
+            self._react_robot_status_callback,
+            qos_profile_sensor_data,
             callback_group=callback_group,
         )
         self._llm_debug_publisher = self.create_publisher(String, "/llm_debug", 10)
@@ -216,6 +279,11 @@ class LLMGatewayNode(Node):
             "/get_current_pose",
             callback_group=callback_group,
         )
+        self._get_object_positions_client = self.create_client(
+            GetObjectPositions,
+            "/perception/get_object_positions",
+            callback_group=callback_group,
+        )
 
         # W5.T2 — HMI consolidation service servers
         self._hydrate_workplane_srv = self.create_service(
@@ -228,6 +296,12 @@ class LLMGatewayNode(Node):
             GetPrimitiveConstants,
             "/llm_gateway/get_primitive_constants",
             self._on_get_primitive_constants,
+            callback_group=callback_group,
+        )
+        self._review_intent_srv = self.create_service(
+            ReviewIntent,
+            "/llm_gateway/review_intent",
+            self._on_review_intent,
             callback_group=callback_group,
         )
         self._confirm_execution_srv = self.create_service(
@@ -248,6 +322,7 @@ class LLMGatewayNode(Node):
         self.declare_parameter("default_acceleration_scale", 0.06)
         self.declare_parameter("safety_service_timeout_sec", 2.0)
         self.declare_parameter("status_heartbeat_period_sec", 5.0)
+        self.declare_parameter("allow_direct_topic_execution", False)
 
     def _resolve_runtime_mode(self) -> str:
         runtime_mode = (
@@ -295,15 +370,191 @@ class LLMGatewayNode(Node):
         self._status_publisher.publish(String(data=self._last_status))
 
     def intent_callback(self, msg: String) -> None:
+        if not self._direct_topic_execution_enabled:
+            self._reject_direct_topic_execution(
+                "direct_text_topic_disabled",
+                msg.data,
+            )
+            return
         self.process_intent(msg.data)
 
     def raw_command_callback(self, msg: String) -> None:
+        if not self._direct_topic_execution_enabled:
+            self._reject_direct_topic_execution(
+                "direct_raw_topic_disabled",
+                msg.data,
+            )
+            return
         self.process_raw_command(msg.data)
 
-    def raw_command_cb(
-        self, msg: String
-    ) -> None:  # pragma: no cover - compatibility shim
-        self.raw_command_callback(msg)
+    def _reject_direct_topic_execution(self, stage: str, intent_text: str) -> None:
+        self._reject(
+            stage,
+            "Direct gateway topic execution is disabled. Submit natural-language "
+            "text through /llm_gateway/review_intent and the HMI supervisor "
+            "confirmation flow.",
+            intent_text=intent_text,
+        )
+
+    def _generate_review_semantic_ir(self, intent_text: str) -> Dict[str, Any]:
+        if self._react_enabled and self._react_agent is not None:
+            react_result = self._react_agent.run(intent_text)
+            if not react_result.get("_handoff"):
+                return react_result
+            self.get_logger().warning(
+                "ReAct review handoff "
+                f"({react_result.get('reason', 'unknown')}); "
+                "falling back to legacy LLM review."
+            )
+
+        llm_response = self._llm_client.generate_response(intent_text)
+        return self._parser.parse(llm_response)
+
+    def _authorize_review_intent(self, request: ReviewIntent.Request) -> str:
+        """Return an error string when the review request is not HMI-originated."""
+        required_metadata = {
+            "session_id": str(getattr(request, "session_id", "") or "").strip(),
+            "operator_id": str(getattr(request, "operator_id", "") or "").strip(),
+            "command_id": str(getattr(request, "command_id", "") or "").strip(),
+        }
+        missing = [name for name, value in required_metadata.items() if not value]
+        if missing:
+            return "ReviewIntent requires HMI metadata: " + ", ".join(missing)
+
+        if not self._review_intent_token:
+            return (
+                "ReviewIntent review token is required; "
+                "set GP4_REVIEW_INTENT_TOKEN for both HMI backend and llm_gateway."
+            )
+
+        provided = str(getattr(request, "review_token", "") or "").strip()
+        expected = build_review_intent_token(
+            shared_secret=self._review_intent_token,
+            raw_text=str(getattr(request, "raw_text", "") or ""),
+            runtime_mode=str(getattr(request, "runtime_mode", "") or ""),
+            session_id=required_metadata["session_id"],
+            operator_id=required_metadata["operator_id"],
+            command_id=required_metadata["command_id"],
+        )
+        if not hmac.compare_digest(provided, expected):
+            return "ReviewIntent review token mismatch."
+
+        return ""
+
+    def _on_review_intent(
+        self,
+        request: ReviewIntent.Request,
+        response: ReviewIntent.Response,
+    ) -> ReviewIntent.Response:
+        intent_text = str(getattr(request, "raw_text", "") or "").strip()
+        if not intent_text:
+            response.accepted = False
+            response.error = "raw_text is required for intent review."
+            response.semantic_ir_json = ""
+            return response
+
+        authorization_error = self._authorize_review_intent(request)
+        if authorization_error:
+            response.accepted = False
+            response.error = authorization_error
+            response.semantic_ir_json = ""
+            return response
+
+        effective_runtime_mode = self._runtime_mode
+        if effective_runtime_mode not in {"sim", "hardware"}:
+            response.accepted = False
+            response.error = (
+                "gateway runtime_mode must be 'sim' or 'hardware' for intent review."
+            )
+            response.semantic_ir_json = ""
+            return response
+
+        requested_runtime_mode = str(getattr(request, "runtime_mode", "") or "").strip()
+        if requested_runtime_mode != effective_runtime_mode:
+            response.accepted = False
+            response.error = (
+                "ReviewIntent runtime_mode mismatch: "
+                f"request={requested_runtime_mode or '<empty>'}, "
+                f"gateway={effective_runtime_mode}."
+            )
+            response.semantic_ir_json = ""
+            return response
+
+        try:
+            semantic_ir = self._generate_review_semantic_ir(intent_text)
+        except Exception as exc:
+            response.accepted = False
+            response.error = str(exc)
+            response.semantic_ir_json = ""
+            return response
+
+        if not isinstance(semantic_ir, dict):
+            response.accepted = False
+            response.error = "review result must be a JSON object."
+            response.semantic_ir_json = ""
+            return response
+        response.semantic_ir_json = json.dumps(
+            semantic_ir,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        if "error" in semantic_ir:
+            response.accepted = False
+            response.error = str(semantic_ir.get("message") or semantic_ir["error"])
+            return response
+        if "intent" not in semantic_ir:
+            response.accepted = False
+            response.error = "review result must be Semantic IR with an intent field."
+            return response
+        try:
+            routed = IntentRouter(runtime_mode=effective_runtime_mode).route(semantic_ir)
+        except Exception as exc:
+            response.accepted = False
+            response.error = str(exc)
+            return response
+        if routed.route_type == "error":
+            error_payload = routed.error_payload or {}
+            response.accepted = False
+            response.error = str(
+                error_payload.get("message")
+                or error_payload.get("error")
+                or "review result was rejected by the intent router."
+            )
+            return response
+
+        response.accepted = True
+        response.error = ""
+        return response
+
+    def _react_joint_state_callback(self, msg: JointState) -> None:
+        self._react_state_injector.update_joint_states(
+            {
+                "name": list(msg.name),
+                "position": [float(value) for value in msg.position],
+            }
+        )
+
+    def _react_robot_status_callback(self, msg: RobotStatus) -> None:
+        if self._tri_state_is_true(msg.in_error) or self._tri_state_is_true(
+            msg.e_stopped
+        ):
+            mode = "FAULT"
+        elif self._tri_state_is_true(msg.in_motion):
+            mode = "MOVING"
+        elif self._tri_state_is_true(msg.motion_possible):
+            mode = "IDLE"
+        else:
+            mode = "FAULT"
+        self._react_state_injector.update_robot_status(
+            {
+                "mode": mode,
+                "active_alarms": [str(code) for code in msg.error_codes],
+            }
+        )
+
+    @staticmethod
+    def _tri_state_is_true(value: Any) -> bool:
+        return int(getattr(value, "val", TriState.UNKNOWN)) == int(TriState.TRUE)
 
     def process_intent(self, intent_text: str) -> None:
         self.publish_status("received")
@@ -329,8 +580,6 @@ class LLMGatewayNode(Node):
             self._process_llm_payload(intent_text, json.dumps(react_result))
             return
 
-        # DEPRECATED: removal_date=2026-06-01, reason=replaced_by_react_in_W3
-        # Legacy single-shot IntentRouter path (unchanged from W2).
         try:
             llm_response = self._llm_client.generate_response(intent_text)
         except Exception as exc:
@@ -943,6 +1192,123 @@ class LLMGatewayNode(Node):
             sanitized_json, fallback_payload, self._schema_validator
         )
 
+    def _wait_for_future_without_spinning(
+        self, future: Any, timeout_sec: float
+    ) -> tuple[bool, Any | None]:
+        done = getattr(future, "done", None)
+        if callable(done) and done():
+            return True, future.result()
+
+        completed = threading.Event()
+        add_done_callback = getattr(future, "add_done_callback", None)
+        if not callable(add_done_callback):
+            return False, None
+
+        add_done_callback(lambda _: completed.set())
+        if not completed.wait(timeout_sec):
+            return False, None
+        return True, future.result()
+
+    def _query_perception_detections(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        client = getattr(self, "_get_object_positions_client", None)
+        if client is None or not client.service_is_ready():
+            return {
+                "ok": False,
+                "error": "perception_service_not_ready",
+                "payload": None,
+            }
+
+        request = GetObjectPositions.Request()
+        request.class_filter = str(args.get("class_filter") or "")
+        future = client.call_async(request)
+        done, response = self._wait_for_future_without_spinning(
+            future, self._safety_service_timeout_sec
+        )
+        if not done or response is None:
+            return {
+                "ok": False,
+                "error": "perception_service_timeout",
+                "payload": None,
+            }
+        if not response.ok:
+            return {
+                "ok": False,
+                "error": response.failure_reason or "perception_query_rejected",
+                "payload": None,
+            }
+        calibration_valid = bool(getattr(response, "calibration_valid", False))
+        depth_in_range = bool(getattr(response, "depth_in_range", False))
+        depth_noise_mm_p95 = float(getattr(response, "depth_noise_mm_p95", 0.0))
+        calibration_payload = {
+            "valid": calibration_valid,
+            "date": getattr(response, "calibration_date_iso", ""),
+            "age_days": float(getattr(response, "calibration_age_days", 0.0)),
+        }
+        if not calibration_valid:
+            return {
+                "ok": False,
+                "error": "calibration_invalid",
+                "payload": {"calibration": calibration_payload},
+            }
+        if not depth_in_range:
+            return {
+                "ok": False,
+                "error": "depth_quality_invalid",
+                "payload": {
+                    "calibration": calibration_payload,
+                    "depth_in_range": depth_in_range,
+                    "depth_noise_mm_p95": depth_noise_mm_p95,
+                },
+            }
+        return {
+            "ok": True,
+            "error": None,
+            "payload": {
+                "detections": [
+                    self._serialize_detection(detection)
+                    for detection in response.detections
+                ],
+                "calibration": calibration_payload,
+                "depth_in_range": depth_in_range,
+                "depth_noise_mm_p95": depth_noise_mm_p95,
+                "stamp": {
+                    "sec": int(response.stamp.sec),
+                    "nanosec": int(response.stamp.nanosec),
+                },
+            },
+        }
+
+    @staticmethod
+    def _serialize_detection(detection: Any) -> Dict[str, Any]:
+        result = detection.results[0] if getattr(detection, "results", []) else None
+        hypothesis = getattr(result, "hypothesis", None)
+        pose_container = getattr(result, "pose", None)
+        pose = getattr(pose_container, "pose", pose_container)
+        position = getattr(pose, "position", None)
+        orientation = getattr(pose, "orientation", None)
+        size = getattr(getattr(detection, "bbox", None), "size", None)
+        return {
+            "class_id": str(getattr(hypothesis, "class_id", "")),
+            "score": float(getattr(hypothesis, "score", 0.0)),
+            "frame_id": str(getattr(getattr(detection, "header", None), "frame_id", "")),
+            "position": {
+                "x": float(getattr(position, "x", 0.0)),
+                "y": float(getattr(position, "y", 0.0)),
+                "z": float(getattr(position, "z", 0.0)),
+            },
+            "orientation": {
+                "x": float(getattr(orientation, "x", 0.0)),
+                "y": float(getattr(orientation, "y", 0.0)),
+                "z": float(getattr(orientation, "z", 0.0)),
+                "w": float(getattr(orientation, "w", 1.0)),
+            },
+            "size": {
+                "x": float(getattr(size, "x", 0.0)),
+                "y": float(getattr(size, "y", 0.0)),
+                "z": float(getattr(size, "z", 0.0)),
+            },
+        }
+
     def _reject_sequence_step(
         self,
         sequence_state: _SequenceExecutionState,
@@ -1243,14 +1609,13 @@ class LLMGatewayNode(Node):
 
         try:
             validate_future = self._validate_client.call_async(validate_req)
-            rclpy.spin_until_future_complete(
-                self, validate_future, timeout_sec=self._safety_service_timeout_sec
+            done, validate_resp = self._wait_for_future_without_spinning(
+                validate_future, self._safety_service_timeout_sec
             )
-            if not validate_future.done():
+            if not done:
                 response.accepted = False
                 response.reason = "ValidateCommand service timed out"
                 return response
-            validate_resp = validate_future.result()
         except Exception as exc:
             response.accepted = False
             response.reason = f"ValidateCommand call failed: {exc}"
@@ -1280,13 +1645,12 @@ class LLMGatewayNode(Node):
         request = GetCurrentPose.Request()
         request.reference_frame = reference_frame
         future = self._get_pose_client.call_async(request)
-        rclpy.spin_until_future_complete(
-            self, future, timeout_sec=self._safety_service_timeout_sec
+        done, response = self._wait_for_future_without_spinning(
+            future, self._safety_service_timeout_sec
         )
 
-        if not future.done():
+        if not done:
             return None
-        response = future.result()
         if response is None or not response.success:
             return None
 
@@ -1309,13 +1673,16 @@ class LLMGatewayNode(Node):
 def main(args: Any = None) -> None:
     rclpy.init(args=args)
     node = LLMGatewayNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
-        node.destroy_node()
+        executor.shutdown(timeout_sec=EXECUTOR_SHUTDOWN_TIMEOUT_SEC)
         if rclpy.ok():
+            node.destroy_node()
             rclpy.shutdown()
 
 

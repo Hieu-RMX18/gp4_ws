@@ -14,7 +14,7 @@ def _macro_policy_path() -> str:
 
 
 def _router(runtime_mode: str = "hardware"):
-    from llm_gateway.intent_router import IntentRouter
+    from llm_gateway.intent_engine import IntentRouter
 
     return IntentRouter(
         macro_policy_path=_macro_policy_path(), runtime_mode=runtime_mode
@@ -106,6 +106,38 @@ def test_go_home():
     assert result.route_type == "primitive"
     assert len(result.commands) == 1
     assert result.commands[0]["primitive_type"] == "HOME"
+
+
+def test_move_named_pose_routes_srdf_group_state_to_existing_ptp_joint_target():
+    router = _router()
+
+    result = router.route({"intent": "move_named_pose", "pose_name": "ready"})
+
+    assert result.route_type == "primitive"
+    assert len(result.commands) == 1
+    command = result.commands[0]
+    assert command["primitive_type"] == "PTP"
+    assert command["planner_id"] == "PILZ_PTP"
+    assert command["reference_frame"] == "base_link"
+    assert command["joint_target"] == pytest.approx(
+        [
+            1.938101818035138,
+            0.0903533622099061,
+            -0.15852595742235326,
+            0.0,
+            -1.1752774274713826,
+            0.05333592949720888,
+        ]
+    )
+    assert "pose_name" not in command
+    assert "named_target" not in command
+
+
+def test_move_named_pose_rejects_unknown_srdf_group_state():
+    router = _router()
+
+    with pytest.raises(ValueError, match="unknown named pose"):
+        router.route({"intent": "move_named_pose", "pose_name": "park_safe"})
 
 
 def test_stop():

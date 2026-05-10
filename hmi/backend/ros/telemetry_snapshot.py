@@ -88,9 +88,11 @@ class _TelemetryState:
     # W5.T4 — new HMI consolidation service readiness
     hydrate_workplane_ready_at: datetime | None = None
     get_primitive_constants_ready_at: datetime | None = None
+    review_intent_ready_at: datetime | None = None
     confirm_execution_ready_at: datetime | None = None
     hydrate_workplane_ready: bool = False
     get_primitive_constants_ready: bool = False
+    review_intent_ready: bool = False
     confirm_execution_ready: bool = False
     command_interface_checked_at: datetime | None = None
     command_interface_check_inflight: bool = False
@@ -300,6 +302,22 @@ class TelemetrySnapshotMixin:
                     else "Read-only outside command-capable modes."
                 ),
             ),
+            self._build_source_status(
+                snapshot=snapshot,
+                name="review_intent_service",
+                label="ReviewIntent service",
+                topic=self._review_intent_service,
+                last_seen_at=snapshot.review_intent_ready_at,
+                freshness_sec=CONNECTION_FRESHNESS_SEC["command_interface"],
+                active=active and snapshot.review_intent_ready,
+                detail=(
+                    "ready at " + self._review_intent_service
+                    if snapshot.review_intent_ready
+                    else "waiting for " + self._review_intent_service
+                )
+                if active
+                else "Read-only outside command-capable modes.",
+            ),
         ]
 
     def _command_interface_health(
@@ -309,7 +327,10 @@ class TelemetrySnapshotMixin:
             return ConnectionHealth.DOWN
         if runtime_mode not in {RuntimeMode.SIM, RuntimeMode.HARDWARE}:
             return ConnectionHealth.DOWN
-        if snapshot.validate_command_ready and snapshot.execute_motion_ready:
+        if (
+            snapshot.validate_command_ready
+            and snapshot.execute_motion_ready
+        ):
             return ConnectionHealth.HEALTHY
         if snapshot.ros_started_at is not None:
             return ConnectionHealth.DEGRADED
@@ -328,6 +349,10 @@ class TelemetrySnapshotMixin:
             parts.append(snapshot.validate_command_detail)
         if snapshot.execute_motion_detail:
             parts.append(snapshot.execute_motion_detail)
+        if snapshot.review_intent_ready:
+            parts.append(f"ready at {self._review_intent_service}")
+        elif runtime_mode in {RuntimeMode.SIM, RuntimeMode.HARDWARE}:
+            parts.append(f"waiting for {self._review_intent_service}")
         return "; ".join(parts) if parts else None
 
     def _copy_state_locked(self) -> _TelemetryState:
@@ -367,10 +392,18 @@ class TelemetrySnapshotMixin:
             joint_topic_received_at=dict(self._state.joint_topic_received_at),
             validate_command_ready_at=self._state.validate_command_ready_at,
             execute_motion_ready_at=self._state.execute_motion_ready_at,
+            review_intent_ready_at=self._state.review_intent_ready_at,
             validate_command_ready=self._state.validate_command_ready,
             execute_motion_ready=self._state.execute_motion_ready,
+            review_intent_ready=self._state.review_intent_ready,
             validate_command_detail=self._state.validate_command_detail,
             execute_motion_detail=self._state.execute_motion_detail,
+            hydrate_workplane_ready_at=self._state.hydrate_workplane_ready_at,
+            get_primitive_constants_ready_at=self._state.get_primitive_constants_ready_at,
+            confirm_execution_ready_at=self._state.confirm_execution_ready_at,
+            hydrate_workplane_ready=self._state.hydrate_workplane_ready,
+            get_primitive_constants_ready=self._state.get_primitive_constants_ready,
+            confirm_execution_ready=self._state.confirm_execution_ready,
             command_interface_checked_at=self._state.command_interface_checked_at,
             command_interface_check_inflight=False,
             command_interface_error=self._state.command_interface_error,

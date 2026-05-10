@@ -2,10 +2,13 @@
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
 import yaml
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 
 
 def _solve_synthetic_hand_eye(num_samples: int = 20):
@@ -55,7 +58,6 @@ def _solve_synthetic_hand_eye(num_samples: int = 20):
 
         # T_target2cam = T_cam2base^{-1} * T_base2target
         R_cam2base_inv = R_cam2base.T
-        t_cam2base_inv = -R_cam2base.T @ t_cam2base
 
         R_b = R_cam2base_inv @ R_base2target
         t_b = R_cam2base_inv @ (t_base2target - t_cam2base)
@@ -127,3 +129,93 @@ class TestSyntheticCalibration:
         assert dt.tzinfo is not None
         assert (datetime.now(timezone.utc) - dt).total_seconds() < 60
         path.unlink()
+
+
+def test_calibration_service_uses_sensor_qos_for_realsense_topics(
+    monkeypatch, tmp_path
+):
+    """RealSense image and camera-info subscriptions must match sensor QoS."""
+    from gp4_perception import calibration
+
+    captured_qos = []
+
+    monkeypatch.setattr(Node, "__init__", lambda self, node_name: None)
+    monkeypatch.setattr(
+        Node,
+        "create_subscription",
+        lambda self, msg_type, topic, callback, qos: captured_qos.append(qos),
+    )
+    monkeypatch.setattr(Node, "create_service", lambda *args, **kwargs: object())
+    monkeypatch.setattr(calibration, "Buffer", lambda: object())
+    monkeypatch.setattr(calibration, "TransformListener", lambda *args, **kwargs: None)
+
+    calibration.CalibrationService(extrinsics_path=tmp_path / "extrinsics.yaml")
+
+    assert captured_qos == [qos_profile_sensor_data, qos_profile_sensor_data]
+
+
+def test_calibration_service_uses_marker_length_from_fiducials_yaml(
+    monkeypatch, tmp_path
+):
+    """Pose estimation must use the configured physical marker size."""
+    from gp4_perception import calibration
+
+    fiducials_path = tmp_path / "fiducials.yaml"
+    fiducials_path.write_text("fiducials:\n  marker_length_m: 0.052\n")
+    captured_marker_lengths = []
+
+    class FakeBridge:
+        def imgmsg_to_cv2(self, msg, desired_encoding):
+            return np.zeros((4, 4, 3), dtype=np.uint8)
+
+    class FakeTfBuffer:
+        def lookup_transform(self, target_frame, source_frame, stamp, timeout):
+            return SimpleNamespace(
+                transform=SimpleNamespace(
+                    translation=SimpleNamespace(x=0.1, y=0.2, z=0.3),
+                    rotation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+                )
+            )
+
+    def estimate_pose_single_markers(corners, marker_length, camera_matrix, dist_coeffs):
+        captured_marker_lengths.append(marker_length)
+        return (
+            np.zeros((1, 1, 3), dtype=np.float64),
+            np.zeros((1, 1, 3), dtype=np.float64),
+            None,
+        )
+
+    monkeypatch.setattr(Node, "__init__", lambda self, node_name: None)
+    monkeypatch.setattr(Node, "create_subscription", lambda *args, **kwargs: object())
+    monkeypatch.setattr(Node, "create_service", lambda *args, **kwargs: object())
+    monkeypatch.setattr(calibration, "CvBridge", lambda: FakeBridge())
+    monkeypatch.setattr(calibration, "Buffer", lambda: FakeTfBuffer())
+    monkeypatch.setattr(calibration, "TransformListener", lambda *args, **kwargs: None)
+    monkeypatch.setattr(calibration.cv2, "cvtColor", lambda image, code: image)
+    monkeypatch.setattr(
+        calibration.cv2.aruco,
+        "detectMarkers",
+        lambda image, dictionary, parameters: (
+            [np.zeros((4, 1, 2), dtype=np.float32)],
+            np.array([[1]], dtype=np.int32),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        calibration.cv2.aruco,
+        "estimatePoseSingleMarkers",
+        estimate_pose_single_markers,
+    )
+
+    service = calibration.CalibrationService(
+        extrinsics_path=tmp_path / "extrinsics.yaml"
+    )
+    service._on_camera_info(
+        SimpleNamespace(
+            K=[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            D=[0.0, 0.0, 0.0, 0.0, 0.0],
+        )
+    )
+    service._on_image(SimpleNamespace(header=SimpleNamespace(stamp=object())))
+
+    assert captured_marker_lengths == [0.052]

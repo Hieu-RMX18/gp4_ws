@@ -45,6 +45,12 @@
   background: var(--color-background-tertiary);
 }
 
+.qcmd:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--color-background-tertiary);
+}
+
 .cmd-icon {
   width: 14px;
   color: var(--color-text-info);

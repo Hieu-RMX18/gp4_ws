@@ -1,21 +1,14 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
 import re
 import sys
-import unicodedata
 from typing import Any, Callable
 
 from ..domain.constants import GP4_JOINT_NAMES as JOINT_NAMES
 from .intent_constants import (
-    _CARTESIAN_DIRECTIONS,
-    _DRAW_TEXT_PREFIX_PATTERN,
     _OLD_ACTIONS,
-    DEFAULT_DRAW_TEXT_HEIGHT,
-    DEFAULT_DRAW_TEXT_UNITS,
-    UNIT_TO_METERS,
 )
 from .intent_normalization import (
     IntentNormalizationMixin,
@@ -35,23 +28,18 @@ if _SAFETY_SOURCE.exists():
         sys.path.append(safety_source)
 
 try:  # pragma: no cover - fallback logic is covered
-    from llm_gateway.intent_router import IntentRouter
+    from llm_gateway.intent_engine import IntentRouter
 except Exception:  # pragma: no cover - depends on optional source path
     IntentRouter = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - fallback logic is covered
-    from llm_gateway.sequence_validator import (
+    from llm_gateway.intent_engine import (
         SequenceValidationError,
         SequenceValidator,
     )
 except Exception:  # pragma: no cover - depends on optional source path
     SequenceValidationError = ValueError  # type: ignore[assignment]
     SequenceValidator = None  # type: ignore[assignment]
-
-try:  # pragma: no cover - fallback logic is covered
-    from llm_gateway.parser import parse_llm_output
-except Exception:  # pragma: no cover - depends on optional source path
-    parse_llm_output = None  # type: ignore[assignment]
 
 
 class IntentResolutionError(ValueError):
@@ -119,12 +107,6 @@ class IntentResolutionService(IntentNormalizationMixin):
             if intent_name:
                 candidate_payload = dict(structured_intent)
                 force_sequence = intent_name in {"sequence", "draw_shape", "draw_text"}
-        elif raw_text:
-            parsed_draw = self._parse_draw_text_to_semantic(raw_text)
-            if parsed_draw is not None:
-                candidate_payload = parsed_draw
-                intent_name = str(parsed_draw.get("intent") or "").strip().lower()
-                force_sequence = True
 
         if candidate_payload is None:
             return None
@@ -153,7 +135,7 @@ class IntentResolutionService(IntentNormalizationMixin):
                     "parsed_steps": None,
                     "diagnostics": diagnostics,
                     "parse_error": (
-                        "semantic intent routing is unavailable because llm_gateway.intent_router is not importable."
+                        "semantic intent routing is unavailable because llm_gateway.intent_engine is not importable."
                     ),
                     "route_metadata": route_metadata,
                     "structured_intent": working_payload,
@@ -215,6 +197,7 @@ class IntentResolutionService(IntentNormalizationMixin):
                     allow_routed_draw_metadata=bool(
                         routed.metadata.get("macro_name") in {"draw_shape", "draw_text"}
                     ),
+                    allow_primitive_structured=True,
                 )
                 for command in routed.commands
             ]
@@ -248,6 +231,7 @@ class IntentResolutionService(IntentNormalizationMixin):
         runtime_mode: str,
         current_joints: list[Any],
         allow_routed_draw_metadata: bool = False,
+        allow_primitive_structured: bool = False,
     ) -> dict[str, Any]:
         mode = str(runtime_mode or "unknown").strip().lower() or "unknown"
         if structured_intent is not None:
@@ -255,6 +239,7 @@ class IntentResolutionService(IntentNormalizationMixin):
                 structured_intent=structured_intent,
                 runtime_mode=mode,
                 current_joints=current_joints,
+                allow_primitive_structured=allow_primitive_structured,
             )
             normalized_text = json.dumps(
                 structured_intent, separators=(",", ":"), ensure_ascii=True
@@ -295,16 +280,23 @@ class IntentResolutionService(IntentNormalizationMixin):
         structured_intent: dict[str, Any],
         runtime_mode: str,
         current_joints: list[Any],
+        allow_primitive_structured: bool = False,
     ) -> dict[str, Any]:
         payload = dict(structured_intent)
 
         if "primitive_type" in payload:
-            return payload
+            if allow_primitive_structured:
+                return payload
+            raise IntentResolutionError(
+                "structuredIntent primitive_type payloads are not accepted from the HMI API; "
+                "submit natural-language text or Semantic IR with an intent field.",
+                rejected_fields=["primitive_type"],
+            )
 
         if "intent" in payload:
             if IntentRouter is None:
                 raise IntentResolutionError(
-                    "semantic intent routing is unavailable because llm_gateway.intent_router is not importable."
+                    "semantic intent routing is unavailable because llm_gateway.intent_engine is not importable."
                 )
             routed = IntentRouter(runtime_mode=runtime_mode).route(payload)
             if routed.route_type == "error":
@@ -499,122 +491,6 @@ class IntentResolutionService(IntentNormalizationMixin):
         working_payload["workplane"] = hydrated_workplane
         return working_payload
 
-    def _parse_draw_text_to_semantic(self, raw_text: str) -> dict[str, Any] | None:
-        stripped_text = " ".join(raw_text.strip().split())
-        if not stripped_text:
-            return None
-        folded = self._fold_text(stripped_text)
-
-        if folded.startswith("draw circle") or folded.startswith("ve hinh tron"):
-            payload = {
-                "intent": "draw_shape",
-                "shape_type": "circle",
-                "frame_id": "base_link",
-                "workplane": {"mode": "tool"},
-                "params": {},
-            }
-            match = re.fullmatch(
-                r"(?:draw\s+circle|ve\s+hinh\s+tron)(?:\s+(?:radius|ban\s+kinh))?\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)",
-                folded,
-            )
-            if match:
-                payload["units"] = match.group(2)
-                payload["params"] = {"radius": float(match.group(1))}
-            return payload
-
-        if folded.startswith("draw rectangle") or folded.startswith("ve hinh chu nhat"):
-            payload = {
-                "intent": "draw_shape",
-                "shape_type": "rectangle",
-                "frame_id": "base_link",
-                "workplane": {"mode": "tool"},
-                "params": {},
-            }
-            match = re.fullmatch(
-                r"(?:draw\s+rectangle|ve\s+hinh\s+chu\s+nhat)\s+([+-]?\d+(?:\.\d+)?)\s*(?:x|by)\s*([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)",
-                folded,
-            )
-            if match:
-                payload["units"] = match.group(3)
-                payload["params"] = {
-                    "width": float(match.group(1)),
-                    "height": float(match.group(2)),
-                }
-            return payload
-
-        if folded.startswith("draw polygon") or folded.startswith("ve da giac"):
-            payload = {
-                "intent": "draw_shape",
-                "shape_type": "polygon",
-                "frame_id": "base_link",
-                "workplane": {"mode": "tool"},
-                "params": {},
-            }
-            match = re.fullmatch(
-                (
-                    r"(?:draw\s+polygon|ve\s+da\s+giac)\s+(\d+)\s*(?:sides?|canh)"
-                    r"(?:\s+(?:radius|ban\s+kinh)\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)"
-                    r"|\s+(?:side|canh)\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m))"
-                ),
-                folded,
-            )
-            if match:
-                payload["params"] = {"n_sides": int(match.group(1))}
-                if match.group(2) is not None:
-                    payload["units"] = match.group(3)
-                    payload["params"]["radius"] = float(match.group(2))
-                elif match.group(4) is not None:
-                    payload["units"] = match.group(5)
-                    payload["params"]["side"] = float(match.group(4))
-            return payload
-
-        prefix_match = _DRAW_TEXT_PREFIX_PATTERN.fullmatch(stripped_text)
-        if prefix_match is None:
-            return None
-
-        content = prefix_match.group(1).strip()
-        if not content:
-            return None
-
-        height_match = re.fullmatch(
-            r"(.+?)\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)\s+tall", content, re.IGNORECASE
-        )
-        if height_match is None:
-            height_match = re.fullmatch(
-                r"(.+?)\s+cao\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)",
-                content,
-                re.IGNORECASE,
-            )
-
-        if height_match is not None:
-            text = height_match.group(1).strip()
-            height = float(height_match.group(2))
-            units = str(height_match.group(3)).lower()
-        else:
-            text = content
-            height = DEFAULT_DRAW_TEXT_HEIGHT
-            units = DEFAULT_DRAW_TEXT_UNITS
-
-        return {
-            "intent": "draw_text",
-            "text": text,
-            "units": units,
-            "frame_id": "base_link",
-            "workplane": {"mode": "tool"},
-            "font": {
-                "type": "single_stroke_builtin",
-                "height": height,
-            },
-        }
-
-    def _fold_text(self, value: str) -> str:
-        normalized = unicodedata.normalize("NFKD", value)
-        return "".join(
-            character
-            for character in normalized
-            if not unicodedata.combining(character)
-        ).lower()
-
     def _text_to_command(
         self, *, raw_text: str, current_joints: list[Any]
     ) -> dict[str, Any]:
@@ -624,31 +500,17 @@ class IntentResolutionService(IntentNormalizationMixin):
                 "empty command text is not allowed", missing_slots=["intentText"]
             )
 
-        if normalized.startswith("{") and parse_llm_output is not None:
-            try:
-                parsed_payload = parse_llm_output(raw_text)
-            except Exception as exc:  # pragma: no cover - parser is optional
-                raise IntentResolutionError(
-                    f"failed to parse JSON intent payload: {exc}"
-                ) from exc
-            if not isinstance(parsed_payload, dict):
-                raise IntentResolutionError(
-                    "JSON intent payload must decode to an object."
-                )
-            return self._structured_to_command(
-                structured_intent=parsed_payload,
-                runtime_mode="hardware",
-                current_joints=current_joints,
-            )
-
-        if normalized in {"home", "go home", "move home", "return home"}:
+        if normalized in {
+            "home",
+            "go home",
+            "move home",
+            "return home",
+            "move to home",
+        }:
             return {"primitive_type": "HOME"}
 
         if normalized in {"stop", "stop motion", "cancel motion", "halt"}:
             return {"primitive_type": "STOP"}
-
-        if normalized in {"alarm reset", "reset alarm", "clear alarm"}:
-            return {"primitive_type": "ALARM_RESET"}
 
         if normalized in {"get pose", "current pose", "where is robot", "where is tcp"}:
             return {"primitive_type": "GET_POSE", "reference_frame": "base_link"}
@@ -663,71 +525,8 @@ class IntentResolutionService(IntentNormalizationMixin):
                 "wait_duration_sec": float(wait_match.group(1)),
             }
 
-        speed_match = re.fullmatch(
-            r"(?:set\s+speed|speed)\s+([+-]?\d+(?:\.\d+)?)\s*(%|pct|percent)?",
-            normalized,
-        )
-        if speed_match:
-            speed_value = float(speed_match.group(1))
-            if speed_match.group(2) is not None or speed_value > 1.0:
-                speed_value /= 100.0
-            return {"primitive_type": "SET_SPEED", "velocity_scale": speed_value}
-
-        cartesian_match = re.fullmatch(
-            r"move\s+(up|down|left|right|forward|back|backward)\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)",
-            normalized,
-        )
-        if cartesian_match:
-            direction, magnitude_text, unit = cartesian_match.groups()
-            axis_scale = _CARTESIAN_DIRECTIONS[direction]
-            magnitude_m = float(magnitude_text) * UNIT_TO_METERS[unit]
-            return {
-                "primitive_type": "MOVE_REL",
-                "delta_x": axis_scale[0] * magnitude_m,
-                "delta_y": axis_scale[1] * magnitude_m,
-                "delta_z": axis_scale[2] * magnitude_m,
-                "reference_frame": "base_link",
-            }
-
-        joint_match = re.fullmatch(
-            r"(?:move\s+)?(?:joint|j)\s*([1-6])\s+([+-]?\d+(?:\.\d+)?)\s*(deg|degree|degrees)",
-            normalized,
-        )
-        if joint_match:
-            joint_one_based = int(joint_match.group(1))
-            angle_text = joint_match.group(2)
-            target_deg = float(angle_text)
-            joint_index = joint_one_based - 1
-            if angle_text.startswith(("+", "-")):
-                current_deg = self._read_joint_deg(
-                    current_joints=current_joints, joint_index=joint_index
-                )
-                if current_deg is None:
-                    raise IntentResolutionError(
-                        f"fresh joint position for {JOINT_NAMES[joint_index]} is unavailable.",
-                        missing_slots=["fresh_joint_position"],
-                    )
-                target_deg = current_deg + target_deg
-            return {
-                "primitive_type": "MOVE_JOINT",
-                "joint_index": joint_index,
-                "joint_angle": math.radians(target_deg),
-            }
-
-        joints_match = re.fullmatch(r"move\s+joints?\s+(.+)", normalized)
-        if joints_match:
-            numbers = re.findall(r"[+-]?\d+(?:\.\d+)?", joints_match.group(1))
-            if len(numbers) != 6:
-                raise IntentResolutionError(
-                    "MOVE_JOINTS text command requires exactly 6 joint values.",
-                    missing_slots=["joint_target[0..5]"],
-                )
-            return {
-                "primitive_type": "MOVE_JOINTS",
-                "joint_target": [float(value) for value in numbers],
-            }
-
         raise IntentResolutionError(
-            "intent is ambiguous or unsupported. Supported phrases: home, stop, wait, set speed, "
-            "move <direction> <distance>, move joint <n> <deg>, move joints <6 values>.",
+            "intent is ambiguous or unsupported. HMI local text fallback only supports "
+            "home, stop, wait <seconds>, and get pose; motion, draw, and sequence "
+            "commands must come from llm_gateway semantic review.",
         )

@@ -12,7 +12,7 @@
 
   --color-text-primary: #111827;
   --color-text-secondary: #6b7280;
-  --color-text-tertiary: #9ca3af;
+  --color-text-tertiary: #6b7280;
   --color-text-info: #185fa5;
   --color-text-success: #0f6e56;
   --color-text-warning: #854f0b;
@@ -131,10 +131,9 @@ textarea {
 .panel-header {
   padding: 12px 14px 10px;
   border-bottom: 0.5px solid var(--color-border-tertiary);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
   color: var(--color-text-secondary);
 }
 
@@ -153,10 +152,9 @@ textarea {
 }
 
 .section-title {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.04em;
   color: var(--color-text-secondary);
   margin-bottom: 10px;
 }

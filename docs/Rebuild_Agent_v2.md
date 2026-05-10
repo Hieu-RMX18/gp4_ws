@@ -58,7 +58,7 @@ These values were extracted from `motoros2_config.yaml` and the GP4 datasheets. 
 | `agent_ip_address` | `192.168.1.99` | Micro-ROS Agent host. The PC NIC must be on this subnet. |
 | `agent_port_number` | `8888` | UDP. Confirm before launch. |
 
-### 1.2 GP4 hardware envelope (from `DS_GP4.pdf` and `Flyer_Robot_GP4_E_05_2022.pdf`)
+### 1.2 GP4 hardware envelope (from `references/DS_GP4.pdf` and `references/Flyer_Robot_GP4_E_05.2022.pdf`)
 
 | Axis | Joint name | Range (deg) | Range (rad) | Max speed (deg/s) |
 |---|---|---|---|---|
@@ -523,9 +523,9 @@ If no gripper / IO action is found, the agent must register the corresponding to
 4. **Async execution.** No `time.sleep` in tools. `submit_motion` uses `ActionClient.send_goal_async`; the loop yields to the executor; feedback published on `/<llm_gateway>/gateway_status`.
 
 5. **Phased rollout.**
-   - Keep `IntentRouter` listening on `/llm_raw_command` (mark as `# DEPRECATED: removal_date=<today+28d>`).
-   - New ReAct agent listens on `/llm_intent`.
-   - Both routes must converge at the same Safety Gate (R3, R4).
+   - HMI text ingress uses `/llm_gateway/review_intent` to request Semantic IR review.
+   - Direct topic execution on `/llm_intent`, `/llm_text_input`, and `/llm_raw_command` is disabled by default and must remain behind `allow_direct_topic_execution`.
+   - All reviewed routes must converge at the same Safety Gate (R3, R4).
 
 #### P3.4 Verification
 
@@ -535,7 +535,7 @@ If no gripper / IO action is found, the agent must register the corresponding to
 | "Pick up the red block" prompt | If gripper present: completes. If absent: returns `capability_unavailable` cleanly without crash |
 | Goal cancel during execution | Cancel propagates; ReAct loop terminates cleanly |
 | `time.sleep` audit | `rg -n "time\.sleep|std::this_thread::sleep" <llm_gateway_pkg>/react_tools/` returns 0 hits |
-| Old route `/llm_raw_command` | Still functional as fallback |
+| Old route `/llm_raw_command` | Rejected by default unless `allow_direct_topic_execution=true` is explicitly set |
 | Schema validation | 100 % of tool calls Pydantic-validated; failures generate observations, not exceptions |
 | Replan after safety reject | Demonstrated in `tests/integration/test_react_replan.py`, completes within `max_motion_iterations=3` |
 | Read-only loop (e.g. "wait until idle and tell me the pose") | Allowed up to `max_readonly_iterations=10` even while motion counter remains at 0 |

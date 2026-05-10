@@ -37,7 +37,7 @@ class TestHydrateWorkplaneHandler(unittest.TestCase):
 
     def _make_handler(self, fetch_current_pose=None):
         """Create a handler function that mimics _on_hydrate_workplane."""
-        from llm_gateway.command_pipeline import hydrate_draw_workplane
+        from llm_gateway.intent_engine import hydrate_draw_workplane
 
         def handler(request, response):
             try:
@@ -149,7 +149,7 @@ class TestHydrateWorkplaneHandler(unittest.TestCase):
 
     def test_draw_shape_tool_mode_pose_unavailable(self) -> None:
         """Tool-mode with unavailable pose service should fall back or error."""
-        handler = self._make_handler(fetch_current_pose=lambda rf: None)
+        handler = self._make_handler(fetch_current_pose=lambda _rf: None)
         payload = {
             "intent": "draw_shape",
             "shape_type": "circle",
@@ -176,7 +176,7 @@ class TestHydrateWorkplaneHandler(unittest.TestCase):
             "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
         }
 
-        handler = self._make_handler(fetch_current_pose=lambda rf: mock_pose)
+        handler = self._make_handler(fetch_current_pose=lambda _rf: mock_pose)
         payload = {
             "intent": "draw_text",
             "text": "HELLO",

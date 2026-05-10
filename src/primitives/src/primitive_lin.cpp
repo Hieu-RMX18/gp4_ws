@@ -90,7 +90,9 @@ public:
                 .automatically_declare_parameters_from_overrides(true))),
         quality_gate_(
             motion_core::TrajectoryPostProcessor::kMaxTrajectoryPoints,
-            motion_core::QualityGate::kMinimumCartesianFraction) {
+            motion_core::QualityGate::kMinimumCartesianFraction,
+            motion_core::JointPositionGuard{},
+            motion_core::ManipulabilityGuard::disabled()) {
     // FRAME CONVENTION: all Cartesian waypoints are expressed in MoveIt's
     // planning frame (world frame).
     mgi_.setPoseReferenceFrame(mgi_.getPlanningFrame());

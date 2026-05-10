@@ -503,6 +503,131 @@ def lift_points_to_poses(
     return tuple(poses)
 
 
+def _offset_pose_along_normal(
+    pose: Mapping[str, Any], normal: Vector3, distance_m: float
+) -> dict[str, Any]:
+    if distance_m == 0.0:
+        return {
+            "position": dict(pose["position"]),
+            "orientation": dict(pose["orientation"]),
+        }
+    position = pose["position"]
+    offset = _vector_add(
+        (float(position["x"]), float(position["y"]), float(position["z"])),
+        _vector_scale(normal, distance_m),
+    )
+    return {
+        "position": {
+            "x": offset[0],
+            "y": offset[1],
+            "z": offset[2],
+        },
+        "orientation": dict(pose["orientation"]),
+    }
+
+
+def _ptp_command(
+    *,
+    target_pose: dict[str, Any],
+    reference_frame: str,
+    speed_scale: float,
+    plan_only: bool,
+) -> dict[str, Any]:
+    return {
+        "primitive_type": "PTP",
+        "target_pose": target_pose,
+        "reference_frame": reference_frame,
+        "velocity_scale": float(speed_scale),
+        "acceleration_scale": float(speed_scale),
+        "planner_id": "PILZ_PTP",
+        "plan_only": bool(plan_only),
+    }
+
+
+def _lin_command(
+    *,
+    target_pose: dict[str, Any],
+    reference_frame: str,
+    speed_scale: float,
+    plan_only: bool,
+) -> dict[str, Any]:
+    return {
+        "primitive_type": "LIN",
+        "target_pose": target_pose,
+        "reference_frame": reference_frame,
+        "velocity_scale": float(speed_scale),
+        "acceleration_scale": float(speed_scale),
+        "planner_id": "PILZ_LIN",
+        "plan_only": bool(plan_only),
+    }
+
+
+def _blended_sequence_command(
+    *,
+    waypoints: Sequence[dict[str, Any]],
+    reference_frame: str,
+    speed_scale: float,
+    plan_only: bool,
+    blend_radius_m: float,
+    stroke_index: int,
+) -> dict[str, Any]:
+    steps = []
+    for i, wp in enumerate(waypoints):
+        br = 0.0 if (i == 0 or i == len(waypoints) - 1) else blend_radius_m
+        steps.append(
+            {
+                "primitive_type": "LIN",
+                "target_pose": wp,
+                "blend_radius_m": br,
+                "planner_id": "PILZ_LIN",
+                "velocity_scale": float(speed_scale),
+                "acceleration_scale": float(speed_scale),
+            }
+        )
+    return {
+        "primitive_type": "BLENDED_SEQUENCE",
+        "sequence_steps": steps,
+        "reference_frame": reference_frame,
+        "velocity_scale": float(speed_scale),
+        "acceleration_scale": float(speed_scale),
+        "planner_id": "PILZ_LIN",
+        "plan_only": bool(plan_only),
+        "stroke_index": int(stroke_index),
+    }
+
+
+def _cartesian_path_command(
+    *,
+    waypoints: Sequence[dict[str, Any]],
+    reference_frame: str,
+    speed_scale: float,
+    plan_only: bool,
+    chunk_index: int,
+    stroke_index: int,
+) -> dict[str, Any]:
+    return {
+        "primitive_type": "CARTESIAN_PATH",
+        "waypoints": list(waypoints),
+        "reference_frame": reference_frame,
+        "velocity_scale": float(speed_scale),
+        "acceleration_scale": float(speed_scale),
+        "planner_id": "PILZ_LIN",
+        "plan_only": bool(plan_only),
+        "chunk_index": int(chunk_index),
+        "stroke_index": int(stroke_index),
+    }
+
+
+def _chunk_sequence(
+    items: Sequence[dict[str, Any]], chunk_size: int
+) -> Iterable[Sequence[dict[str, Any]]]:
+    if not items:
+        return []
+    return [
+        items[index : index + chunk_size] for index in range(0, len(items), chunk_size)
+    ]
+
+
 def compile_strokes_to_commands(
     *,
     strokes: Sequence[StrokeSegment],
@@ -769,12 +894,3 @@ __all__ = [
     "to_meters",
     "to_radians",
 ]
-
-# ---------------------------------------------------------------------------
-# Re-exports from drawing_command_emitter (split in W6.T4 to meet file budget)
-# ---------------------------------------------------------------------------
-
-from llm_gateway.drawing_command_emitter import (  # noqa: E402,F401
-    compile_strokes_to_commands,
-    lift_points_to_poses,
-)

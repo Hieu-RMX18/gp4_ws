@@ -49,7 +49,7 @@
 
 | ID | Layer | Risk | Severity | Evidence (file:line) | Recommendation |
 |----|-------|------|----------|----------------------|----------------|
-| D-01 | hmi | Hardware gate is env var + JSON evidence dual gate | info | `hardware_gate.py:16` — `HardwareGateEvaluator` requires both `HMI_ENABLE_HARDWARE_COMMANDS=1` and valid `hardware_gate.json` evidence file | No action. |
+| D-01 | hmi | Hardware gate is env var + JSON evidence dual gate | info | `hardware_gate.py` — `HardwareGateEvaluator` requires both `HMI_ENABLE_HARDWARE_COMMANDS=1` and a valid approved evidence file; `HMI_HARDWARE_GATE_EVIDENCE_FILE` may point at local commissioning evidence while the checked-in JSON remains locked | No action. |
 | D-02 | hmi | Lease TTL = 15 s default, renew extends by TTL | info | `session_lock_service.py:24-25` — `ttl_seconds=15`, `_purge_if_expired()` auto-revokes | No action. |
 | D-03 | hmi | Force takeover is auditable | info | `session_lock_service.py:52-67` — `force_takeover` flag recorded in lease record, audit trail via supervisor `_trace()` | No action. |
 | D-04 | hmi | Replay endpoints are read-only (GET only) | info | `app.py:233,251` — `@app.get('/api/hmi/replay')`, `@app.get('/api/hmi/replay/{command_id}')` | No action. No execute path off `/replay`. |

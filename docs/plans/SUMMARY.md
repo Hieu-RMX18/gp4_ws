@@ -80,7 +80,7 @@ W5 must come after W3+W4 because aggressive HMI consolidation changes which ROS 
 | [W5](W5_hmi_aggressive_consolidation.md) | HMI backend gives up local intent/supervisor logic, calls ROS services | 3–5 d | Medium-High | ✅ COMPLETE | #5 (HMI duplicates src/) |
 | [W6](W6_first_cleanup_wave.md) | Hard-delete aged DEPRECATED, jscpd full audit, file-budget enforcement | 2–3 d | Low | ✅ COMPLETE | #5 (sustained anti-bloat) |
 | [W7](W7_t_axis_tiered_mode.md) | joint_6_t default ±180° / extended ±455° opt-in with precondition gate, Mode enum, three-stage guard enforcement | 2–3 d | Low | ✅ COMPLETE | safety extension |
-| [W8](W8_second_cleanup_wave.md) | Second cleanup wave (scheduled 2026-05-19) | 2–3 d | Low | ⬜ PENDING | #5 (sustained anti-bloat) |
+| [W8](W8_second_cleanup_wave.md) | Second cleanup wave (early execution on 2026-05-09) | 2–3 d | Low | ✅ SOFTWARE VERIFIED / HW BLOCKED | #5 (sustained anti-bloat) |
 
 ---
 

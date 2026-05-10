@@ -1,6 +1,48 @@
 """Tests for ReAct state injector."""
 
-from llm_gateway.react.state_injector import StateInjector
+import ast
+from pathlib import Path
+
+from llm_gateway.react_planner import StateInjector
+
+
+def _subscription_qos_arg(constructor: ast.FunctionDef, topic: str) -> ast.AST:
+    for node in ast.walk(constructor):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "create_subscription"
+            and len(node.args) >= 4
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == topic
+        ):
+            continue
+        return node.args[3]
+    raise AssertionError(f"missing {topic} subscription")
+
+
+def test_react_state_subscriptions_use_sensor_qos():
+    node_path = (
+        Path(__file__).resolve().parents[1]
+        / "llm_gateway"
+        / "llm_gateway_node.py"
+    )
+    module = ast.parse(node_path.read_text(encoding="utf-8"))
+    node_class = next(
+        item
+        for item in module.body
+        if isinstance(item, ast.ClassDef) and item.name == "LLMGatewayNode"
+    )
+    constructor = next(
+        item
+        for item in node_class.body
+        if isinstance(item, ast.FunctionDef) and item.name == "__init__"
+    )
+
+    for topic in ("/yaskawa/joint_states", "/yaskawa/robot_status"):
+        qos_arg = _subscription_qos_arg(constructor, topic)
+        assert isinstance(qos_arg, ast.Name)
+        assert qos_arg.id == "qos_profile_sensor_data"
 
 
 def test_default_snapshot():

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
+import hmac
 import importlib.util
 import json
 import logging
+import os
 from pathlib import Path
 import sys
 from threading import Lock, Thread
 from typing import Any
 
+from ..domain.constants import GP4_JOINT_NAMES as DEFAULT_JOINT_NAMES
 from .command_dispatch import CommandDispatchMixin
 from .jog_dispatch import JogDispatchMixin
 from .telemetry_snapshot import (
@@ -47,6 +51,7 @@ try:
         GetCurrentPose,
         GetPrimitiveConstants,
         HydrateWorkplane,
+        ReviewIntent,
         ValidateCommand,
     )
     from rclpy.action import ActionClient
@@ -67,6 +72,7 @@ except Exception as exc:  # pragma: no cover - depends on sourced ROS environmen
     GetCurrentPose = None
     GetPrimitiveConstants = None
     HydrateWorkplane = None
+    ReviewIntent = None
     ValidateCommand = None
     ActionClient = None
     SingleThreadedExecutor = None
@@ -91,9 +97,38 @@ except Exception:  # pragma: no cover
 DEFAULT_MOTION_VELOCITY_SCALE = 0.06
 DEFAULT_MOTION_ACCELERATION_SCALE = 0.06
 DEFAULT_VALIDATE_TIMEOUT_SEC = 5.0
+DEFAULT_REVIEW_INTENT_READY_TIMEOUT_SEC = 1.0
+DEFAULT_REVIEW_INTENT_TIMEOUT_SEC = 35.0
 DEFAULT_ACTION_WAIT_TIMEOUT_SEC = 5.0
 DEFAULT_EXECUTION_TIMEOUT_SEC = 120.0
 LOGGER = logging.getLogger("uvicorn.error")
+_REVIEW_INTENT_HMAC_VERSION = "v1"
+
+
+def build_review_intent_token(
+    *,
+    shared_secret: str,
+    raw_text: str,
+    runtime_mode: str,
+    session_id: str,
+    operator_id: str,
+    command_id: str,
+) -> str:
+    """Build a per-command ReviewIntent proof without sending the shared secret."""
+    normalized_fields = [
+        str(raw_text or "").strip(),
+        str(runtime_mode or "").strip(),
+        str(session_id or "").strip(),
+        str(operator_id or "").strip(),
+        str(command_id or "").strip(),
+    ]
+    message = "\0".join(normalized_fields).encode("utf-8")
+    digest = hmac.new(
+        str(shared_secret or "").encode("utf-8"),
+        message,
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{_REVIEW_INTENT_HMAC_VERSION}:{digest}"
 
 
 KNOWN_WORKSPACE_ENDPOINTS = {
@@ -108,11 +143,11 @@ KNOWN_WORKSPACE_ENDPOINTS = {
         "/yaskawa/robot_status",
     ],
     "write_capable_interfaces": [
-        "/llm_text_input",
         "/validate_command",
         "/execute_motion",
         "/llm_gateway/hydrate_workplane",
         "/llm_gateway/get_primitive_constants",
+        "/llm_gateway/review_intent",
         "/supervisor/confirm_execution",
     ],
 }
@@ -148,6 +183,7 @@ class WorkspaceRosAdapter(
         get_current_pose_service: str = "/get_current_pose",
         hydrate_workplane_service: str = "/llm_gateway/hydrate_workplane",
         get_primitive_constants_service: str = "/llm_gateway/get_primitive_constants",
+        review_intent_service: str = "/llm_gateway/review_intent",
         confirm_execution_service: str = "/supervisor/confirm_execution",
     ) -> None:
         self._node_name = node_name
@@ -164,6 +200,7 @@ class WorkspaceRosAdapter(
         self._get_current_pose_service = get_current_pose_service
         self._hydrate_workplane_service = hydrate_workplane_service
         self._get_primitive_constants_service = get_primitive_constants_service
+        self._review_intent_service = review_intent_service
         self._confirm_execution_service = confirm_execution_service
 
         self._lock = Lock()
@@ -179,6 +216,7 @@ class WorkspaceRosAdapter(
         self._get_pose_client: Any = None
         self._hydrate_workplane_client: Any = None
         self._get_primitive_constants_client: Any = None
+        self._review_intent_client: Any = None
         self._confirm_execution_client: Any = None
         self._start_traj_client: Any = None
         self._stop_traj_client: Any = None
@@ -245,6 +283,7 @@ class WorkspaceRosAdapter(
         self._get_pose_client = None
         self._hydrate_workplane_client = None
         self._get_primitive_constants_client = None
+        self._review_intent_client = None
         self._confirm_execution_client = None
         self._start_traj_client = None
         self._stop_traj_client = None
@@ -256,22 +295,106 @@ class WorkspaceRosAdapter(
         self,
         *,
         raw_text: str,
+        runtime_mode: str = "sim",
         session_id: str,
         operator_id: str,
         command_id: str,
     ) -> dict[str, Any]:
-        return {
-            "accepted": True,
-            "adapter": "workspace_stub",
-            "summary": (
-                "Supervisor retained intent for local parse/validation. "
-                "No ROS write-capable review path was invoked."
-            ),
+        if (
+            self._node is None
+            or ReviewIntent is None
+            or self._review_intent_client is None
+        ):
+            return {
+                "accepted": False,
+                "error": "review_intent service unavailable",
+                "rawText": raw_text,
+                "sessionId": session_id,
+                "operatorId": operator_id,
+                "commandId": command_id,
+            }
+        if not self._review_intent_client.wait_for_service(
+            timeout_sec=DEFAULT_REVIEW_INTENT_READY_TIMEOUT_SEC
+        ):
+            return {
+                "accepted": False,
+                "error": "review_intent service not ready",
+                "rawText": raw_text,
+                "sessionId": session_id,
+                "operatorId": operator_id,
+                "commandId": command_id,
+            }
+
+        request = ReviewIntent.Request()
+        request.raw_text = raw_text
+        request.runtime_mode = runtime_mode
+        request.session_id = session_id
+        request.operator_id = operator_id
+        request.command_id = command_id
+        shared_secret = os.getenv("GP4_REVIEW_INTENT_TOKEN", "").strip()
+        request.review_token = (
+            build_review_intent_token(
+                shared_secret=shared_secret,
+                raw_text=raw_text,
+                runtime_mode=runtime_mode,
+                session_id=session_id,
+                operator_id=operator_id,
+                command_id=command_id,
+            )
+            if shared_secret
+            else ""
+        )
+        try:
+            response = self._wait_for_future(
+                self._review_intent_client.call_async(request),
+                DEFAULT_REVIEW_INTENT_TIMEOUT_SEC,
+            )
+        except Exception as exc:
+            return {
+                "accepted": False,
+                "error": str(exc),
+                "rawText": raw_text,
+                "sessionId": session_id,
+                "operatorId": operator_id,
+                "commandId": command_id,
+            }
+
+        if response is None:
+            return {
+                "accepted": False,
+                "error": "no response",
+                "rawText": raw_text,
+                "sessionId": session_id,
+                "operatorId": operator_id,
+                "commandId": command_id,
+            }
+
+        semantic_ir_json = str(getattr(response, "semantic_ir_json", "") or "")
+        result = {
+            "accepted": bool(getattr(response, "accepted", False)),
+            "error": str(getattr(response, "error", "") or ""),
+            "adapter": "review_intent",
+            "semanticIrJson": semantic_ir_json,
             "rawText": raw_text,
             "sessionId": session_id,
             "operatorId": operator_id,
             "commandId": command_id,
         }
+        if semantic_ir_json:
+            try:
+                semantic_ir = json.loads(semantic_ir_json)
+            except json.JSONDecodeError as exc:
+                result["accepted"] = False
+                result["error"] = (
+                    f"review_intent returned invalid semantic IR JSON: {exc.msg}"
+                )
+            else:
+                if isinstance(semantic_ir, dict):
+                    result["semanticIr"] = semantic_ir
+                else:
+                    result["accepted"] = False
+                    result["error"] = "review_intent semantic IR must be a JSON object"
+        return result
 
     def _trace(
         self,
@@ -580,6 +703,11 @@ class WorkspaceRosAdapter(
                 GetPrimitiveConstants,
                 self._get_primitive_constants_service,
             )
+        if ReviewIntent is not None:
+            self._review_intent_client = self._node.create_client(
+                ReviewIntent,
+                self._review_intent_service,
+            )
         if ConfirmExecution is not None:
             self._confirm_execution_client = self._node.create_client(
                 ConfirmExecution,
@@ -634,6 +762,11 @@ class WorkspaceRosAdapter(
             if self._get_primitive_constants_client is not None
             else False
         )
+        review_ready = (
+            self._review_intent_client.service_is_ready()
+            if self._review_intent_client is not None
+            else False
+        )
         confirm_ready = (
             self._confirm_execution_client.service_is_ready()
             if self._confirm_execution_client is not None
@@ -645,6 +778,7 @@ class WorkspaceRosAdapter(
             self._state.execute_motion_ready = execute_ready
             self._state.hydrate_workplane_ready = hydrate_ready
             self._state.get_primitive_constants_ready = constants_ready
+            self._state.review_intent_ready = review_ready
             self._state.confirm_execution_ready = confirm_ready
             self._state.validate_command_detail = (
                 f"ready at {self._validate_command_service}"
@@ -664,6 +798,8 @@ class WorkspaceRosAdapter(
                 self._state.hydrate_workplane_ready_at = now
             if constants_ready:
                 self._state.get_primitive_constants_ready_at = now
+            if review_ready:
+                self._state.review_intent_ready_at = now
             if confirm_ready:
                 self._state.confirm_execution_ready_at = now
             if validate_ready and execute_ready:
@@ -672,7 +808,8 @@ class WorkspaceRosAdapter(
     def _command_interfaces_ready(self) -> bool:
         with self._lock:
             return (
-                self._state.validate_command_ready and self._state.execute_motion_ready
+                self._state.validate_command_ready
+                and self._state.execute_motion_ready
             )
 
     def _command_interface_block_reason(self) -> str | None:

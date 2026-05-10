@@ -53,7 +53,7 @@ export function App() {
         </button>
       </nav>
       {activeTab === 'command' ? (
-        <GP4HMI client={bridgeClient} bridge={bridge} />
+        <GP4HMI bridge={bridge} />
       ) : (
         <JogPendant
           jogBridgeStatus={bridge.jogBridgeStatus}

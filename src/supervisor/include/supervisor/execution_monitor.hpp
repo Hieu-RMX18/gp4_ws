@@ -55,9 +55,11 @@ private:
   using ExecuteMotionSendGoalResponse =
       interfaces::action::ExecuteMotion_SendGoal_Response;
 
+  static constexpr double kDefaultTrackedVelocityScale = 1.0;
+
   struct TrackedGoal {
     std::string goal_id;
-    double velocity_scale = 1.0;
+    double velocity_scale = kDefaultTrackedVelocityScale;
     double expected_duration_sec = 0.0;
     double allowed_duration_sec = 0.0;
     rclcpp::Time requested_time{0, 0, RCL_ROS_TIME};

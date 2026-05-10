@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from ipaddress import ip_address
 import os
 from typing import Any
 
@@ -26,6 +27,7 @@ from .contracts import (
     LeaseStateResponseModel,
     ReplayDetailModel,
     RuntimeStateResponseModel,
+    ServoControlRequestModel,
     SequenceViewModel,
 )
 from ..ros.adapter import WorkspaceRosAdapter
@@ -38,6 +40,49 @@ from ..services.telemetry_bridge_service import TelemetryBridgeService
 
 def _env_flag_enabled(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    if not host:
+        return False
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return host.lower() == "localhost"
+
+
+def _remote_control_api_allowed() -> bool:
+    return _env_flag_enabled("HMI_ALLOW_REMOTE_CONTROL_API")
+
+
+class LoopbackControlMiddleware:
+    """Fail closed for state-changing HMI control requests from remote clients."""
+
+    def __init__(self, app) -> None:
+        self._app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if (
+            scope.get("type") == "http"
+            and str(scope.get("path", "")).startswith("/api/hmi/")
+            and str(scope.get("method", "")).upper() in {"POST", "PUT", "PATCH", "DELETE"}
+            and not _remote_control_api_allowed()
+        ):
+            client = scope.get("client") or (None, None)
+            if not _is_loopback_host(client[0]):
+                response = JSONResponse(
+                    status_code=403,
+                    content={
+                        "detail": (
+                            "HMI control routes require a loopback client unless "
+                            "HMI_ALLOW_REMOTE_CONTROL_API is explicitly enabled."
+                        )
+                    },
+                )
+                await response(scope, receive, send)
+                return
+
+        await self._app(scope, receive, send)
 
 
 def build_default_services() -> tuple[TelemetryBridgeService, SupervisorService]:
@@ -97,6 +142,7 @@ def create_app(
         version="0.2.0",
         lifespan=lifespan,
     )
+    app.add_middleware(LoopbackControlMiddleware)
 
     @app.exception_handler(SupervisorServiceError)
     async def supervisor_error_handler(_request, exc: SupervisorServiceError):
@@ -159,7 +205,6 @@ def create_app(
             operator_id=request.operatorId,
             lease_token=request.leaseToken,
             raw_text=request.intentText,
-            structured_intent=request.structuredIntent,
             mode=request.mode,
         )
 
@@ -268,18 +313,20 @@ def create_app(
     # ── Servo Control Endpoints ────────────────────────────────────────────
 
     @app.post("/api/hmi/servo/start")
-    def servo_start() -> dict:
-        adapter = app.state.ros_adapter
-        if adapter is None:
-            return {"accepted": False, "message": "ROS adapter not available"}
-        return adapter.start_traj_mode()
+    async def servo_start(request: ServoControlRequestModel) -> dict:
+        return app.state.supervisor_service.start_servo(
+            session_id=request.sessionId,
+            operator_id=request.operatorId,
+            lease_token=request.leaseToken,
+        )
 
     @app.post("/api/hmi/servo/stop")
-    def servo_stop() -> dict:
-        adapter = app.state.ros_adapter
-        if adapter is None:
-            return {"accepted": False, "message": "ROS adapter not available"}
-        return adapter.stop_motion()
+    async def servo_stop(request: ServoControlRequestModel) -> dict:
+        return app.state.supervisor_service.hold_servo(
+            session_id=request.sessionId,
+            operator_id=request.operatorId,
+            lease_token=request.leaseToken,
+        )
 
     @app.post("/api/hmi/jog/activate")
     def jog_activate() -> dict:

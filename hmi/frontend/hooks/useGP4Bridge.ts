@@ -11,6 +11,7 @@ import type {
   LeaseMutationResponse,
   ReplayListItem,
   SequenceView,
+  ServoControlResponse,
   TransportState,
 } from '../../shared/contracts';
 
@@ -204,6 +205,8 @@ export interface UseGp4BridgeResult {
   releaseLease: () => Promise<LeaseMutationResponse | null>;
   confirmActiveCommand: () => Promise<CommandMutationResponse | null>;
   abortActiveCommand: (reason?: string) => Promise<CommandMutationResponse | null>;
+  startServo: () => Promise<ServoControlResponse | null>;
+  holdServo: () => Promise<ServoControlResponse | null>;
   refreshReplay: () => Promise<ReplayListItem[]>;
 }
 
@@ -237,7 +240,7 @@ export function useGP4Bridge(
   }, [client, operatorId, sessionId]);
 
   useEffect(() => {
-    if (state.capabilities.readOnly || !state.lease.ownsControl || !state.lease.leaseToken) {
+    if (!state.lease.ownsControl || !state.lease.leaseToken) {
       return undefined;
     }
 
@@ -260,7 +263,7 @@ export function useGP4Bridge(
     }, 5000);
 
     return () => window.clearInterval(interval);
-  }, [client, operatorId, sessionId, state.capabilities.readOnly, state.lease.leaseToken, state.lease.ownsControl]);
+  }, [client, operatorId, sessionId, state.lease.leaseToken, state.lease.ownsControl]);
 
   const acquireControllerLease = useCallback(() => {
     return client.acquireLease({
@@ -287,6 +290,9 @@ export function useGP4Bridge(
   }, [client, operatorId, sessionId, state.lease.leaseToken]);
 
   const submitCommand = useCallback(async (rawText: string) => {
+    if (state.mode !== 'sim' && state.mode !== 'hardware') {
+      throw new Error('Command mode is not command-capable.');
+    }
     const response = await client.submitCommand({
       sessionId,
       operatorId,
@@ -360,6 +366,28 @@ export function useGP4Bridge(
     return response;
   }, [client, operatorId, sessionId, state.activeCommand, state.activeSequence, state.lease.leaseToken]);
 
+  const startServo = useCallback(async () => {
+    if (!state.lease.leaseToken) {
+      return null;
+    }
+    return client.startServo({
+      sessionId,
+      operatorId,
+      leaseToken: state.lease.leaseToken,
+    });
+  }, [client, operatorId, sessionId, state.lease.leaseToken]);
+
+  const holdServo = useCallback(async () => {
+    if (!state.lease.leaseToken) {
+      return null;
+    }
+    return client.stopServo({
+      sessionId,
+      operatorId,
+      leaseToken: state.lease.leaseToken,
+    });
+  }, [client, operatorId, sessionId, state.lease.leaseToken]);
+
   const refreshReplay = useCallback(async () => {
     const response = await client.listReplay({ limit: 25 });
     setState((current) => ({ ...current, replayItems: response.items }));
@@ -374,7 +402,7 @@ export function useGP4Bridge(
     state,
     transportState,
     jogBridgeStatus,
-    isController: state.lease.ownsControl && !state.capabilities.readOnly,
+    isController: state.lease.ownsControl && state.lease.leaseToken !== null,
     blockingRuntime,
     submitCommand,
     confirmCommandById,
@@ -382,6 +410,8 @@ export function useGP4Bridge(
     releaseLease,
     confirmActiveCommand,
     abortActiveCommand,
+    startServo,
+    holdServo,
     refreshReplay,
   };
 }

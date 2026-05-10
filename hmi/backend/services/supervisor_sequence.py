@@ -200,6 +200,7 @@ class SupervisorSequenceMixin:
                             structured_intent=command,
                             runtime_mode=mode.value,
                             current_joints=self._current_joints(),
+                            allow_primitive_structured=True,
                         )
                     )
             except (IntentResolutionError, SequenceValidationError, ValueError) as exc:

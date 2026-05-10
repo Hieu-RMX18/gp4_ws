@@ -7,11 +7,13 @@ from ..domain.models import RuntimeMode, SystemRuntimeState, TelemetryFreshnessS
 try:
     from geometry_msgs.msg import Pose
     from interfaces.action import ExecuteMotion
+    from interfaces.msg import SequenceStep
     from interfaces.srv import ValidateCommand
     from rclpy.action import ActionClient
 except Exception:  # pragma: no cover - depends on sourced ROS environment
     Pose = None
     ExecuteMotion = None
+    SequenceStep = None
     ValidateCommand = None
     ActionClient = None
 DEFAULT_MOTION_VELOCITY_SCALE = 0.06
@@ -750,8 +752,24 @@ class CommandDispatchMixin:
                 self._dict_to_pose(waypoint)
                 for waypoint in command_payload.get("waypoints", [])
             ]
+        if "sequence_steps" in command_payload and SequenceStep is not None:
+            goal.sequence_steps = [
+                self._dict_to_sequence_step(step)
+                for step in command_payload.get("sequence_steps", [])
+            ]
 
         return goal
+
+    def _dict_to_sequence_step(self, payload: dict[str, Any]) -> Any:
+        step = SequenceStep()
+        step.primitive_type = str(payload.get("primitive_type", "LIN"))
+        if "target_pose" in payload and Pose is not None:
+            step.target_pose = self._dict_to_pose(payload["target_pose"])
+        step.blend_radius_m = float(payload.get("blend_radius_m", 0.0))
+        step.planner_id = str(payload.get("planner_id", "PILZ_LIN"))
+        step.velocity_scale = float(payload.get("velocity_scale", 0.0))
+        step.acceleration_scale = float(payload.get("acceleration_scale", 0.0))
+        return step
 
     def _cartesian_path_target_pose(
         self, command_payload: dict[str, Any]

@@ -14,7 +14,11 @@ from ..domain.models import (
 from ..domain.state_machine import is_blocking_runtime_state
 from .intent_resolution import IntentResolutionError
 
-EVENT_DRIVEN_SOURCE_NAMES = {"llm_debug", "llm_command"}
+EVENT_DRIVEN_SOURCE_NAMES = {
+    "llm_debug",
+    "llm_command",
+    "review_intent_service",
+}
 
 
 class SupervisorValidationMixin:
@@ -64,7 +68,10 @@ class SupervisorValidationMixin:
     ) -> dict[str, Any]:
         source_statuses = self._read_source_statuses()
         critical_sources = [
-            source for source in source_statuses if getattr(source, "active", False)
+            source
+            for source in source_statuses
+            if getattr(source, "active", False)
+            and source.name not in EVENT_DRIVEN_SOURCE_NAMES
         ]
         optional_sources = [
             source

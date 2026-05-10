@@ -1,7 +1,7 @@
 """Tests for ReAct iteration budget tiering."""
 
-from llm_gateway.react.iteration_budget import IterationBudget, IterationCounters
-from llm_gateway.react.tool_registry import Tool
+from llm_gateway.react_planner import IterationBudget, IterationCounters
+from llm_gateway.react_planner import Tool
 
 
 class FakeReadonlyTool(Tool):
@@ -70,7 +70,6 @@ def test_total_exhausted():
 
 
 def test_combo_tool_counts_both():
-    budget = IterationBudget(max_total=5, max_motion=3, max_readonly=3)
     c = IterationCounters()
     t = FakeComboTool()
     c.record(t)

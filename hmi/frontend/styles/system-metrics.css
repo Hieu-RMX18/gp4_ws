@@ -13,11 +13,10 @@
 }
 
 .pose-label {
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
-  text-transform: uppercase;
   color: var(--color-text-secondary);
-  letter-spacing: 0.06em;
+  letter-spacing: 0.03em;
   margin-bottom: 2px;
 }
 
@@ -48,10 +47,9 @@
 }
 
 .kpi-label {
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.03em;
   color: var(--color-text-secondary);
   margin-bottom: 4px;
 }

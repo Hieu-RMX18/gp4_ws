@@ -88,7 +88,9 @@ public:
                 .automatically_declare_parameters_from_overrides(true))),
         quality_gate_(
             motion_core::TrajectoryPostProcessor::kMaxTrajectoryPoints,
-            motion_core::QualityGate::kMinimumCartesianFraction) {}
+            motion_core::QualityGate::kMinimumCartesianFraction,
+            motion_core::JointPositionGuard{},
+            motion_core::ManipulabilityGuard::disabled()) {}
 
   bool wait_for_servers(std::string &reason) override {
     if (mgi_.getMoveGroupClient().wait_for_action_server(

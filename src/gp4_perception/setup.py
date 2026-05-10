@@ -16,10 +16,10 @@ setup(
     ],
     install_requires=["setuptools", "numpy", "pyyaml", "scipy"],
     zip_safe=True,
-    maintainer="user",
-    maintainer_email="user@todo.todo",
+    maintainer="hieu2",
+    maintainer_email="hieu2@example.com",
     description="Perception stack for GP4 workcell.",
-    license="Apache License 2.0",
+    license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [

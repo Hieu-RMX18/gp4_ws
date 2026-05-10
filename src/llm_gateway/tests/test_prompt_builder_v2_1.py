@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from llm_gateway.prompt_builder import (
+from llm_gateway.react_planner import (
     FROZEN_SEMANTIC_INTENTS,
     FROZEN_TOP_LEVEL_OUTPUT_INTENTS,
     build_system_prompt,
@@ -52,6 +52,7 @@ _EXPECTED_INTENTS = frozenset(
         "wait",
         "move_relative",
         "absolute_move_ptp",
+        "move_named_pose",
         "absolute_move_lin",
         "circular_move",
         "move_joint",
@@ -280,7 +281,7 @@ def test_prompt_absolute_move_no_default_tool_down(prompt: str):
 
 def test_frozen_intents_match_intent_router():
     """FROZEN_SEMANTIC_INTENTS must cover exactly the intents in IntentRouter."""
-    from llm_gateway.intent_router import IntentRouter
+    from llm_gateway.intent_engine import IntentRouter
 
     router = IntentRouter(
         macro_policy_path=str(

@@ -33,10 +33,11 @@ HMI frontend connects to the HMI backend via WebSocket (`/api/hmi/stream`), NOT 
 | `/gateway_status` | Topic | `adapter.py:86,115` | Subscribe | `std_msgs/String` [INFERRED] | HIGH |
 | `/llm_debug` | Topic | `adapter.py:87,116` | Subscribe | `std_msgs/String` [INFERRED] | MEDIUM |
 | `/llm_command` | Topic | `adapter.py:88,117` | Subscribe | `std_msgs/String` [INFERRED] | HIGH |
-| `/llm_text_input` | Topic | `adapter.py:96` | Publish | `std_msgs/String` [INFERRED] | HIGH |
-| `/validate_command` | Service | `adapter.py:97,123,363` | Client | `interfaces/ValidateCommand` [INFERRED] | HIGH |
-| `/execute_motion` | Action | `adapter.py:98,124` | Client | `interfaces/ExecuteMotion` | HIGH |
-| `/get_current_pose` | Service | `adapter.py:125,373` | Client | `interfaces/GetCurrentPose` [INFERRED] | MEDIUM |
+| `/llm_text_input` | Topic | Deprecated; not listed in `KNOWN_WORKSPACE_ENDPOINTS.write_capable_interfaces` | Disabled HMI ingress | `std_msgs/String` [INFERRED] | HIGH |
+| `/llm_gateway/review_intent` | Service | `adapter.py:121,157,662`; `telemetry_snapshot.py:307` | Client | `interfaces/ReviewIntent` (`raw_text`, `runtime_mode`, HMI metadata, `review_token`) | HIGH |
+| `/validate_command` | Service | `adapter.py:117,152`; `command_dispatch.py:451` | Client | `interfaces/ValidateCommand` [INFERRED] | HIGH |
+| `/execute_motion` | Action | `adapter.py:118,153`; `command_dispatch.py:500` | Client | `interfaces/ExecuteMotion` | HIGH |
+| `/get_current_pose` | Service | `adapter.py:154`; `supervisor_execution.py:406` | Client | `interfaces/GetCurrentPose` [INFERRED] | MEDIUM |
 | `/start_trajectory_recording` | Service | `adapter.py:378` [INFERRED] | Client | Unknown | LOW |
 | `/reset_error` | Service | `adapter.py:382` [INFERRED] | Client | `std_srvs/Trigger` [INFERRED] | LOW |
 | Jog command topic | Topic | `jog_service.py:303` | Publish | `JogCommand` [INFERRED] | MEDIUM |
@@ -45,9 +46,9 @@ HMI frontend connects to the HMI backend via WebSocket (`/api/hmi/stream`), NOT 
 | `/perception/calibrate_hand_eye` | Service | — | Client | `interfaces/CalibrateHandEye` | LOW |
 | `/perception/get_object_positions` | Service | — | Client | `interfaces/GetObjectPositions` | LOW |
 | `/perception/check_camera` | Service | — | Client | `interfaces/CheckCamera` | LOW |
-| `/llm_gateway/hydrate_workplane` | Service | `adapter.py:344` | Client | `interfaces/HydrateWorkplane` | MEDIUM |
-| `/llm_gateway/get_primitive_constants` | Service | `adapter.py:375` | Client | `interfaces/GetPrimitiveConstants` | LOW |
-| `/supervisor/confirm_execution` | Service | `adapter.py:411` | Client | `interfaces/ConfirmExecution` | HIGH |
+| `/llm_gateway/hydrate_workplane` | Service | `adapter.py:155,422` | Client | `interfaces/HydrateWorkplane` | MEDIUM |
+| `/llm_gateway/get_primitive_constants` | Service | `adapter.py:156,453` | Client | `interfaces/GetPrimitiveConstants` | LOW |
+| `/supervisor/confirm_execution` | Service | `adapter.py:158,489` | Client | `interfaces/ConfirmExecution` | HIGH |
 
 ## Change sensitivity definitions
 

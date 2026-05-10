@@ -15,6 +15,10 @@ from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 
 
+MOTION_CORE_SIGTERM_TIMEOUT_SEC = "35.0"
+MOTION_CORE_SIGKILL_TIMEOUT_SEC = "5.0"
+
+
 def generate_launch_description():
     gp4_bringup_share = get_package_share_directory("gp4_bringup")
     supervisor_share = get_package_share_directory("supervisor")
@@ -137,6 +141,7 @@ def generate_launch_description():
                     gp4_bringup_share, "config", "scene_objects.yaml"
                 ),
                 # Motion limits from safety_rules.yaml
+                "safety_rules_yaml_path": _safety_yaml_path,
                 "max_velocity_scale": _motion_limits.get("max_velocity_scale", 0.06),
                 "max_acceleration_scale": _motion_limits.get(
                     "max_acceleration_scale", 0.06
@@ -146,6 +151,8 @@ def generate_launch_description():
         remappings=[
             ("/yaskawa/joint_states", "/joint_states"),
         ],
+        sigterm_timeout=MOTION_CORE_SIGTERM_TIMEOUT_SEC,
+        sigkill_timeout=MOTION_CORE_SIGKILL_TIMEOUT_SEC,
     )
 
     diagnostic_aggregator = Node(

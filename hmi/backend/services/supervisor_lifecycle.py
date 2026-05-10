@@ -15,6 +15,7 @@ from ..domain.models import (
     SystemRuntimeState,
 )
 from ..domain.state_machine import ensure_command_transition, is_terminal_command_state
+from .supervisor_validation import EVENT_DRIVEN_SOURCE_NAMES
 
 
 def _utcnow():
@@ -448,18 +449,21 @@ class SupervisorLifecycleMixin:
     ) -> dict[str, Any]:
         source_statuses = self._read_source_statuses()
         critical_sources = [
-            source for source in source_statuses if getattr(source, "active", False)
+            source
+            for source in source_statuses
+            if getattr(source, "active", False)
+            and source.name not in EVENT_DRIVEN_SOURCE_NAMES
         ]
         optional_sources = [
             source
             for source in source_statuses
             if not getattr(source, "active", False)
-            and source.name not in {"llm_debug", "llm_command"}
+            and source.name not in EVENT_DRIVEN_SOURCE_NAMES
         ]
         event_driven_sources = [
             source
             for source in source_statuses
-            if source.name in {"llm_debug", "llm_command"}
+            if source.name in EVENT_DRIVEN_SOURCE_NAMES
         ]
         blocking_reasons: list[str] = []
         confirmation_reasons = [

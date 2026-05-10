@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import os
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from hmi.backend.domain.models import ConnectionHealth, SystemRuntimeState
-from hmi.backend.ros.adapter import CONNECTION_FRESHNESS_SEC, WorkspaceRosAdapter
+import hmi.backend.ros.adapter as adapter_module
+from hmi.backend.domain.models import (
+    ConnectionHealth,
+    SystemRuntimeState,
+    TelemetryFreshnessState,
+)
+from hmi.backend.ros.adapter import (
+    CONNECTION_FRESHNESS_SEC,
+    KNOWN_WORKSPACE_ENDPOINTS,
+    WorkspaceRosAdapter,
+)
 
 
 class _CompletedFuture:
@@ -25,9 +35,10 @@ class _FakePoseClient:
         self._response = response
         self._ready = ready
         self.requests = []
+        self.wait_timeouts = []
 
     def wait_for_service(self, timeout_sec: float) -> bool:
-        _ = timeout_sec
+        self.wait_timeouts.append(timeout_sec)
         return self._ready
 
     def call_async(self, request):
@@ -35,7 +46,94 @@ class _FakePoseClient:
         return _CompletedFuture(self._response)
 
 
+class _FakeReviewIntent:
+    class Request:
+        def __init__(self) -> None:
+            self.raw_text = ""
+            self.runtime_mode = ""
+            self.session_id = ""
+            self.operator_id = ""
+            self.command_id = ""
+            self.review_token = ""
+
+
+class _FakeReviewClient:
+    def __init__(self, response, *, ready: bool = True) -> None:
+        self._response = response
+        self._ready = ready
+        self.requests = []
+        self.wait_timeouts = []
+
+    def wait_for_service(self, timeout_sec: float) -> bool:
+        self.wait_timeouts.append(timeout_sec)
+        return self._ready
+
+    def call_async(self, request):
+        self.requests.append(request)
+        return _CompletedFuture(self._response)
+
+
+class _ReadyServiceClient:
+    def __init__(self, ready: bool) -> None:
+        self._ready = ready
+
+    def service_is_ready(self) -> bool:
+        return self._ready
+
+
+class _ReadyActionClient:
+    def __init__(self, ready: bool) -> None:
+        self._ready = ready
+
+    def server_is_ready(self) -> bool:
+        return self._ready
+
+
+class _FakePose:
+    def __init__(self) -> None:
+        self.position = SimpleNamespace(x=0.0, y=0.0, z=0.0)
+        self.orientation = SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0)
+
+
+class _FakeSequenceStep:
+    def __init__(self) -> None:
+        self.primitive_type = ""
+        self.target_pose = _FakePose()
+        self.blend_radius_m = 0.0
+        self.planner_id = ""
+        self.velocity_scale = 0.0
+        self.acceleration_scale = 0.0
+
+
+class _FakeExecuteMotion:
+    class Goal:
+        def __init__(self) -> None:
+            self.primitive_type = ""
+            self.velocity_scale = 0.0
+            self.acceleration_scale = 0.0
+            self.planner_id = ""
+            self.reference_frame = ""
+            self.delta_x = 0.0
+            self.delta_y = 0.0
+            self.delta_z = 0.0
+            self.wait_duration_sec = 0.0
+            self.joint_index = 0
+            self.joint_angle = 0.0
+            self.io_address = 0
+            self.io_value = 0
+            self.joint_target = []
+            self.target_pose = _FakePose()
+            self.waypoints = []
+            self.sequence_steps = []
+
+
 class WorkspaceRosAdapterTests(unittest.TestCase):
+    def test_known_write_endpoints_exclude_deprecated_text_topic(self) -> None:
+        write_endpoints = set(KNOWN_WORKSPACE_ENDPOINTS["write_capable_interfaces"])
+
+        self.assertIn("/llm_gateway/review_intent", write_endpoints)
+        self.assertNotIn("/llm_text_input", write_endpoints)
+
     def test_lost_conn_after_startup_grace_without_fresh_topics(self) -> None:
         adapter = WorkspaceRosAdapter()
         adapter._state.start_error = None
@@ -165,6 +263,29 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertFalse(source_statuses["joint_states_primary"].preferred)
         self.assertFalse(source_statuses["joint_states_primary"].active)
 
+    def test_review_intent_source_is_inactive_when_service_drops_after_ready(
+        self,
+    ) -> None:
+        adapter = WorkspaceRosAdapter()
+        now = adapter._now()
+        adapter._state.start_error = None
+        adapter._state.ros_started_at = now
+        adapter._state.readiness.received_at = now
+        adapter._state.readiness.ready = True
+        adapter._state.readiness.status_message = "simulation mode: ready"
+        adapter._state.review_intent_ready = False
+        adapter._state.review_intent_ready_at = now
+
+        source_statuses = {item.name: item for item in adapter.read_source_statuses()}
+        review_source = source_statuses["review_intent_service"]
+
+        self.assertFalse(review_source.active)
+        self.assertEqual(
+            review_source.freshness_state,
+            TelemetryFreshnessState.FRESH,
+        )
+        self.assertIn("waiting for /llm_gateway/review_intent", review_source.detail)
+
     def test_llm_event_topics_are_not_freshness_critical_when_idle(self) -> None:
         adapter = WorkspaceRosAdapter()
         now = adapter._now()
@@ -177,6 +298,128 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertTrue(source_statuses["gateway_status"].active)
         self.assertFalse(source_statuses["llm_debug"].active)
         self.assertFalse(source_statuses["llm_command"].active)
+
+    def test_submit_text_for_review_calls_review_intent_service(self) -> None:
+        response = SimpleNamespace(
+            accepted=True,
+            error="",
+            semantic_ir_json='{"intent":"go_home"}',
+        )
+        client = _FakeReviewClient(response)
+        adapter = WorkspaceRosAdapter()
+        adapter._node = object()  # pylint: disable=protected-access
+        adapter._review_intent_client = client  # pylint: disable=protected-access
+
+        with (
+            patch.object(adapter_module, "ReviewIntent", _FakeReviewIntent, create=True),
+            patch.dict(os.environ, {"GP4_REVIEW_INTENT_TOKEN": "review-token"}),
+        ):
+            result = adapter.submit_text_for_review(
+                raw_text="go home",
+                runtime_mode="sim",
+                session_id="session-a",
+                operator_id="operator-a",
+                command_id="command-a",
+            )
+
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["semanticIr"], {"intent": "go_home"})
+        self.assertEqual(result["semanticIrJson"], '{"intent":"go_home"}')
+        self.assertEqual(client.requests[0].raw_text, "go home")
+        self.assertEqual(client.requests[0].runtime_mode, "sim")
+        self.assertEqual(client.requests[0].session_id, "session-a")
+        self.assertEqual(client.requests[0].operator_id, "operator-a")
+        self.assertEqual(client.requests[0].command_id, "command-a")
+        self.assertNotEqual(client.requests[0].review_token, "review-token")
+        self.assertEqual(
+            client.requests[0].review_token,
+            adapter_module.build_review_intent_token(
+                shared_secret="review-token",
+                raw_text="go home",
+                runtime_mode="sim",
+                session_id="session-a",
+                operator_id="operator-a",
+                command_id="command-a",
+            ),
+        )
+
+    def test_submit_text_for_review_uses_short_ready_timeout_and_review_sla_timeout(
+        self,
+    ) -> None:
+        response = SimpleNamespace(
+            accepted=True,
+            error="",
+            semantic_ir_json='{"intent":"go_home"}',
+        )
+        client = _FakeReviewClient(response)
+        adapter = WorkspaceRosAdapter()
+        adapter._node = object()  # pylint: disable=protected-access
+        adapter._review_intent_client = client  # pylint: disable=protected-access
+        future_timeouts: list[float] = []
+
+        def wait_for_future(future, timeout_sec):
+            future_timeouts.append(timeout_sec)
+            return future.result()
+
+        adapter._wait_for_future = wait_for_future  # type: ignore[method-assign]
+
+        with patch.object(
+            adapter_module, "ReviewIntent", _FakeReviewIntent, create=True
+        ):
+            adapter.submit_text_for_review(
+                raw_text="go home",
+                runtime_mode="sim",
+                session_id="session-a",
+                operator_id="operator-a",
+                command_id="command-a",
+            )
+
+        self.assertLessEqual(client.wait_timeouts[0], 2.0)
+        self.assertGreaterEqual(future_timeouts[0], 30.0)
+
+    def test_submit_text_for_review_reports_unavailable_service(self) -> None:
+        client = _FakeReviewClient(None, ready=False)
+        adapter = WorkspaceRosAdapter()
+        adapter._node = object()  # pylint: disable=protected-access
+        adapter._review_intent_client = client  # pylint: disable=protected-access
+
+        with patch.object(
+            adapter_module, "ReviewIntent", _FakeReviewIntent, create=True
+        ):
+            result = adapter.submit_text_for_review(
+                raw_text="go home",
+                runtime_mode="sim",
+                session_id="session-a",
+                operator_id="operator-a",
+                command_id="command-a",
+            )
+
+        self.assertFalse(result["accepted"])
+        self.assertIn("review_intent service not ready", result["error"])
+        self.assertEqual(client.requests, [])
+
+    def test_command_interfaces_do_not_require_review_intent_readiness(self) -> None:
+        adapter = WorkspaceRosAdapter()
+        adapter._node = object()  # pylint: disable=protected-access
+        adapter._validate_client = _ReadyServiceClient(True)  # pylint: disable=protected-access
+        adapter._execute_client = _ReadyActionClient(True)  # pylint: disable=protected-access
+        adapter._review_intent_client = _ReadyServiceClient(False)  # pylint: disable=protected-access
+        adapter._state.readiness.received_at = adapter._now()  # pylint: disable=protected-access
+        adapter._state.readiness.status_message = "sim ready"  # pylint: disable=protected-access
+
+        adapter._refresh_command_interface_state()  # pylint: disable=protected-access
+
+        self.assertTrue(adapter._command_interfaces_ready())  # pylint: disable=protected-access
+        self.assertIsNone(
+            adapter._command_interface_block_reason()  # pylint: disable=protected-access
+        )
+        source_statuses = {item.name: item for item in adapter.read_source_statuses()}
+        self.assertIn("review_intent_service", source_statuses)
+        self.assertFalse(source_statuses["review_intent_service"].active)
+        self.assertIn(
+            "waiting for /llm_gateway/review_intent",
+            source_statuses["review_intent_service"].detail,
+        )
 
     def test_build_command_payload_maps_cartesian_delta_to_move_rel_in_base_link(
         self,
@@ -336,6 +579,76 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         target_pose = adapter._cartesian_path_target_pose(payload)  # pylint: disable=protected-access
 
         self.assertEqual(target_pose, payload["waypoints"][-1])
+
+    def test_blended_sequence_maps_steps_to_execute_motion_goal(self) -> None:
+        adapter = WorkspaceRosAdapter()
+        payload = {
+            "primitive_type": "BLENDED_SEQUENCE",
+            "velocity_scale": 0.06,
+            "acceleration_scale": 0.06,
+            "planner_id": "PILZ_LIN",
+            "sequence_steps": [
+                {
+                    "primitive_type": "LIN",
+                    "target_pose": {
+                        "position": {"x": 0.30, "y": 0.00, "z": 0.31},
+                        "orientation": {
+                            "x": 0.0,
+                            "y": 1.0,
+                            "z": 0.0,
+                            "w": 0.0,
+                        },
+                    },
+                    "blend_radius_m": 0.0,
+                    "planner_id": "PILZ_LIN",
+                    "velocity_scale": 0.06,
+                    "acceleration_scale": 0.06,
+                },
+                {
+                    "primitive_type": "LIN",
+                    "target_pose": {
+                        "position": {"x": 0.32, "y": 0.01, "z": 0.33},
+                        "orientation": {
+                            "x": 0.1,
+                            "y": 0.2,
+                            "z": 0.3,
+                            "w": 0.9,
+                        },
+                    },
+                    "blend_radius_m": 0.005,
+                    "planner_id": "PILZ_PTP",
+                    "velocity_scale": 0.04,
+                    "acceleration_scale": 0.03,
+                },
+            ],
+        }
+
+        with (
+            patch("hmi.backend.ros.command_dispatch.ExecuteMotion", _FakeExecuteMotion),
+            patch("hmi.backend.ros.command_dispatch.SequenceStep", _FakeSequenceStep),
+            patch("hmi.backend.ros.command_dispatch.Pose", _FakePose),
+        ):
+            goal = adapter._build_execute_motion_goal(payload)  # pylint: disable=protected-access
+
+        self.assertEqual(goal.primitive_type, "BLENDED_SEQUENCE")
+        self.assertEqual(len(goal.sequence_steps), 2)
+        for index, expected_step in enumerate(payload["sequence_steps"]):
+            actual_step = goal.sequence_steps[index]
+            self.assertEqual(actual_step.primitive_type, expected_step["primitive_type"])
+            self.assertAlmostEqual(
+                actual_step.blend_radius_m, expected_step["blend_radius_m"]
+            )
+            self.assertEqual(actual_step.planner_id, expected_step["planner_id"])
+            self.assertAlmostEqual(
+                actual_step.velocity_scale, expected_step["velocity_scale"]
+            )
+            self.assertAlmostEqual(
+                actual_step.acceleration_scale, expected_step["acceleration_scale"]
+            )
+            expected_position = expected_step["target_pose"]["position"]
+            self.assertAlmostEqual(actual_step.target_pose.position.x, expected_position["x"])
+            self.assertAlmostEqual(actual_step.target_pose.position.y, expected_position["y"])
+            self.assertAlmostEqual(actual_step.target_pose.position.z, expected_position["z"])
 
     def test_hardware_preflight_detects_missing_primary_joint_source(self) -> None:
         adapter = WorkspaceRosAdapter()

@@ -40,6 +40,7 @@ set(srv_files
   "srv/HydrateWorkplane.srv"
   "srv/GetPrimitiveConstants.srv"
   "srv/ConfirmExecution.srv"
+  "srv/ReviewIntent.srv"
 )
 
 set(action_files

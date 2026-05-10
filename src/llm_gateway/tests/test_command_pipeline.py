@@ -1,4 +1,4 @@
-"""Unit tests for llm_gateway.command_pipeline — pure helpers.
+"""Unit tests for llm_gateway.intent_engine — pure helpers.
 
 These tests run without ROS2 because the helpers have no ROS dependencies.
 """
@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 
 import pytest
 
-from llm_gateway.command_pipeline import (
+from llm_gateway.intent_engine import (
     command_from_sanitized_json,
     hydrate_draw_workplane,
     prepare_execution_command,

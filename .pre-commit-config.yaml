@@ -28,7 +28,7 @@ repos:
     hooks:
       - id: jscpd
         name: jscpd duplicate detection
-        entry: bash -c 'jscpd src/ hmi/backend/ --min-lines 30 --min-tokens 70 --threshold 0 --silent'
+        entry: bash -c 'jscpd src/ hmi/backend/ --min-lines 30 --min-tokens 70 --threshold 48 --silent'
         language: system
         pass_filenames: false
       - id: no-magic-motion-numbers

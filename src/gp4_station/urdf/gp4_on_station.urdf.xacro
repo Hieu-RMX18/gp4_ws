@@ -35,4 +35,78 @@
   </joint>
 
   <xacro:motoman_gp4 prefix="" />
+
+  <!-- ============================================================
+       D435i Camera — eye-to-hand, upper-left front corner of station
+       ============================================================
+       Position is NOMINAL from CAD. The actual camera-to-robot
+       transform comes from hand-eye calibration (extrinsics.yaml).
+       This link exists for:
+         1. RViz visualisation of camera position
+         2. MoveIt collision avoidance (camera body as collision box)
+         3. Approximate TF seed before calibration is run
+
+       Camera orientation convention (RealSense optical frame):
+         Z = forward (optical axis), X = right, Y = down
+
+       Mount description (operator perspective, facing station front):
+         - Upper-left corner of station aluminium frame
+         - Pitch down ~40° towards workspace centre
+         - Yaw inward ~20° towards positive-Y in base_link
+       ============================================================ -->
+
+  <!-- Camera mount bracket (fixed to station frame) -->
+  <link name="camera_mount_link" />
+
+  <joint name="station_to_camera_mount" type="fixed">
+    <parent link="station_link" />
+    <child link="camera_mount_link" />
+    <!-- TBD: operator must measure and update after physical mounting.
+         Current values are estimates from CAD images (station frame). -->
+    <origin xyz="-0.30 -0.10 0.15" rpy="0 0 0" />
+  </joint>
+
+  <!-- Camera body link with collision box for MoveIt planning -->
+  <link name="camera_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <!-- D435i physical dimensions: 90mm × 25mm × 25mm -->
+        <box size="0.090 0.025 0.025" />
+      </geometry>
+      <material name="camera_black">
+        <color rgba="0.15 0.15 0.15 1.0" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <!-- Slightly inflated for collision safety margin -->
+        <box size="0.100 0.035 0.035" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="camera_mount_to_camera" type="fixed">
+    <parent link="camera_mount_link" />
+    <child link="camera_link" />
+    <!-- Pitch ~40° down (0.698 rad), yaw ~20° inward (0.349 rad).
+         TBD: operator must verify orientation after mounting. -->
+    <origin xyz="0 0 0" rpy="0 0.698 0.349" />
+  </joint>
+
+  <!-- Camera optical frame (follows ROS/OpenCV convention: Z-forward, X-right, Y-down).
+       The realsense2_camera node publishes its own camera_color_optical_frame TF,
+       but this link lets the URDF TF tree stay connected even without the camera running.
+       After hand-eye calibration, the TFPublisher node overrides base_link → camera_color_optical_frame
+       with the precise calibrated transform from extrinsics.yaml. -->
+  <link name="camera_color_optical_frame_nominal" />
+
+  <joint name="camera_to_optical_nominal" type="fixed">
+    <parent link="camera_link" />
+    <child link="camera_color_optical_frame_nominal" />
+    <!-- ROS convention → optical frame: rotate -90° around Z, then -90° around X -->
+    <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708" />
+  </joint>
+
 </robot>

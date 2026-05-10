@@ -31,11 +31,10 @@ public:
   static double
   minimum_cartesian_fraction_for_primitive(const std::string &primitive);
 
-  explicit QualityGate(
-      std::size_t max_trajectory_points = kMaxTrajectoryPoints,
-      double minimum_cartesian_fraction = kMinimumCartesianFraction,
-      JointPositionGuard joint_position_guard = JointPositionGuard{},
-      ManipulabilityGuard manipulability_guard = ManipulabilityGuard{});
+  explicit QualityGate(std::size_t max_trajectory_points,
+                       double minimum_cartesian_fraction,
+                       JointPositionGuard joint_position_guard,
+                       ManipulabilityGuard manipulability_guard);
 
   bool validate_plan(
       const trajectory_msgs::msg::JointTrajectory &traj, double fraction,

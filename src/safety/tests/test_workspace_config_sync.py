@@ -79,3 +79,19 @@ def test_move_rel_forbidden_zone_constants_match_safety_rules():
                 constant_name in move_rel_limits
             ), f"Missing MoveRelLimits::{constant_name}."
             assert move_rel_limits[constant_name] == pytest.approx(zone[field_name])
+
+
+def test_manipulability_floor_keeps_documented_singularity_margin():
+    safety_rules = _load_safety_rules()
+
+    floor = safety_rules["manipulability_guard"]["floor"]
+
+    assert floor >= 0.05
+
+
+def test_manipulability_reference_length_is_positive():
+    safety_rules = _load_safety_rules()
+
+    reference_length_m = safety_rules["manipulability_guard"]["reference_length_m"]
+
+    assert reference_length_m > 0.0

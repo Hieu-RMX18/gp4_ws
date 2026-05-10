@@ -91,7 +91,10 @@ joint_position_guard:
 
 manipulability_guard:
   enabled: true
-  floor: 0.05                # Yoshikawa index floor; <0.05 is near-singular for GP4 6-DOF wrist
+  # Raw sqrt(det(J*J^T)) has m^3 scale for a 6-DOF arm with linear rows in meters.
+  # Normalize by GP4 horizontal reach^3 so the floor remains robot-size independent.
+  reference_length_m: 0.55
+  floor: 0.05                # normalized Yoshikawa floor; <0.05 is near-singular for GP4 6-DOF wrist
   sample_every_n_points: 5   # check every 5th waypoint to keep cost bounded
   reject_message_template: "manipulability_guard reject at point[{idx}]: w={w:.4f} < floor {floor:.4f}"
 

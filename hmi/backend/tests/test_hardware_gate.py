@@ -8,7 +8,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from hmi.backend.services.hardware_gate import HardwareGateEvaluator
+from hmi.backend.services.hardware_gate import (
+    DEFAULT_HARDWARE_GATE_PATH,
+    HardwareGateEvaluator,
+)
 
 
 class HardwareGateEvaluatorTests(unittest.TestCase):
@@ -160,7 +163,53 @@ class HardwareGateEvaluatorTests(unittest.TestCase):
         snapshot = self._evaluate(payload=payload)
 
         self.assertFalse(snapshot.unlocked)
-        self.assertIn("report SHA256 does not match", "\n".join(snapshot.reasons))
+        self.assertIn("regular non-empty file", "\n".join(snapshot.reasons))
+
+    def test_blocks_when_report_path_is_not_regular_file(self) -> None:
+        payload = self._valid_payload()
+        payload["reportPath"] = "/dev/null"
+        payload["reportSha256"] = hashlib.sha256(b"").hexdigest()
+
+        snapshot = self._evaluate(payload=payload)
+
+        self.assertFalse(snapshot.unlocked)
+        self.assertIn("regular non-empty file", "\n".join(snapshot.reasons))
+
+    def test_blocks_when_report_file_is_empty(self) -> None:
+        empty_report_path = self._tmp_path / "empty-report.json"
+        empty_report_path.write_text("", encoding="utf-8")
+        payload = self._valid_payload()
+        payload["reportPath"] = str(empty_report_path)
+        payload["reportSha256"] = hashlib.sha256(b"").hexdigest()
+
+        snapshot = self._evaluate(payload=payload)
+
+        self.assertFalse(snapshot.unlocked)
+        self.assertIn("regular non-empty file", "\n".join(snapshot.reasons))
+
+    def test_checked_in_default_evidence_is_locked(self) -> None:
+        snapshot = self._evaluate(
+            env_value="1", evidence_path=DEFAULT_HARDWARE_GATE_PATH
+        )
+
+        self.assertFalse(snapshot.unlocked)
+        self.assertIn("approved: true", "\n".join(snapshot.reasons))
+
+    def test_uses_env_configured_evidence_path(self) -> None:
+        evidence_path = self._write_evidence(self._valid_payload())
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "HMI_ENABLE_HARDWARE_COMMANDS": "1",
+                "HMI_HARDWARE_GATE_EVIDENCE_FILE": str(evidence_path),
+            },
+            clear=False,
+        ):
+            snapshot = HardwareGateEvaluator().evaluate()
+
+        self.assertTrue(snapshot.unlocked)
+        self.assertEqual(snapshot.evidence_path, str(evidence_path))
 
     def test_unlocks_when_all_requirements_are_met(self) -> None:
         snapshot = self._evaluate(payload=self._valid_payload())

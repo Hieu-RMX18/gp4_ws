@@ -22,6 +22,8 @@ TEST(ExecuteMotionActionSupportTest, SupportedPrimitivesIncludeCoreSet) {
       motion_core::ExecuteMotionActionSupport::is_supported_primitive("PTP"));
   EXPECT_TRUE(
       motion_core::ExecuteMotionActionSupport::is_supported_primitive("HOME"));
+  EXPECT_TRUE(motion_core::ExecuteMotionActionSupport::is_supported_primitive(
+      "BLENDED_SEQUENCE"));
   EXPECT_FALSE(motion_core::ExecuteMotionActionSupport::is_supported_primitive(
       "UNKNOWN"));
 }

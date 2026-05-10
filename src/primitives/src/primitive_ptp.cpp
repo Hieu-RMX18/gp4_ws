@@ -105,7 +105,9 @@ public:
                 .automatically_declare_parameters_from_overrides(true))),
         quality_gate_(
             motion_core::TrajectoryPostProcessor::kMaxTrajectoryPoints,
-            motion_core::QualityGate::kMinimumCartesianFraction) {
+            motion_core::QualityGate::kMinimumCartesianFraction,
+            motion_core::JointPositionGuard{},
+            motion_core::ManipulabilityGuard::disabled()) {
     seed_manager_ = std::make_unique<motion_core::SeedManager>(*node_);
 
     const auto non_owning_mgi = std::shared_ptr<MoveGroupInterface>(

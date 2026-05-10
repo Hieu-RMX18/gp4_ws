@@ -1,10 +1,10 @@
-"""Tests for llm_gateway.llm_config secret loading."""
+"""Tests for llm_gateway.react_planner secret loading."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from llm_gateway.llm_config import load_llm_backend_config
+from llm_gateway.react_planner import load_llm_backend_config
 
 
 def _write_config(
@@ -41,7 +41,9 @@ def test_load_llm_backend_config_reads_api_key_from_nearby_dotenv(
     monkeypatch,
 ) -> None:
     config_path = _write_config(tmp_path, '"${GP4_LLM_API_KEY}"')
-    (tmp_path / ".env").write_text("GP4_LLM_API_KEY=from_dotenv\n", encoding="utf-8")
+    (tmp_path / ".env").write_text(  # pragma: allowlist secret
+        "GP4_LLM_API_KEY=from_dotenv\n", encoding="utf-8"
+    )
 
     monkeypatch.delenv("GP4_LLM_API_KEY", raising=False)
     monkeypatch.delenv("LLM_API_KEY", raising=False)
@@ -58,7 +60,9 @@ def test_load_llm_backend_config_prefers_process_env_over_dotenv_and_yaml(
     monkeypatch,
 ) -> None:
     config_path = _write_config(tmp_path, '"from_yaml"')
-    (tmp_path / ".env").write_text("GP4_LLM_API_KEY=from_dotenv\n", encoding="utf-8")
+    (tmp_path / ".env").write_text(  # pragma: allowlist secret
+        "GP4_LLM_API_KEY=from_dotenv\n", encoding="utf-8"
+    )
 
     monkeypatch.setenv("GP4_LLM_API_KEY", "from_process_env")
     monkeypatch.delenv("LLM_API_KEY", raising=False)
@@ -84,7 +88,7 @@ def test_load_llm_backend_config_supports_explicit_env_file_override(
     env_file.write_text(
         "\n".join(
             [
-                "GP4_LLM_API_KEY=from_explicit_env_file",
+                "GP4_LLM_API_KEY=from_explicit_env_file",  # pragma: allowlist secret
                 "LLM_MODEL=from_dotenv_model",
                 "",
             ]
@@ -99,7 +103,7 @@ def test_load_llm_backend_config_supports_explicit_env_file_override(
 
     config = load_llm_backend_config(str(config_path))
 
-    assert config.api_key == "from_explicit_env_file"
+    assert config.api_key == "from_explicit_env_file"  # pragma: allowlist secret
     assert config.model == "from_dotenv_model"
 
 
@@ -112,7 +116,8 @@ def test_load_llm_backend_config_reads_dotenv_from_current_working_directory(
     install_share.mkdir(parents=True)
     config_path = _write_config(install_share, '"${GP4_LLM_API_KEY}"')
     (launch_root / ".env").write_text(
-        "GP4_LLM_API_KEY=from_launch_root\n", encoding="utf-8"
+        "GP4_LLM_API_KEY=from_launch_root\n",  # pragma: allowlist secret
+        encoding="utf-8",
     )
 
     monkeypatch.chdir(launch_root)
@@ -123,4 +128,4 @@ def test_load_llm_backend_config_reads_dotenv_from_current_working_directory(
 
     config = load_llm_backend_config(str(config_path))
 
-    assert config.api_key == "from_launch_root"
+    assert config.api_key == "from_launch_root"  # pragma: allowlist secret

@@ -1,0 +1,62 @@
+# Nominal camera mount configuration for GP4 workcell.
+#
+# This file stores the APPROXIMATE physical camera position for URDF visualisation
+# and FOV coverage estimation. It is NOT the calibrated extrinsics.
+#
+# The ACTUAL camera→robot transform is determined by hand-eye calibration
+# and stored in extrinsics.yaml. That calibrated transform takes priority
+# over these nominal values for all perception and motion tasks.
+#
+# Coordinate frame: base_link (GP4 robot base)
+#
+# Camera placement (from operator's perspective, facing the station front):
+#   - Upper-left corner of the station frame
+#   - Pitch down: ~40° (range 35–45°)
+#   - Yaw inward: ~20° (range 15–25°) towards workspace centre
+#
+# Station dimensions (from CAD, in base_link frame):
+#   X: [-0.482, +0.761]  Y: [-0.197, +0.806]  Z: [-0.757, +1.093]
+#
+# Estimated working distance from camera to workspace centre: ~0.7 m
+# D435i ideal range: 0.3–3.0 m → camera distance is well within spec.
+
+camera_mount:
+  # --- Nominal position in base_link frame ---
+  # Upper-left front corner of station frame.
+  # ASSUMPTION: these are rough estimates from CAD images.
+  # Operator MUST verify and adjust after physical mounting.
+  translation_m:
+    x: -0.40    # near left wall (X = -0.482 m)
+    y: -0.12    # near front wall (Y = -0.197 m), slightly inward
+    z:  0.90    # near top of station frame (Z_max ≈ 1.093 m)
+
+  # --- Nominal orientation ---
+  # Euler angles (RPY) in base_link frame.
+  # Camera optical axis: Z-forward, X-right, Y-down (OpenCV convention).
+  # These angles orient the camera to look DOWN and INWARD towards workspace.
+  #
+  # Pitch ~40° down from horizontal, yaw ~20° inward (towards +Y in base_link).
+  orientation_rpy_rad:
+    roll:  0.0
+    pitch: 0.70   # ~40° down  (0.698 rad)
+    yaw:   0.35   # ~20° inward (0.349 rad)
+
+  # --- FOV coverage check ---
+  # D435i depth FOV: 87° × 58° (H × V)
+  # At 0.7 m distance with 40° pitch:
+  #   Horizontal coverage: ~2 × 0.7 × tan(43.5°) ≈ 1.33 m (covers workspace width)
+  #   Vertical coverage:   ~2 × 0.7 × tan(29°)   ≈ 0.78 m (covers workspace depth)
+  # Conclusion: adequate coverage of the GP4 workspace area.
+  fov_check:
+    estimated_distance_m: 0.70
+    h_coverage_m: 1.33
+    v_coverage_m: 0.78
+    adequate: true
+
+  # --- Calibration notes ---
+  # After physical mounting:
+  # 1. Measure the actual camera position with a tape measure or CAD overlay.
+  # 2. Update the translation_m values above for better URDF visualisation.
+  # 3. Run hand-eye calibration (see MANUAL_REALSENSE_D435I_BRINGUP.md).
+  # 4. The calibrated extrinsics in extrinsics.yaml override these nominal values
+  #    for all perception and motion tasks.

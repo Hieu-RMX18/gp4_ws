@@ -48,14 +48,63 @@ class SupervisorSubmissionMixin:
             else runtime.mode
         )
         self._assert_no_active_job()
-        sequence_segments = self._split_sequence_text(raw_text) if raw_text else []
-        prepared_sequence = self._prepare_sequence_request(
+        command_id = str(uuid4())
+        correlation_id = str(uuid4())
+        if structured_intent is not None:
+            return self._reject_intent_submission(
+                session_id=session_id,
+                operator_id=operator_id,
+                lease=lease,
+                runtime=runtime,
+                requested_mode=requested_mode,
+                raw_text=raw_text,
+                structured_intent=structured_intent,
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason=(
+                    "structuredIntent is not accepted from the HMI command API; "
+                    "submit intentText so llm_gateway ReviewIntent can produce Semantic IR."
+                ),
+            )
+        review_result = self._submit_text_for_gateway_review(
             raw_text=raw_text,
             structured_intent=structured_intent,
             requested_mode=requested_mode,
+            session_id=session_id,
+            operator_id=operator_id,
+            command_id=command_id,
+            correlation_id=correlation_id,
+        )
+        effective_structured_intent = self._semantic_ir_from_review_result(review_result)
+        if effective_structured_intent is None:
+            review_error = (
+                review_result.get("error")
+                if isinstance(review_result, dict)
+                else "review_intent returned no Semantic IR"
+            )
+            return self._reject_intent_submission(
+                session_id=session_id,
+                operator_id=operator_id,
+                lease=lease,
+                runtime=runtime,
+                requested_mode=requested_mode,
+                raw_text=raw_text,
+                structured_intent=None,
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason=(
+                    "review_intent did not accept this command: "
+                    f"{review_error or 'missing Semantic IR'}"
+                ),
+            )
+        sequence_segments: list[str] = []
+        prepared_sequence = self._prepare_sequence_request(
+            raw_text=raw_text,
+            structured_intent=effective_structured_intent,
+            requested_mode=requested_mode,
         )
         if prepared_sequence is not None or self._is_sequence_request(
-            structured_intent, sequence_segments
+            effective_structured_intent, sequence_segments
         ):
             return self._submit_sequence(
                 session_id=session_id,
@@ -64,9 +113,11 @@ class SupervisorSubmissionMixin:
                 runtime=runtime,
                 requested_mode=requested_mode,
                 raw_text=raw_text,
-                structured_intent=structured_intent,
+                structured_intent=effective_structured_intent,
                 sequence_segments=sequence_segments,
                 prepared_sequence=prepared_sequence,
+                sequence_id=command_id,
+                correlation_id=correlation_id,
             )
         return self._submit_single_command(
             session_id=session_id,
@@ -75,8 +126,154 @@ class SupervisorSubmissionMixin:
             runtime=runtime,
             requested_mode=requested_mode,
             raw_text=raw_text,
+            structured_intent=effective_structured_intent,
+            command_id=command_id,
+            correlation_id=correlation_id,
+        )
+
+    def _submit_text_for_gateway_review(
+        self,
+        *,
+        raw_text: str,
+        structured_intent: dict[str, Any] | None,
+        requested_mode: RuntimeMode,
+        session_id: str,
+        operator_id: str,
+        command_id: str,
+        correlation_id: str,
+    ) -> dict[str, Any]:
+        reviewer = getattr(self._ros, "submit_text_for_review", None)
+        if not callable(reviewer) or not raw_text:
+            return {}
+        try:
+            review_result = reviewer(
+                raw_text=raw_text,
+                runtime_mode=requested_mode.value,
+                session_id=session_id,
+                operator_id=operator_id,
+                command_id=command_id,
+            )
+        except Exception as exc:
+            self._trace(
+                "review.unavailable",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                reason=str(exc),
+            )
+            return {"accepted": False, "error": str(exc)}
+        if not isinstance(review_result, dict):
+            return {"accepted": False, "error": "review result was not a mapping"}
+        if structured_intent is not None:
+            return dict(review_result)
+        if self._semantic_ir_from_review_result(review_result) is None:
+            self._trace(
+                "review.fallback_to_local_parse",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                accepted=review_result.get("accepted"),
+                error=review_result.get("error"),
+            )
+        else:
+            self._trace(
+                "review.semantic_ir_accepted",
+                command_id=command_id,
+                correlation_id=correlation_id,
+            )
+        return dict(review_result)
+
+    def _reject_intent_submission(
+        self,
+        *,
+        session_id: str,
+        operator_id: str,
+        lease: Any,
+        runtime: RuntimeSnapshot,
+        requested_mode: RuntimeMode,
+        raw_text: str,
+        structured_intent: dict[str, Any] | None,
+        command_id: str,
+        correlation_id: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        command = CommandRecord(
+            command_id=command_id,
+            session_id=session_id,
+            operator_id=operator_id,
+            raw_text=raw_text,
+            lifecycle_state=CommandLifecycleState.RECEIVED,
+            summary_label=(raw_text or "rejected structured command")[:80],
+            mode=requested_mode,
+            created_at=_utcnow(),
+            intent_source="text" if raw_text else "structured",
+            correlation_id=correlation_id,
             structured_intent=structured_intent,
         )
+        command.validation_result = self._build_validation_result(
+            runtime=runtime,
+            lease=lease,
+            parsed_intent=None,
+            blocking_reasons=[reason],
+            risk_level=None,
+            requires_confirmation=False,
+        )
+
+        with self._lock:
+            self._commands[command_id] = command
+            self._active_command_id = command_id
+            self._active_sequence_id = None
+
+        self._append_message(
+            origin="operator",
+            text=raw_text or "Submitted structured command.",
+            command_id=command_id,
+        )
+        self._audit.upsert_command(command)
+        self._audit.record_transition(
+            command_id=command_id,
+            session_id=session_id,
+            operator_id=operator_id,
+            from_state=None,
+            to_state=CommandLifecycleState.RECEIVED,
+            runtime_state=runtime.system_state,
+            reason="command received from HMI v2 intent endpoint",
+            payload={"mode": command.mode.value, "intentSource": command.intent_source},
+        )
+        self._reject_command(
+            command,
+            reason=reason,
+            runtime_state=runtime.system_state,
+            session_id=session_id,
+            operator_id=operator_id,
+        )
+        return self._command_response(
+            session_id, operator_id, command, accepted=False, reason=reason
+        )
+
+    @staticmethod
+    def _semantic_ir_from_review_result(
+        review_result: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(review_result, dict) or not review_result.get("accepted"):
+            return None
+
+        semantic_ir = review_result.get("semanticIr") or review_result.get(
+            "semantic_ir"
+        )
+        if isinstance(semantic_ir, dict):
+            return dict(semantic_ir)
+
+        semantic_ir_json = review_result.get("semanticIrJson") or review_result.get(
+            "semantic_ir_json"
+        )
+        if not isinstance(semantic_ir_json, str) or not semantic_ir_json.strip():
+            return None
+        try:
+            decoded = json.loads(semantic_ir_json)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(decoded, dict):
+            return None
+        return decoded
 
     def _submit_single_command(
         self,
@@ -88,9 +285,11 @@ class SupervisorSubmissionMixin:
         requested_mode: RuntimeMode,
         raw_text: str,
         structured_intent: dict[str, Any] | None,
+        command_id: str | None = None,
+        correlation_id: str | None = None,
     ) -> dict[str, Any]:
-        command_id = str(uuid4())
-        correlation_id = str(uuid4())
+        command_id = command_id or str(uuid4())
+        correlation_id = correlation_id or str(uuid4())
         command = CommandRecord(
             command_id=command_id,
             session_id=session_id,
@@ -100,7 +299,7 @@ class SupervisorSubmissionMixin:
             summary_label=(raw_text or "structured command")[:80],
             mode=requested_mode,
             created_at=_utcnow(),
-            intent_source="structured" if structured_intent is not None else "text",
+            intent_source="text" if raw_text else "structured",
             correlation_id=correlation_id,
             structured_intent=structured_intent,
         )
@@ -113,13 +312,6 @@ class SupervisorSubmissionMixin:
             mode=command.mode.value,
             has_structured_intent=structured_intent is not None,
             raw_text=raw_text or "<structured-intent>",
-        )
-        self._ros.submit_text_for_review(
-            raw_text=raw_text
-            or json.dumps(structured_intent, separators=(",", ":"), ensure_ascii=True),
-            session_id=session_id,
-            operator_id=operator_id,
-            command_id=command_id,
         )
 
         with self._lock:
@@ -349,9 +541,11 @@ class SupervisorSubmissionMixin:
         structured_intent: dict[str, Any] | None,
         sequence_segments: list[str],
         prepared_sequence: dict[str, Any] | None = None,
+        sequence_id: str | None = None,
+        correlation_id: str | None = None,
     ) -> dict[str, Any]:
-        sequence_id = str(uuid4())
-        correlation_id = str(uuid4())
+        sequence_id = sequence_id or str(uuid4())
+        correlation_id = correlation_id or str(uuid4())
         sequence = CommandRecord(
             command_id=sequence_id,
             command_kind=CommandKind.SEQUENCE,
@@ -362,7 +556,7 @@ class SupervisorSubmissionMixin:
             summary_label=(raw_text or "structured sequence")[:80],
             mode=requested_mode,
             created_at=_utcnow(),
-            intent_source="structured" if structured_intent is not None else "text",
+            intent_source="text" if raw_text else "structured",
             correlation_id=correlation_id,
             structured_intent=structured_intent,
         )
@@ -370,13 +564,6 @@ class SupervisorSubmissionMixin:
             self._commands[sequence_id] = sequence
             self._active_sequence_id = sequence_id
             self._active_command_id = None
-        self._ros.submit_text_for_review(
-            raw_text=raw_text
-            or json.dumps(structured_intent, separators=(",", ":"), ensure_ascii=True),
-            session_id=session_id,
-            operator_id=operator_id,
-            command_id=sequence_id,
-        )
         self._append_message(
             origin="operator",
             text=raw_text or "Submitted structured sequence.",

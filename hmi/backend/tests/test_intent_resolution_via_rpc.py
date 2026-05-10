@@ -169,9 +169,11 @@ class TestAdapterReadiness(unittest.TestCase):
         state = _TelemetryState()
         self.assertFalse(state.hydrate_workplane_ready)
         self.assertFalse(state.get_primitive_constants_ready)
+        self.assertFalse(state.review_intent_ready)
         self.assertFalse(state.confirm_execution_ready)
         self.assertIsNone(state.hydrate_workplane_ready_at)
         self.assertIsNone(state.get_primitive_constants_ready_at)
+        self.assertIsNone(state.review_intent_ready_at)
         self.assertIsNone(state.confirm_execution_ready_at)
 
 

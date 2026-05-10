@@ -39,6 +39,7 @@ import yaml
 from cv_bridge import CvBridge
 from geometry_msgs.msg import TransformStamped
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from scipy.spatial.transform import Rotation
 from sensor_msgs.msg import Image
 from tf2_ros import Buffer, StaticTransformBroadcaster, TransformListener
@@ -57,6 +58,39 @@ except AttributeError:
     _ARUCO_PARAMS = cv2.aruco.DetectorParameters()
 
 
+def _load_fiducial_marker_length_m(fiducials_path: Path) -> float | None:
+    """Load the physical ArUco marker length from fiducials.yaml."""
+    if not fiducials_path.exists():
+        _LOGGER.error("fiducials.yaml not found: %s", fiducials_path)
+        return None
+
+    try:
+        with open(fiducials_path) as f:
+            config = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError) as exc:
+        _LOGGER.error("Failed to read fiducials.yaml at %s: %s", fiducials_path, exc)
+        return None
+
+    marker_length = config.get("fiducials", {}).get("marker_length_m")
+    try:
+        marker_length_m = float(marker_length)
+    except (TypeError, ValueError):
+        _LOGGER.error(
+            "fiducials.marker_length_m must be a positive number in %s",
+            fiducials_path,
+        )
+        return None
+
+    if marker_length_m <= 0.0:
+        _LOGGER.error(
+            "fiducials.marker_length_m must be greater than zero in %s",
+            fiducials_path,
+        )
+        return None
+
+    return marker_length_m
+
+
 class CalibrationService(Node):
     """Service node for hand-eye calibration."""
 
@@ -73,15 +107,26 @@ class CalibrationService(Node):
             share = Path(get_package_share_directory("gp4_perception"))
             extrinsics_path = share / "config" / "extrinsics.yaml"
         self._extrinsics_path = extrinsics_path
+        self._fiducials_path = self._extrinsics_path.parent / "fiducials.yaml"
+        self._marker_length_m = _load_fiducial_marker_length_m(self._fiducials_path)
+        self._marker_length_error_reported = False
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
         self._camera_info = None
-        self.create_subscription(Image, "/camera/color/image_raw", self._on_image, 10)
+        self.create_subscription(
+            Image,
+            "/camera/color/image_raw",
+            self._on_image,
+            qos_profile_sensor_data,
+        )
         from sensor_msgs.msg import CameraInfo
 
         self.create_subscription(
-            CameraInfo, "/camera/color/camera_info", self._on_camera_info, 10
+            CameraInfo,
+            "/camera/color/camera_info",
+            self._on_camera_info,
+            qos_profile_sensor_data,
         )
         self._srv = self.create_service(
             CalibrateHandEye, "/perception/calibrate_hand_eye", self._handle
@@ -124,9 +169,17 @@ class CalibrationService(Node):
 
         K = np.array(self._camera_info.K).reshape(3, 3)
         D = np.array(self._camera_info.D)
-        marker_length = 0.035  # meters; TODO load from fiducials.yaml
+        if self._marker_length_m is None:
+            if not self._marker_length_error_reported:
+                _LOGGER.error(
+                    "Skipping calibration samples because fiducial marker_length_m "
+                    "is unavailable from %s",
+                    self._fiducials_path,
+                )
+                self._marker_length_error_reported = True
+            return
         rvecs, tvecs, _ = cv2.aruco.estimatePoseSingleMarkers(
-            corners, marker_length, K, D
+            corners, self._marker_length_m, K, D
         )
         if rvecs is None or len(rvecs) == 0:
             return
@@ -199,14 +252,40 @@ class CalibrationService(Node):
         R_cam2base = np.asarray(R_cam2base)
         t_cam2base = np.asarray(t_cam2base).reshape(3)
 
-        # Reprojection error (synthetic — project marker corners back)
+        # Reprojection error: mean translation error across samples.
+        # For each sample, compare the target position estimated via
+        # two paths: (1) cam → base using solved extrinsics, and
+        # (2) gripper → base using robot FK. The difference is the
+        # residual error of the hand-eye solution.
         reproj_mm = 0.0
         try:
-            K = np.array(self._camera_info.K).reshape(3, 3)
-            # Simplified: just compute mean translation error as proxy.
-            reproj_mm = float(np.linalg.norm(t_cam2base)) * 1000.0 * 0.01
-        except Exception:
-            pass
+            T_cam2base = np.eye(4)
+            T_cam2base[:3, :3] = R_cam2base
+            T_cam2base[:3, 3] = t_cam2base
+
+            errors = []
+            for R_b2g, t_b2g, R_t2c, t_t2c in samples:
+                # Path via camera: target → cam → base
+                T_target2cam = np.eye(4)
+                T_target2cam[:3, :3] = R_t2c
+                T_target2cam[:3, 3] = t_t2c.flatten()
+                T_target_via_cam = T_cam2base @ T_target2cam
+
+                # Path via robot: target on gripper → base
+                T_base2grip = np.eye(4)
+                T_base2grip[:3, :3] = R_b2g
+                T_base2grip[:3, 3] = t_b2g.flatten()
+
+                # Positional error between the two paths
+                err = np.linalg.norm(
+                    T_target_via_cam[:3, 3] - T_base2grip[:3, 3]
+                )
+                errors.append(err)
+
+            reproj_mm = float(np.mean(errors)) * 1000.0 if errors else 0.0
+        except Exception as exc:
+            _LOGGER.warning("Reprojection error computation failed: %s", exc)
+            reproj_mm = 0.0
 
         quat = Rotation.from_matrix(R_cam2base).as_quat()  # [x, y, z, w]
 

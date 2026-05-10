@@ -377,16 +377,12 @@ class CommandIntentRequestModel(StrictModel):
     operatorId: str
     leaseToken: str | None
     intentText: str | None = None
-    structuredIntent: dict[str, Any] | None = None
-    mode: Literal["sim", "hardware", "unknown"]
+    mode: Literal["sim", "hardware"]
 
     @model_validator(mode="after")
     def validate_intent_payload(self) -> "CommandIntentRequestModel":
-        if (
-            not (self.intentText and self.intentText.strip())
-            and self.structuredIntent is None
-        ):
-            raise ValueError("intentText or structuredIntent is required")
+        if not (self.intentText and self.intentText.strip()):
+            raise ValueError("intentText is required")
         return self
 
 
@@ -402,6 +398,12 @@ class CommandCancelRequestModel(StrictModel):
     operatorId: str
     leaseToken: str | None
     reason: str | None = None
+
+
+class ServoControlRequestModel(StrictModel):
+    sessionId: str
+    operatorId: str
+    leaseToken: str | None
 
 
 class CommandMutationResponseModel(StrictModel):

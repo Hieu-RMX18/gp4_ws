@@ -20,7 +20,7 @@ fi
 # Check 2: In primitive_router_dispatch.cpp, exactly 1 call to
 # computeCartesianPath must remain (the CARTESIAN_PATH primitive handler).
 # More than 1 means a fallback was re-introduced.
-TARGET="$REPO_ROOT/src/motion_core/src/primitive_router_dispatch.cpp"
+TARGET="$REPO_ROOT/src/motion_core/src/planning/primitive_router_dispatch.cpp"
 if [ -f "$TARGET" ]; then
   CALL_COUNT=$(grep -c 'move_group->computeCartesianPath\|move_group_->computeCartesianPath' "$TARGET" 2>/dev/null || echo 0)
   if [ "$CALL_COUNT" -gt 1 ]; then

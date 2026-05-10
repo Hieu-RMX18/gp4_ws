@@ -2,9 +2,10 @@ import { INTENT_TEMPLATES } from './intentTemplates';
 
 interface QuickCommandsProps {
   onSelect: (intent: string) => void;
+  canSubmit: boolean;
 }
 
-export function QuickCommands({ onSelect }: QuickCommandsProps) {
+export function QuickCommands({ onSelect, canSubmit }: QuickCommandsProps) {
   return (
     <section className="section section-grow">
       <div className="section-title">Quick Commands</div>
@@ -14,6 +15,8 @@ export function QuickCommands({ onSelect }: QuickCommandsProps) {
             key={template.id}
             type="button"
             className="qcmd"
+            disabled={!canSubmit}
+            title={canSubmit ? template.intent : 'Command ingress is blocked'}
             onClick={() => onSelect(template.intent)}
           >
             <span className="cmd-icon">&gt;</span>

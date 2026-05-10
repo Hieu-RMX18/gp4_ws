@@ -52,6 +52,40 @@ def _normalize_angle(value: Any, field: str) -> float:
     return _wrap_to_pi(raw)
 
 
+def _convert_linear(value: Any, unit: str | None, field: str) -> float:
+    raw = _to_float(value, field)
+    if unit is None:
+        return raw
+    if unit == "m":
+        return raw
+    if unit == "cm":
+        return raw / 100.0
+    if unit == "mm":
+        return raw / 1000.0
+    from .intent_resolution import IntentResolutionError
+
+    raise IntentResolutionError(
+        f"{field}: unsupported linear_unit {unit!r}.",
+        rejected_fields=["linear_unit"],
+    )
+
+
+def _normalize_angle_with_unit(value: Any, field: str, unit: str | None) -> float:
+    raw = _to_float(value, field)
+    if unit == "rad":
+        return _wrap_to_pi(raw)
+    if unit == "deg":
+        return _wrap_to_pi(math.radians(raw))
+    if unit is not None:
+        from .intent_resolution import IntentResolutionError
+
+        raise IntentResolutionError(
+            f"{field}: unsupported angular_unit {unit!r}.",
+            rejected_fields=["angular_unit"],
+        )
+    return _normalize_angle(raw, field)
+
+
 def _rpy_to_quaternion(
     roll_rad: float, pitch_rad: float, yaw_rad: float
 ) -> dict[str, float]:
@@ -91,6 +125,8 @@ class IntentNormalizationMixin:
                 for key, value in command.items()
                 if key not in ROUTED_DRAW_METADATA_FIELDS
             }
+        else:
+            command = dict(command)
         primitive = str(command.get("primitive_type") or "").strip().upper()
         if not primitive:
             raise IntentResolutionError(
@@ -106,6 +142,23 @@ class IntentNormalizationMixin:
                 f"primitive_type {primitive!r} is blocked by the hardware primitive whitelist.",
                 rejected_fields=["primitive_type"],
             )
+
+        linear_unit = command.pop("linear_unit", None)
+        angular_unit = command.pop("angular_unit", None)
+        if linear_unit is not None:
+            linear_unit = str(linear_unit).strip().lower()
+            if linear_unit not in {"m", "cm", "mm"}:
+                raise IntentResolutionError(
+                    f"unsupported linear_unit {linear_unit!r}.",
+                    rejected_fields=["linear_unit"],
+                )
+        if angular_unit is not None:
+            angular_unit = str(angular_unit).strip().lower()
+            if angular_unit not in {"rad", "deg"}:
+                raise IntentResolutionError(
+                    f"unsupported angular_unit {angular_unit!r}.",
+                    rejected_fields=["angular_unit"],
+                )
 
         allowed_fields = _ALLOWED_FIELDS_BY_PRIMITIVE[primitive]
         rejected_fields = sorted(
@@ -166,6 +219,7 @@ class IntentNormalizationMixin:
             "STOP",
             "IO_SET",
             "ALARM_RESET",
+            "BLENDED_SEQUENCE",
         }:
             normalized["reference_frame"] = str(
                 command.get("reference_frame") or "base_link"
@@ -176,19 +230,29 @@ class IntentNormalizationMixin:
                     rejected_fields=["reference_frame"],
                 )
 
-        if primitive in {"PTP", "LIN", "CIRC"}:
+        if primitive in {"LIN", "CIRC"}:
             if "target_pose" not in command:
                 raise IntentResolutionError(
                     f"{primitive} requires target_pose.",
                     missing_slots=["target_pose"],
                 )
             normalized["target_pose"] = self._normalize_pose(
-                command["target_pose"], field_name="target_pose"
+                command["target_pose"],
+                field_name="target_pose",
+                linear_unit=linear_unit,
+                angular_unit=angular_unit,
             )
 
+        if primitive == "PTP" and "target_pose" in command:
+            normalized["target_pose"] = self._normalize_pose(
+                command["target_pose"],
+                field_name="target_pose",
+                linear_unit=linear_unit,
+                angular_unit=angular_unit,
+            )
         if primitive == "PTP" and "joint_target" in command:
             normalized["joint_target"] = self._normalize_joint_target(
-                command["joint_target"]
+                command["joint_target"], angular_unit=angular_unit
             )
         if (
             primitive == "PTP"
@@ -212,7 +276,12 @@ class IntentNormalizationMixin:
                     missing_slots=["waypoints[0]"],
                 )
             normalized["waypoints"] = [
-                self._normalize_pose(waypoints[0], field_name="waypoints[0]")
+                self._normalize_pose(
+                    waypoints[0],
+                    field_name="waypoints[0]",
+                    linear_unit=linear_unit,
+                    angular_unit=angular_unit,
+                )
             ]
 
         if primitive == "CARTESIAN_PATH":
@@ -223,9 +292,63 @@ class IntentNormalizationMixin:
                     missing_slots=["waypoints[0..n]"],
                 )
             normalized["waypoints"] = [
-                self._normalize_pose(waypoint, field_name=f"waypoints[{index}]")
+                self._normalize_pose(
+                    waypoint,
+                    field_name=f"waypoints[{index}]",
+                    linear_unit=linear_unit,
+                    angular_unit=angular_unit,
+                )
                 for index, waypoint in enumerate(waypoints)
             ]
+
+        if primitive == "BLENDED_SEQUENCE":
+            steps = command.get("sequence_steps")
+            if not isinstance(steps, list) or not steps:
+                raise IntentResolutionError(
+                    "BLENDED_SEQUENCE requires sequence_steps.",
+                    missing_slots=["sequence_steps"],
+                )
+            normalized_steps: list[dict[str, Any]] = []
+            for index, step in enumerate(steps):
+                if not isinstance(step, dict):
+                    raise IntentResolutionError(
+                        f"BLENDED_SEQUENCE step[{index}] must be an object.",
+                        rejected_fields=["sequence_steps"],
+                    )
+                step_command = dict(step)
+                if "target_pose" not in step_command:
+                    raise IntentResolutionError(
+                        f"BLENDED_SEQUENCE step[{index}] requires target_pose.",
+                        missing_slots=[f"sequence_steps[{index}].target_pose"],
+                    )
+                step_command["target_pose"] = self._normalize_pose(
+                    step_command["target_pose"],
+                    field_name=f"sequence_steps[{index}].target_pose",
+                    linear_unit=linear_unit,
+                    angular_unit=angular_unit,
+                )
+                step_primitive = str(step_command.get("primitive_type") or "LIN")
+                step_command["primitive_type"] = step_primitive
+                step_command["blend_radius_m"] = _to_float(
+                    step_command.get("blend_radius_m", 0.0),
+                    f"sequence_steps[{index}].blend_radius_m",
+                )
+                step_command["planner_id"] = str(
+                    step_command.get("planner_id")
+                    or PLANNER_DEFAULTS.get(step_primitive, "PILZ_LIN")
+                )
+                step_command["velocity_scale"] = _to_float(
+                    step_command.get("velocity_scale", normalized["velocity_scale"]),
+                    f"sequence_steps[{index}].velocity_scale",
+                )
+                step_command["acceleration_scale"] = _to_float(
+                    step_command.get(
+                        "acceleration_scale", normalized["acceleration_scale"]
+                    ),
+                    f"sequence_steps[{index}].acceleration_scale",
+                )
+                normalized_steps.append(step_command)
+            normalized["sequence_steps"] = normalized_steps
 
         if primitive == "MOVE_REL":
             missing_delta = [
@@ -238,9 +361,15 @@ class IntentNormalizationMixin:
                     "MOVE_REL requires delta_x, delta_y, and delta_z.",
                     missing_slots=missing_delta,
                 )
-            normalized["delta_x"] = _to_float(command.get("delta_x"), "delta_x")
-            normalized["delta_y"] = _to_float(command.get("delta_y"), "delta_y")
-            normalized["delta_z"] = _to_float(command.get("delta_z"), "delta_z")
+            normalized["delta_x"] = _convert_linear(
+                command.get("delta_x"), linear_unit, "delta_x"
+            )
+            normalized["delta_y"] = _convert_linear(
+                command.get("delta_y"), linear_unit, "delta_y"
+            )
+            normalized["delta_z"] = _convert_linear(
+                command.get("delta_z"), linear_unit, "delta_z"
+            )
             if (
                 normalized["delta_x"] == 0.0
                 and normalized["delta_y"] == 0.0
@@ -266,8 +395,8 @@ class IntentNormalizationMixin:
                     rejected_fields=["joint_index"],
                 )
             normalized["joint_index"] = joint_index
-            normalized["joint_angle"] = _normalize_angle(
-                command.get("joint_angle"), "joint_angle"
+            normalized["joint_angle"] = _normalize_angle_with_unit(
+                command.get("joint_angle"), "joint_angle", angular_unit
             )
 
         if primitive == "MOVE_JOINTS":
@@ -276,7 +405,7 @@ class IntentNormalizationMixin:
                     "MOVE_JOINTS requires joint_target.", missing_slots=["joint_target"]
                 )
             normalized["joint_target"] = self._normalize_joint_target(
-                command.get("joint_target")
+                command.get("joint_target"), angular_unit=angular_unit
             )
 
         if primitive == "WAIT":
@@ -339,7 +468,9 @@ class IntentNormalizationMixin:
 
         return normalized, notes
 
-    def _normalize_joint_target(self, value: Any) -> list[float]:
+    def _normalize_joint_target(
+        self, value: Any, *, angular_unit: str | None = None
+    ) -> list[float]:
         from .intent_resolution import IntentResolutionError
 
         if not isinstance(value, list):
@@ -353,11 +484,18 @@ class IntentNormalizationMixin:
                 missing_slots=["joint_target[0..5]"],
             )
         return [
-            _normalize_angle(entry, f"joint_target[{index}]")
+            _normalize_angle_with_unit(entry, f"joint_target[{index}]", angular_unit)
             for index, entry in enumerate(value)
         ]
 
-    def _normalize_pose(self, value: Any, *, field_name: str) -> dict[str, Any]:
+    def _normalize_pose(
+        self,
+        value: Any,
+        *,
+        field_name: str,
+        linear_unit: str | None = None,
+        angular_unit: str | None = None,
+    ) -> dict[str, Any]:
         from .intent_resolution import IntentResolutionError
 
         if not isinstance(value, dict):
@@ -369,10 +507,12 @@ class IntentNormalizationMixin:
                 missing_slots=[f"{field_name}.position"],
             )
 
-        x = _to_float(position.get("x"), f"{field_name}.position.x")
-        y = _to_float(position.get("y"), f"{field_name}.position.y")
-        z = _to_float(position.get("z"), f"{field_name}.position.z")
-        if any(abs(component) > 10.0 for component in (x, y, z)):
+        x = _convert_linear(position.get("x"), linear_unit, f"{field_name}.position.x")
+        y = _convert_linear(position.get("y"), linear_unit, f"{field_name}.position.y")
+        z = _convert_linear(position.get("z"), linear_unit, f"{field_name}.position.z")
+        if linear_unit is None and any(
+            abs(component) > 10.0 for component in (x, y, z)
+        ):
             x /= 1000.0
             y /= 1000.0
             z /= 1000.0
@@ -407,7 +547,11 @@ class IntentNormalizationMixin:
             yaw = _to_float(
                 orientation_payload.get("yaw"), f"{field_name}.orientation.yaw"
             )
-            if any(
+            if angular_unit == "deg":
+                roll = math.radians(roll)
+                pitch = math.radians(pitch)
+                yaw = math.radians(yaw)
+            elif angular_unit is None and any(
                 abs(component) > (2.0 * math.pi) for component in (roll, pitch, yaw)
             ):
                 roll = math.radians(roll)

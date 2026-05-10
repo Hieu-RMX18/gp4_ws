@@ -10,6 +10,7 @@ from ..domain.models import HardwareGateChecklistSnapshot, HardwareGateStatusSna
 
 
 HARDWARE_GATE_ENV = "HMI_ENABLE_HARDWARE_COMMANDS"
+HARDWARE_GATE_PATH_ENV = "HMI_HARDWARE_GATE_EVIDENCE_FILE"
 DEFAULT_HARDWARE_GATE_PATH = (
     Path(__file__).resolve().parents[2] / "data" / "hardware_gate.json"
 )
@@ -20,10 +21,16 @@ class HardwareGateEvaluator:
         self,
         *,
         env_name: str = HARDWARE_GATE_ENV,
-        evidence_path: str | Path = DEFAULT_HARDWARE_GATE_PATH,
+        evidence_path: str | Path | None = None,
+        path_env_name: str = HARDWARE_GATE_PATH_ENV,
     ) -> None:
         self._env_name = env_name
-        self._evidence_path = Path(evidence_path)
+        configured_path = evidence_path
+        if configured_path is None:
+            configured_path = (
+                os.getenv(path_env_name, "").strip() or DEFAULT_HARDWARE_GATE_PATH
+            )
+        self._evidence_path = Path(configured_path)
 
     def evaluate(self) -> HardwareGateStatusSnapshot:
         flag_enabled = os.getenv(self._env_name, "").strip().lower() in {
@@ -72,7 +79,8 @@ class HardwareGateEvaluator:
                 reasons.append("hardware gate evidence is missing reportSha256.")
             if report_path and report_sha256 and not report_sha256_match:
                 reasons.append(
-                    "hardware gate report SHA256 does not match the referenced report."
+                    "hardware gate report must be a regular non-empty file "
+                    "with matching SHA256."
                 )
 
         return HardwareGateStatusSnapshot(
@@ -141,6 +149,8 @@ class HardwareGateEvaluator:
             return False
         candidate = Path(report_path)
         try:
+            if not candidate.is_file() or candidate.stat().st_size == 0:
+                return False
             digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
         except OSError:
             return False

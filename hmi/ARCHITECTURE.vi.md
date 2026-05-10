@@ -58,7 +58,9 @@ Confirm gate gọi `/supervisor/confirm_execution` để re-validate.
 Hardware execution chỉ bật khi **cả hai** điều kiện đúng:
 
 1. Biến môi trường `HMI_ENABLE_HARDWARE_COMMANDS=1`.
-2. File `hmi/data/hardware_gate.json` xác nhận hardware mode.
+2. Evidence JSON xác nhận hardware mode. Mặc định là
+   `hmi/data/hardware_gate.json` đã bị khóa; commissioning có thể dùng
+   `HMI_HARDWARE_GATE_EVIDENCE_FILE` để trỏ tới approval record local.
 
 Sim mode mặc định fail-closed: confirm và execute disabled cho đến khi sim
 bridge sẵn sàng và lease được nắm giữ.

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { GP4BridgeClient } from '../../shared/contracts';
 import type { UseGp4BridgeResult } from '../hooks/useGP4Bridge';
 import type { ActionFeedbackView, LogEntryView, StatusPillView, TopicView } from './gp4-hmi/types';
 import {
@@ -40,11 +39,10 @@ import {
 } from './gp4-hmi';
 
 interface GP4HMIProps {
-  client: GP4BridgeClient;
   bridge: UseGp4BridgeResult;
 }
 
-export function GP4HMI({ client, bridge }: GP4HMIProps) {
+export function GP4HMI({ bridge }: GP4HMIProps) {
   const [draft, setDraft] = useState('');
   const [clockText, setClockText] = useState(() => formatClock(new Date()));
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -63,6 +61,8 @@ export function GP4HMI({ client, bridge }: GP4HMIProps) {
     releaseLease,
     confirmActiveCommand,
     abortActiveCommand,
+    startServo,
+    holdServo,
   } = bridge;
 
   const readOnlyBridge = state.capabilities.readOnly;
@@ -72,7 +72,7 @@ export function GP4HMI({ client, bridge }: GP4HMIProps) {
     !blockingRuntime &&
     isController;
   const canAcquireLease = state.capabilities.canAcquireLease;
-  const canReleaseLease = !readOnlyBridge && isController && state.lease.leaseToken !== null;
+  const canReleaseLease = isController && state.lease.leaseToken !== null;
   const canConfirmCommands = state.capabilities.canConfirmCommands && !blockingRuntime && isController;
   const canAbortCommands = (state.capabilities.canCancelCommands || state.capabilities.canAbortCommands) && isController;
   const hardwareGate = state.capabilities.hardwareGate;
@@ -243,6 +243,16 @@ export function GP4HMI({ client, bridge }: GP4HMIProps) {
   };
 
   const canAbortTopbar = canAbortCommands && (activeSequence !== null || activeCommand !== null);
+  const canStartServo =
+    state.mode === 'hardware' &&
+    !blockingRuntime &&
+    isController &&
+    state.lease.leaseToken !== null &&
+    hardwareGate.unlocked;
+  const canHoldServo =
+    state.mode === 'hardware' &&
+    isController &&
+    state.lease.leaseToken !== null;
 
   // ── Render ──────────────────────────────────────────────────────────────
 
@@ -253,7 +263,10 @@ export function GP4HMI({ client, bridge }: GP4HMIProps) {
           statusPills={statusPills}
           clockText={clockText}
           canAbort={canAbortTopbar}
-          client={client}
+          canStartServo={canStartServo}
+          canHoldServo={canHoldServo}
+          onStartServo={startServo}
+          onHoldServo={holdServo}
           onAbort={() => void handleAbortClick('Operator requested topbar abort from HMI.')}
           onActionFeedback={pushActionFeedback}
         />
@@ -262,7 +275,7 @@ export function GP4HMI({ client, bridge }: GP4HMIProps) {
           <div className="panel-header">Robot Monitor</div>
           <JointMonitor orderedJoints={orderedJoints} runtime={state.runtime} activeCommand={activeCommand} />
           <CommandPipelinePanel traceSteps={traceSteps} />
-          <QuickCommands onSelect={(intent) => { setDraft(intent); setSubmitError(null); }} />
+          <QuickCommands canSubmit={canSubmitCommands} onSelect={(intent) => { setDraft(intent); setSubmitError(null); }} />
         </aside>
 
         <main className="center-panel">

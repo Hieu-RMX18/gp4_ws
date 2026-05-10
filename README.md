@@ -104,14 +104,14 @@ Forbidden zones (pre-planning, 30 mm inflation):
 
 ### Hardware Validation Status
 
-As of 2026-04-25, hardware telemetry and motion commissioning are
-operator-confirmed OK except IO. Bundle
-`/tmp/gp4_hw_validation_full_20260425_152850` proved gateway/readiness/supervisor
-alerts, `/yaskawa/joint_states`, command interfaces, MotoROS2 FJT action, and
-the HMI read-only gate. Operator follow-up confirmed `robot_status`,
-disconnect/reconnect, active E-stop, active fault, MANUAL/AUTO, real trajectory
-execution, alarm reset, and full test status OK. `IO_SET` remains deferred and
-must not be treated as hardware-validated.
+Current verified status is software/simulation only for the full HMI ->
+ReviewIntent -> safety -> MoveIt -> hw_adapter pipeline. Individual hardware
+primitives have been tested, but full MoveIt-to-hardware end-to-end execution is
+not claimed by this branch. Real hardware commissioning still requires the
+read-only checklist in `hmi/HARDWARE_READONLY_VALIDATION.md`, hardware-gate
+evidence, explicit hardware mode, controller lease, operator confirmation, and a
+separately authorized execution pass. `IO_SET`, real TCP offset, and D435i
+hand-eye extrinsics remain deferred until measured and approved.
 
 ---
 
@@ -161,6 +161,7 @@ must not be treated as hardware-validated.
 - **Python:** 3.10+ (for `llm_gateway`, `safety`, HMI backend)
 - **Node.js:** 18+ (for HMI frontend)
 - **Dependencies:** `moveit2`, `ros2_control`, `motoros2_client_interface_dependencies`, `pilz_industrial_motion_planner`, `trac_ik`
+- **Workspace dependency manifest:** `references/gp4_ws_dependencies.repos`
 
 ---
 
@@ -170,21 +171,29 @@ must not be treated as hardware-validated.
 # 1. Source ROS 2
 source /opt/ros/humble/setup.bash
 
-# 2. Install ROS dependencies
+# 2. Do not keep a project .venv active for ROS commands.
+# ROS 2 Humble uses the system Python 3.10; an active venv can hide packages
+# such as rclpy, scipy, or generated interfaces.
+deactivate 2>/dev/null || true
+
+# 3. Fetch pinned workspace dependency sources.
 cd ~/gp4_ws
+vcs import . < references/gp4_ws_dependencies.repos
+
+# 4. Install ROS dependencies
 rosdep install --from-paths src --ignore-src -y
 
-# 3. Build active packages
-colcon build --packages-select interfaces gp4_moveit_config safety motion_core primitives hw_adapter llm_gateway supervisor jog_pendant gp4_bringup --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+# 5. Build active workspace packages
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 
-# 4. Source overlay
+# 6. Source overlay
 source install/setup.bash
 
-# 5. HMI backend dependencies
+# 7. HMI backend dependencies
 pip3 install --user -r hmi/requirements.txt
 
-# 6. HMI frontend
-cd ~/gp4_ws/hmi/frontend && npm install
+# 7. HMI frontend
+cd ~/gp4_ws/hmi/frontend && npm ci
 ```
 
 > If `interfaces` changes, rebuild it first before rebuilding downstream packages:
@@ -233,33 +242,17 @@ ros2 launch jog_pendant jog_pendant_experimental.launch.py
 
 ## Example Commands
 
-Use the helper CLI — it validates against the installed schema and prints the payload before publishing.
+Use the HMI command interface or the `ReviewIntent` service path. The legacy
+`gp4_cmd` helper CLI and direct raw-command topic path were removed during the
+W8 cleanup; do not publish raw motion payloads directly from operator text.
 
 ```bash
-# Move all joints to zero
-ros2 run llm_gateway gp4_cmd move-joints 0 0 0 0 0 0 --speed 0.05
+# Start the command-capable sim stack first.
+ros2 launch gp4_bringup sim.launch.py
 
-# Relative move in base frame
-ros2 run llm_gateway gp4_cmd move-rel --z -0.03 --speed 0.05
-
-# Linear move to a pose
-ros2 run llm_gateway gp4_cmd lin --xyz 0.30 0.10 0.42 --rpy 180 0 0 --speed 0.05
-
-# HOME / STOP / WAIT
-ros2 run llm_gateway gp4_cmd home --speed 0.05
-ros2 run llm_gateway gp4_cmd stop
-ros2 run llm_gateway gp4_cmd wait 3
-
-# Send directly as ExecuteMotion action (bypass topic)
-ros2 run llm_gateway gp4_cmd --transport action home --speed 0.05
-
-# Load from YAML file
-cat <<'YAML' > /tmp/move_rel.yaml
-primitive_type: MOVE_REL
-delta_z: -0.03
-velocity_scale: 0.05
-YAML
-ros2 run llm_gateway gp4_cmd from-file /tmp/move_rel.yaml
+# In another shell, start the HMI API and frontend.
+python3 -m uvicorn hmi.backend.api.app:app --host 127.0.0.1 --port 8000
+cd ~/gp4_ws/hmi/frontend && npm run dev
 ```
 
 ---
@@ -268,7 +261,7 @@ ros2 run llm_gateway gp4_cmd from-file /tmp/move_rel.yaml
 
 The HMI provides a browser-based operator panel with:
 - **Telemetry panel** — joint positions, robot status, gateway/LLM state
-- **Command ingress** — submit structured commands through the supervisor validation pipeline
+- **Command ingress** — submit natural-language text through `ReviewIntent` and the supervisor validation pipeline
 - **Jog pendant** — real-time joint jogging (requires `jog_pendant` stack running)
 - **Session management** — operator session lock and audit trail
 
@@ -292,6 +285,7 @@ Full spec: `hmi/HMI_V2_COMMAND_INGRESS.md`
 |----------------------|-------------|
 | `GP4_LLM_API_KEY`    | API key for `llm_gateway` LLM backend |
 | `GP4_LLM_ENV_FILE`   | Local `.env` file path, usually `/home/hieu2/gp4_ws/.env` |
+| `GP4_REVIEW_INTENT_TOKEN` | Shared HMI backend -> `llm_gateway` token for `/llm_gateway/review_intent`; required in hardware runtime mode |
 | `RMW_IMPLEMENTATION` | Set to `rmw_fastrtps_cpp` for hardware launch |
 | `ROS_DOMAIN_ID`      | Keep at `39` for this GP4 workspace to isolate it from other ROS 2 stacks |
 

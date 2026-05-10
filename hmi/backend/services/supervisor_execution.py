@@ -17,6 +17,103 @@ class SupervisorExecutionMixin:
     def _utcnow() -> datetime:
         return datetime.now(timezone.utc)
 
+    def start_servo(
+        self,
+        *,
+        session_id: str,
+        operator_id: str,
+        lease_token: str | None,
+    ) -> dict[str, Any]:
+        return self._run_servo_control(
+            session_id=session_id,
+            operator_id=operator_id,
+            lease_token=lease_token,
+            action_label="Servo START",
+            adapter_method_name="start_traj_mode",
+            require_hardware_gate=True,
+        )
+
+    def hold_servo(
+        self,
+        *,
+        session_id: str,
+        operator_id: str,
+        lease_token: str | None,
+    ) -> dict[str, Any]:
+        return self._run_servo_control(
+            session_id=session_id,
+            operator_id=operator_id,
+            lease_token=lease_token,
+            action_label="Servo HOLD",
+            adapter_method_name="stop_motion",
+            require_hardware_gate=False,
+        )
+
+    def _run_servo_control(
+        self,
+        *,
+        session_id: str,
+        operator_id: str,
+        lease_token: str | None,
+        action_label: str,
+        adapter_method_name: str,
+        require_hardware_gate: bool,
+    ) -> dict[str, Any]:
+        lease = self._assert_controller(session_id, operator_id, lease_token)
+        runtime = self._current_runtime()
+        if runtime.mode != RuntimeMode.HARDWARE:
+            return {
+                "accepted": False,
+                "message": f"{action_label} is allowed only in hardware mode.",
+            }
+
+        hardware_gate = self._hardware_gate_evaluator.evaluate()
+        if require_hardware_gate and not hardware_gate.unlocked:
+            return {
+                "accepted": False,
+                "message": "; ".join(hardware_gate.reasons)
+                or "hardware gate is locked.",
+            }
+
+        preflight = self._execution_preflight(requested_mode=RuntimeMode.HARDWARE)
+        if require_hardware_gate and not preflight["accepted"]:
+            return {
+                "accepted": False,
+                "message": "; ".join(preflight["reasons"])
+                or "hardware preflight failed.",
+            }
+
+        adapter_method = getattr(self._ros, adapter_method_name, None)
+        if not callable(adapter_method):
+            return {
+                "accepted": False,
+                "message": f"{action_label} adapter method is unavailable.",
+            }
+
+        self._audit.record_runtime_event(
+            system_state=runtime.system_state,
+            session_id=session_id,
+            operator_id=operator_id,
+            command_id=None,
+            message=f"{action_label} requested through supervised hardware gate",
+            payload={
+                "leaseId": lease.lease_id,
+                "hardwareGate": hardware_gate.to_dict(),
+                "preflight": preflight,
+                "requiresHardwareGate": require_hardware_gate,
+            },
+        )
+        result = adapter_method()
+        if not isinstance(result, dict):
+            return {
+                "accepted": False,
+                "message": f"{action_label} returned an invalid response.",
+            }
+        return {
+            "accepted": bool(result.get("accepted", False)),
+            "message": str(result.get("message", "")),
+        }
+
     def _confirm_command_internal(
         self,
         *,

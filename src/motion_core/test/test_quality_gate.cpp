@@ -29,8 +29,14 @@ make_valid_trajectory(std::size_t point_count) {
   return traj;
 }
 
+QualityGate make_quality_gate() {
+  return QualityGate(QualityGate::kMaxTrajectoryPoints,
+                     QualityGate::kMinimumCartesianFraction,
+                     JointPositionGuard{}, ManipulabilityGuard::disabled());
+}
+
 TEST(QualityGateTest, RejectsPlanWithMoreThanTwoHundredPoints) {
-  const QualityGate gate;
+  const QualityGate gate = make_quality_gate();
   const auto traj = make_valid_trajectory(201);
 
   std::string reason;
@@ -41,7 +47,7 @@ TEST(QualityGateTest, RejectsPlanWithMoreThanTwoHundredPoints) {
 }
 
 TEST(QualityGateTest, RejectsCartesianPlanWhenFractionTooLow) {
-  const QualityGate gate;
+  const QualityGate gate = make_quality_gate();
   const auto traj = make_valid_trajectory(2);
 
   std::string reason;
@@ -51,7 +57,7 @@ TEST(QualityGateTest, RejectsCartesianPlanWhenFractionTooLow) {
 }
 
 TEST(QualityGateTest, AcceptsCircWhenFractionAboveCircThreshold) {
-  const QualityGate gate;
+  const QualityGate gate = make_quality_gate();
   const auto traj = make_valid_trajectory(2);
 
   std::string reason;
@@ -62,7 +68,7 @@ TEST(QualityGateTest, AcceptsCircWhenFractionAboveCircThreshold) {
 }
 
 TEST(QualityGateTest, RejectsCircWhenFractionBelowCircThreshold) {
-  const QualityGate gate;
+  const QualityGate gate = make_quality_gate();
   const auto traj = make_valid_trajectory(2);
 
   std::string reason;
@@ -89,7 +95,7 @@ TEST(QualityGateTest, PrimitiveDispatchRoutesDifferentThresholds) {
 }
 
 TEST(QualityGateTest, RejectsPlanWithNonFiniteValues) {
-  const QualityGate gate;
+  const QualityGate gate = make_quality_gate();
   auto traj = make_valid_trajectory(2);
   traj.points[1].positions[0] = std::numeric_limits<double>::quiet_NaN();
 
@@ -100,7 +106,7 @@ TEST(QualityGateTest, RejectsPlanWithNonFiniteValues) {
 }
 
 TEST(QualityGateTest, RejectsPlanWithNonMonotonicTimestamps) {
-  const QualityGate gate;
+  const QualityGate gate = make_quality_gate();
   auto traj = make_valid_trajectory(2);
   traj.points[1].time_from_start = traj.points[0].time_from_start;
 

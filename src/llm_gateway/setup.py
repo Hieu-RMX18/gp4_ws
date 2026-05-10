@@ -9,8 +9,6 @@ setup(
     version="0.0.0",
     packages=[
         package_name,
-        f"{package_name}.react",
-        f"{package_name}.react.tools",
     ],
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
@@ -19,17 +17,14 @@ setup(
     ],
     install_requires=["setuptools", "jsonschema", "pyyaml"],
     zip_safe=True,
-    maintainer="user",
-    maintainer_email="user@todo.todo",
+    maintainer="hieu2",
+    maintainer_email="hieu2@example.com",
     description="LLM Gateway layer for Yaskawa GP4 robot.",
-    license="TODO: License declaration",
+    license="Apache-2.0",
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "llm_gateway_node = llm_gateway.llm_gateway_node:main",
-            "llm_text_cli = llm_gateway.text_cli:main_text",
-            "llm_raw_cli = llm_gateway.text_cli:main_raw",
-            "gp4_cmd = llm_gateway.text_cli:main_raw",
         ],
     },
 )

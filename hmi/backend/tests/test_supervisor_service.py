@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import unittest
+import os
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest.mock import patch
 
 from hmi.backend.api.contracts import CommandExecutionResultModel
 from hmi.backend.domain.models import (
@@ -60,6 +62,8 @@ class FakeSupervisorAdapter:
         self.confirm_calls: list[dict] = []
         self.abort_calls: list[dict] = []
         self.get_pose_calls: list[dict] = []
+        self.start_traj_mode_calls = 0
+        self.stop_motion_calls = 0
         self._runtime = RuntimeSnapshot(
             system_state=SystemRuntimeState.NORMAL,
             blocking=False,
@@ -153,6 +157,16 @@ class FakeSupervisorAdapter:
                 freshness_state=TelemetryFreshnessState.STALE,
                 active=False,
             ),
+            TelemetrySourceSnapshot(
+                name="review_intent_service",
+                label="ReviewIntent service",
+                topic="/llm_gateway/review_intent",
+                last_seen_at=None,
+                freshness_threshold_sec=3.0,
+                freshness_state=TelemetryFreshnessState.FRESH,
+                active=True,
+                detail="ready at /llm_gateway/review_intent",
+            ),
         ]
         self._confirm_result = {
             "accepted": True,
@@ -161,6 +175,7 @@ class FakeSupervisorAdapter:
             "summary": "Sim execution completed successfully.",
             "dispatchedToRos": True,
         }
+        self._review_result: dict[str, Any] | None = None
         self._preflight_result = {
             "accepted": True,
             "mode": "sim",
@@ -194,7 +209,85 @@ class FakeSupervisorAdapter:
 
     def submit_text_for_review(self, **kwargs):
         self.submit_calls.append(kwargs)
-        return {"accepted": True, "adapter": "fake-review"}
+        if self._review_result is not None:
+            return deepcopy(self._review_result)
+        semantic_ir = self._default_review_semantic_ir(kwargs.get("raw_text", ""))
+        result = {"accepted": True, "adapter": "fake-review"}
+        if semantic_ir is not None:
+            result["semanticIr"] = semantic_ir
+        return result
+
+    def _default_review_semantic_ir(self, raw_text: str) -> dict[str, Any] | None:
+        normalized = " ".join(str(raw_text or "").strip().lower().split())
+        if normalized in {"home", "go home", "move home", "return home"}:
+            return {"intent": "go_home"}
+        if normalized in {"stop", "stop motion", "cancel motion", "halt"}:
+            return {"intent": "stop"}
+        if normalized in {"get pose", "current pose", "where is robot", "where is tcp"}:
+            return {"intent": "get_pose"}
+        if normalized in {"move up 10 cm", "move up 0.1 m", "move up 1 cm"}:
+            value = (
+                0.1
+                if normalized.endswith("0.1 m")
+                else (10.0 if normalized.endswith("10 cm") else 1.0)
+            )
+            unit = "m" if normalized.endswith("0.1 m") else "cm"
+            return {
+                "intent": "move_relative",
+                "delta": {"x": 0.0, "y": 0.0, "z": value},
+                "linear_unit": unit,
+                "reference_frame": "base_link",
+            }
+        if normalized in {"move down 1 cm", "move down 5 cm"}:
+            value = -5.0 if normalized.endswith("5 cm") else -1.0
+            return {
+                "intent": "move_relative",
+                "delta": {"x": 0.0, "y": 0.0, "z": value},
+                "linear_unit": "cm",
+                "reference_frame": "base_link",
+            }
+        if normalized == "move joint 2 5 deg":
+            return {
+                "intent": "move_joint",
+                "joint_index": 1,
+                "joint_angle": 5.0,
+                "angular_unit": "deg",
+            }
+        if normalized == "move joint 2 +5 deg":
+            return {
+                "intent": "move_joint",
+                "joint_index": 1,
+                "joint_angle": 10.0,
+                "angular_unit": "deg",
+            }
+        if normalized in {
+            "home, wait 1 s, then move up 1 cm",
+            "home, wait 1 s, then move down 1 cm",
+        }:
+            z_delta = -1.0 if "move down" in normalized else 1.0
+            return {
+                "intent": "sequence",
+                "steps": [
+                    {"intent": "go_home"},
+                    {"intent": "wait", "wait_duration_sec": 1.0},
+                    {
+                        "intent": "move_relative",
+                        "delta": {"x": 0.0, "y": 0.0, "z": z_delta},
+                        "linear_unit": "cm",
+                        "reference_frame": "base_link",
+                    },
+                ],
+            }
+        if normalized in {"write gp4", "vẽ chữ gp4"}:
+            return {
+                "intent": "draw_text",
+                "text": "GP4",
+                "units": "mm",
+                "frame_id": "base_link",
+                "workplane": {"mode": "tool"},
+                "font": {"type": "single_stroke_builtin", "height": 20},
+            }
+        return None
 
     def confirm_command(self, **kwargs):
         self.confirm_calls.append(kwargs)
@@ -225,6 +318,14 @@ class FakeSupervisorAdapter:
         if self._current_pose is None:
             return None
         return deepcopy(self._current_pose)
+
+    def start_traj_mode(self) -> dict[str, Any]:
+        self.start_traj_mode_calls += 1
+        return {"accepted": True, "message": "start_traj_mode called"}
+
+    def stop_motion(self) -> dict[str, Any]:
+        self.stop_motion_calls += 1
+        return {"accepted": True, "message": "stop_motion called"}
 
     def set_runtime(
         self, system_state: SystemRuntimeState, *, mode: RuntimeMode = RuntimeMode.SIM
@@ -268,6 +369,38 @@ class FakeSupervisorAdapter:
     def set_confirm_result(self, **kwargs) -> None:
         self._confirm_result.update(kwargs)
 
+    def set_review_result(self, **kwargs) -> None:
+        self._review_result = dict(kwargs)
+
+    def set_review_intent_ready(self, ready: bool) -> None:
+        next_statuses: list[TelemetrySourceSnapshot] = []
+        for source in self._source_statuses:
+            if source.name != "review_intent_service":
+                next_statuses.append(source)
+                continue
+            next_statuses.append(
+                TelemetrySourceSnapshot(
+                    name=source.name,
+                    label=source.label,
+                    topic=source.topic,
+                    last_seen_at=source.last_seen_at,
+                    freshness_threshold_sec=source.freshness_threshold_sec,
+                    freshness_state=(
+                        TelemetryFreshnessState.FRESH
+                        if ready
+                        else TelemetryFreshnessState.STALE
+                    ),
+                    preferred=source.preferred,
+                    active=ready,
+                    detail=(
+                        "ready at /llm_gateway/review_intent"
+                        if ready
+                        else "waiting for /llm_gateway/review_intent"
+                    ),
+                )
+            )
+        self._source_statuses = next_statuses
+
     def set_preflight(self, *, accepted: bool, reasons: list[str]) -> None:
         self._preflight_result = {
             "accepted": accepted,
@@ -284,6 +417,13 @@ class FakeSupervisorAdapter:
 
 class SupervisorServiceTests(unittest.TestCase):
     def setUp(self) -> None:
+        self._review_token_patch = patch.dict(
+            os.environ,
+            {"GP4_REVIEW_INTENT_TOKEN": "test-review-secret"},
+            clear=False,
+        )
+        self._review_token_patch.start()
+        self.addCleanup(self._review_token_patch.stop)
         self.temp_dir = TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
         self.audit = AuditService(Path(self.temp_dir.name) / "audit.sqlite3")
@@ -311,6 +451,110 @@ class SupervisorServiceTests(unittest.TestCase):
 
     def test_ros_adapter_property_exposes_constructor_instance(self) -> None:
         self.assertIs(self.supervisor.ros_adapter, self.adapter)
+
+    def test_capabilities_block_text_submission_when_review_intent_is_not_ready(
+        self,
+    ) -> None:
+        self.adapter.set_review_intent_ready(False)
+
+        overlay = self.supervisor.snapshot_overlay(self.session_id, self.operator_id)
+
+        self.assertFalse(overlay["capabilities"]["canSubmitCommands"])
+
+    def test_review_intent_outage_preserves_existing_controller_lease(self) -> None:
+        lease_token = self._acquire_lease()
+        self.adapter.set_review_intent_ready(False)
+
+        overlay = self.supervisor.snapshot_overlay(self.session_id, self.operator_id)
+
+        self.assertFalse(overlay["capabilities"]["canSubmitCommands"])
+        self.assertTrue(overlay["capabilities"]["canConfirmCommands"])
+        self.assertTrue(overlay["lease"]["ownsControl"])
+        self.assertEqual(overlay["lease"]["leaseToken"], lease_token)
+
+    def test_hardware_capabilities_require_review_intent_token(self) -> None:
+        supervisor = SupervisorService(
+            audit_service=self.audit,
+            session_lock_service=self.session_lock,
+            ros_adapter=self.adapter,
+            confirmation_window_sec=5.0,
+            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
+        )
+        supervisor.bind_telemetry_service(self.telemetry)
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+
+        with patch.dict(os.environ, {}, clear=True):
+            overlay = supervisor.snapshot_overlay(self.session_id, self.operator_id)
+
+        self.assertFalse(overlay["capabilities"]["canSubmitCommands"])
+        self.assertFalse(overlay["capabilities"]["commandIngressAvailable"])
+
+    def test_sim_capabilities_require_review_intent_token(self) -> None:
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.SIM)
+
+        with patch.dict(os.environ, {}, clear=True):
+            overlay = self.supervisor.snapshot_overlay(
+                self.session_id,
+                self.operator_id,
+            )
+
+        self.assertFalse(overlay["capabilities"]["canSubmitCommands"])
+        self.assertFalse(overlay["capabilities"]["commandIngressAvailable"])
+
+    def test_hardware_capabilities_allow_review_when_token_configured(self) -> None:
+        supervisor = SupervisorService(
+            audit_service=self.audit,
+            session_lock_service=self.session_lock,
+            ros_adapter=self.adapter,
+            confirmation_window_sec=5.0,
+            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
+        )
+        supervisor.bind_telemetry_service(self.telemetry)
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+
+        with patch.dict(os.environ, {"GP4_REVIEW_INTENT_TOKEN": "review-token"}):
+            overlay = supervisor.snapshot_overlay(self.session_id, self.operator_id)
+
+        self.assertTrue(overlay["capabilities"]["canSubmitCommands"])
+        self.assertTrue(overlay["capabilities"]["commandIngressAvailable"])
+
+    def test_raw_text_rejects_when_gateway_review_returns_no_semantic_ir(self) -> None:
+        self.adapter.set_review_result(
+            accepted=False,
+            adapter="fake-gateway-review",
+            error="review_intent service not ready",
+        )
+        lease_token = self._acquire_lease()
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="home",
+            mode="sim",
+        )
+
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
+        self.assertIn("review_intent", response["reason"])
+        self.assertEqual(self.adapter.confirm_calls, [])
+
+    def test_external_structured_semantic_intent_is_rejected(self) -> None:
+        lease_token = self._acquire_lease()
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="",
+            structured_intent={"intent": "go_home"},
+            mode="sim",
+        )
+
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
+        self.assertIn("structuredIntent", response["reason"])
+        self.assertEqual(self.adapter.submit_calls, [])
 
     def test_command_rejected_without_valid_control_lease(self) -> None:
         with self.assertRaises(ForbiddenActionError):
@@ -356,6 +600,25 @@ class SupervisorServiceTests(unittest.TestCase):
         )
         self.assertFalse(response["accepted"])
         self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
+        self.assertEqual(self.adapter.confirm_calls, [])
+
+    def test_review_failure_does_not_fall_back_to_local_motion_parser(self) -> None:
+        self.adapter.set_review_result(
+            accepted=False,
+            error="review service unavailable",
+        )
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="move up 10 cm",
+            mode="sim",
+        )
+
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
+        self.assertIn("review service unavailable", response["reason"])
         self.assertEqual(self.adapter.confirm_calls, [])
 
     def test_cartesian_text_intent_uses_base_link_for_sim_move_rel(self) -> None:
@@ -441,6 +704,130 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertEqual(response["command"]["lifecycleState"], "NEEDS_CONFIRMATION")
         self.assertEqual(self.adapter.confirm_calls, [])
 
+    def test_gateway_review_semantic_ir_drives_hmi_parse_without_execution(
+        self,
+    ) -> None:
+        self.adapter.set_review_result(
+            accepted=True,
+            adapter="fake-gateway-review",
+            semanticIr={"intent": "move_named_pose", "pose_name": "ready"},
+        )
+        lease_token = self._acquire_lease()
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="move to ready pose",
+            mode="sim",
+        )
+
+        self.assertTrue(response["accepted"], msg=response)
+        self.assertEqual(self.adapter.confirm_calls, [])
+        self.assertEqual(len(self.adapter.submit_calls), 1)
+        parsed = response["command"]["parsedIntent"]
+        self.assertEqual(parsed["source"], "structured")
+        self.assertEqual(response["command"]["intentSource"], "text")
+        self.assertEqual(
+            response["command"]["structuredIntent"],
+            {"intent": "move_named_pose", "pose_name": "ready"},
+        )
+        self.assertEqual(parsed["action"], "PTP")
+        normalized = parsed["normalizedCommand"]
+        self.assertEqual(normalized["primitive_type"], "PTP")
+        self.assertEqual(normalized["planner_id"], "PILZ_PTP")
+        self.assertAlmostEqual(normalized["joint_target"][0], 1.938101818035138)
+        self.assertEqual(response["command"]["lifecycleState"], "NEEDS_CONFIRMATION")
+
+    def test_gateway_review_sequence_semantic_ir_enters_sequence_path(
+        self,
+    ) -> None:
+        self.adapter.set_review_result(
+            accepted=True,
+            adapter="fake-gateway-review",
+            semanticIr={
+                "intent": "sequence",
+                "steps": [
+                    {"intent": "go_home"},
+                    {"intent": "wait", "wait_duration_sec": 1.0},
+                ],
+            },
+        )
+        lease_token = self._acquire_lease()
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="perform the reviewed plan",
+            mode="sim",
+        )
+
+        self.assertTrue(response["accepted"], msg=response)
+        self.assertEqual(response["jobType"], "sequence")
+        self.assertEqual(len(self.adapter.submit_calls), 1)
+        self.assertEqual(self.adapter.confirm_calls, [])
+        self.assertEqual(
+            [step["parsedIntent"]["action"] for step in response["sequence"]["steps"]],
+            ["HOME", "WAIT"],
+        )
+        self.assertEqual(
+            response["sequence"]["structuredIntent"]["intent"],
+            "sequence",
+        )
+        self.assertEqual(response["sequence"]["intentSource"], "text")
+        self.assertTrue(
+            all(step["intentSource"] == "text" for step in response["sequence"]["steps"])
+        )
+
+    def test_gateway_review_named_pose_sequence_confirms_in_order(
+        self,
+    ) -> None:
+        self.adapter.set_review_result(
+            accepted=True,
+            adapter="fake-gateway-review",
+            semanticIr={
+                "intent": "sequence",
+                "steps": [
+                    {"intent": "move_named_pose", "pose_name": "poseA"},
+                    {"intent": "move_named_pose", "pose_name": "poseB"},
+                    {"intent": "go_home"},
+                ],
+            },
+        )
+        lease_token = self._acquire_lease()
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="move to poseA then poseB then home",
+            mode="sim",
+        )
+
+        self.assertTrue(response["accepted"], msg=response)
+        self.assertEqual(response["jobType"], "sequence")
+        self.assertEqual(self.adapter.confirm_calls, [])
+        self.assertEqual(
+            [step["parsedIntent"]["action"] for step in response["sequence"]["steps"]],
+            ["PTP", "PTP", "HOME"],
+        )
+
+        confirm_response = self.supervisor.confirm_sequence(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            sequence_id=response["sequenceId"],
+            plan_fingerprint=response["sequence"]["planFingerprint"],
+        )
+
+        self.assertTrue(confirm_response["accepted"])
+        self.assertEqual(confirm_response["sequence"]["finalState"], "SUCCEEDED")
+        self.assertEqual(
+            [call["parsed_intent"]["action"] for call in self.adapter.confirm_calls],
+            ["PTP", "PTP", "HOME"],
+        )
+
     def test_sim_auto_confirm_executes_immediately_when_enabled(self) -> None:
         supervisor = SupervisorService(
             audit_service=self.audit,
@@ -514,6 +901,136 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertEqual(response["command"]["lifecycleState"], "NEEDS_CONFIRMATION")
         self.assertEqual(response["command"]["mode"], "hardware")
 
+    def test_servo_start_requires_hardware_mode_before_adapter_call(self) -> None:
+        supervisor = SupervisorService(
+            audit_service=self.audit,
+            session_lock_service=self.session_lock,
+            ros_adapter=self.adapter,
+            confirmation_window_sec=5.0,
+            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
+        )
+        supervisor.bind_telemetry_service(self.telemetry)
+        lease_token = self._acquire_lease()
+
+        response = supervisor.start_servo(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+        )
+
+        self.assertFalse(response["accepted"])
+        self.assertIn("hardware mode", response["message"])
+        self.assertEqual(self.adapter.start_traj_mode_calls, 0)
+
+    def test_servo_start_requires_controller_lease_before_adapter_call(self) -> None:
+        supervisor = SupervisorService(
+            audit_service=self.audit,
+            session_lock_service=self.session_lock,
+            ros_adapter=self.adapter,
+            confirmation_window_sec=5.0,
+            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
+        )
+        supervisor.bind_telemetry_service(self.telemetry)
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+
+        with self.assertRaises(ForbiddenActionError):
+            supervisor.start_servo(
+                session_id=self.session_id,
+                operator_id=self.operator_id,
+                lease_token=None,
+            )
+        self.assertEqual(self.adapter.start_traj_mode_calls, 0)
+
+    def test_servo_hold_calls_adapter_even_when_hardware_gate_is_locked(
+        self,
+    ) -> None:
+        lease_token = self._acquire_lease()
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+
+        response = self.supervisor.hold_servo(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+        )
+
+        self.assertTrue(response["accepted"])
+        self.assertEqual(self.adapter.stop_motion_calls, 1)
+
+    def test_servo_hold_calls_adapter_even_when_hardware_preflight_fails(
+        self,
+    ) -> None:
+        supervisor = SupervisorService(
+            audit_service=self.audit,
+            session_lock_service=self.session_lock,
+            ros_adapter=self.adapter,
+            confirmation_window_sec=5.0,
+            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
+        )
+        supervisor.bind_telemetry_service(self.telemetry)
+        lease_token = self._acquire_lease()
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+        self.adapter.set_preflight(accepted=False, reasons=["stale joint state"])
+
+        response = supervisor.hold_servo(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+        )
+
+        self.assertTrue(response["accepted"])
+        self.assertEqual(self.adapter.stop_motion_calls, 1)
+
+    def test_servo_start_calls_adapter_only_after_hardware_gate_and_lease(
+        self,
+    ) -> None:
+        supervisor = SupervisorService(
+            audit_service=self.audit,
+            session_lock_service=self.session_lock,
+            ros_adapter=self.adapter,
+            confirmation_window_sec=5.0,
+            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
+        )
+        supervisor.bind_telemetry_service(self.telemetry)
+        lease_token = self._acquire_lease()
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+
+        response = supervisor.start_servo(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+        )
+
+        self.assertTrue(response["accepted"])
+        self.assertEqual(self.adapter.start_traj_mode_calls, 1)
+
+    def test_reviewed_sequence_ignores_stale_review_intent_event_source(
+        self,
+    ) -> None:
+        lease_token = self._acquire_lease()
+        self.adapter.set_source_freshness(stale_names={"review_intent_service"})
+        self.adapter.set_review_result(
+            accepted=True,
+            adapter="fake-gateway-review",
+            semanticIr={
+                "intent": "sequence",
+                "steps": [
+                    {"intent": "go_home"},
+                    {"intent": "wait", "wait_duration_sec": 1.0},
+                ],
+            },
+        )
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="home then wait 1 s",
+            mode="sim",
+        )
+
+        self.assertTrue(response["accepted"], response.get("reason"))
+        self.assertEqual(response["jobType"], "sequence")
+
     def test_missing_structured_fields_fail_closed_with_operator_visible_reason(
         self,
     ) -> None:
@@ -531,7 +1048,26 @@ class SupervisorServiceTests(unittest.TestCase):
         )
         self.assertFalse(response["accepted"])
         self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
-        self.assertIn("joint_angle", response["reason"])
+        self.assertIn("structuredIntent is not accepted", response["reason"])
+
+    def test_external_structured_primitive_type_payload_is_rejected(self) -> None:
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="",
+            structured_intent={
+                "primitive_type": "MOVE_JOINT",
+                "joint_index": 1,
+                "joint_angle": 0.1,
+            },
+            mode="sim",
+        )
+
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
+        self.assertIn("structuredIntent is not accepted", response["reason"])
 
     def test_preflight_failures_reject_command_with_explicit_reason(self) -> None:
         lease_token = self._acquire_lease()
@@ -1007,9 +1543,8 @@ class SupervisorServiceTests(unittest.TestCase):
             )
 
         output = "\n".join(captured.output)
-        self.assertIn("[HMI CMD] parse.rejected", output)
         self.assertIn("[HMI CMD] terminal.rejected", output)
-        self.assertIn("reason=intent is ambiguous or unsupported", output)
+        self.assertIn("review_intent did not accept this command", output)
 
     def test_text_sequence_creates_parent_and_child_steps(self) -> None:
         lease_token = self._acquire_lease()
@@ -1081,18 +1616,23 @@ class SupervisorServiceTests(unittest.TestCase):
     def test_structured_draw_shape_enters_sequence_path_and_preserves_macro_summary(
         self,
     ) -> None:
-        lease_token = self._acquire_lease()
-        response = self.supervisor.submit_intent(
-            session_id=self.session_id,
-            operator_id=self.operator_id,
-            lease_token=lease_token,
-            structured_intent={
+        self.adapter.set_review_result(
+            accepted=True,
+            adapter="fake-gateway-review",
+            semanticIr={
                 "intent": "draw_shape",
                 "shape_type": "circle",
                 "units": "mm",
                 "frame_id": "base_link",
                 "params": {"radius": 20},
             },
+        )
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="draw a 20 mm circle",
             mode="sim",
         )
 
@@ -1145,13 +1685,42 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertEqual(response["sequence"]["planSummary"]["macroName"], "draw_text")
         self.assertEqual(response["sequence"]["planSummary"]["text"], "GP4")
 
-    def test_draw_plan_only_is_rejected_as_sequence(self) -> None:
+    def test_reviewed_draw_text_over_sequence_budget_rejects_before_execution(
+        self,
+    ) -> None:
+        self.adapter.set_review_result(
+            accepted=True,
+            adapter="fake-gateway-review",
+            semanticIr={
+                "intent": "draw_text",
+                "text": "GP4GP4GP4",
+                "units": "mm",
+                "frame_id": "base_link",
+                "workplane": {"mode": "tool"},
+                "font": {"type": "single_stroke_builtin", "height": 20},
+            },
+        )
         lease_token = self._acquire_lease()
+
         response = self.supervisor.submit_intent(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
-            structured_intent={
+            raw_text="write the long GP4 label",
+            mode="sim",
+        )
+
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["jobType"], "sequence")
+        self.assertEqual(response["sequence"]["finalState"], "REJECTED")
+        self.assertIn("sequence_length", response["reason"])
+        self.assertEqual(self.adapter.confirm_calls, [])
+
+    def test_draw_plan_only_is_rejected_as_sequence(self) -> None:
+        self.adapter.set_review_result(
+            accepted=True,
+            adapter="fake-gateway-review",
+            semanticIr={
                 "intent": "draw_text",
                 "text": "GP4",
                 "units": "mm",
@@ -1159,6 +1728,13 @@ class SupervisorServiceTests(unittest.TestCase):
                 "execution_mode": "plan_only",
                 "font": {"type": "single_stroke_builtin", "height": 20},
             },
+        )
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="write GP4 as a plan-only drawing",
             mode="sim",
         )
 

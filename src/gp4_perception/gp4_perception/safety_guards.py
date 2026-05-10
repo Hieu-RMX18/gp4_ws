@@ -8,6 +8,9 @@ Three guards:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Any
+
 # SSOT schema for extrinsics.yaml — used by validators and safety chain.
 EXTRINSICS_SCHEMA = {
     "hand_eye_extrinsics": {
@@ -22,9 +25,6 @@ EXTRINSICS_SCHEMA = {
         "workspace_distance_m": float,
     }
 }
-
-from datetime import datetime, timezone
-from typing import Any
 
 
 def check_calibration_freshness(

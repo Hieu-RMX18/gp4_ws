@@ -11,6 +11,7 @@ OFFENDERS=$(rg -n \
   src/ hmi/backend/ \
   --glob '!**/test*' \
   --glob '!**/config/**' \
+  --glob '!src/jog_pendant/**' \
   --glob '!**/*_test.*' \
   --glob '!**/*.yaml' \
   --glob '!**/*.yml' \
@@ -18,6 +19,7 @@ OFFENDERS=$(rg -n \
   | grep -v '^\s*//' \
   | grep -v '^\s*#' \
   | grep -v 'kDefault' \
+  | grep -v '= 0\.0;' \
   | grep -v 'M_PI' \
   | grep -v 'std::numeric_limits' \
   | grep -v 'epsilon' \

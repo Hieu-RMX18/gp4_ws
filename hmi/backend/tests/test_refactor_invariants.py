@@ -6,9 +6,12 @@ entrypoints that must survive all refactor waves unchanged.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.util
+import io
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -32,7 +35,7 @@ class TestPackageImports(unittest.TestCase):
         self.assertIn("def main", source)
 
     def test_intent_router_importable(self) -> None:
-        mod = importlib.import_module("llm_gateway.intent_router")
+        mod = importlib.import_module("llm_gateway.intent_engine")
         self.assertTrue(hasattr(mod, "IntentRouter"))
         self.assertTrue(hasattr(mod, "RouteResult"))
 
@@ -53,6 +56,68 @@ class TestPackageImports(unittest.TestCase):
         self.assertTrue(hasattr(mod, "JogService"))
 
 
+class TestMigrationDocs(unittest.TestCase):
+    """Verify migration reports stay in docs/ after W8 cleanup."""
+
+    def test_migration_reports_are_not_root_level_files(self) -> None:
+        root_reports = sorted(_REPO_ROOT.glob("MIGRATION-W*.md"))
+        self.assertEqual(root_reports, [])
+
+    def test_migration_reports_live_under_docs(self) -> None:
+        docs_reports = sorted((_REPO_ROOT / "docs").glob("MIGRATION-W*.md"))
+        self.assertGreaterEqual(len(docs_reports), 1)
+
+    def test_local_hardware_gate_evidence_is_ignored(self) -> None:
+        result = subprocess.run(
+            ["git", "check-ignore", "-q", "hmi/data/hardware_gate.local.json"],
+            cwd=_REPO_ROOT,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+
+
+class TestPackageMetadata(unittest.TestCase):
+    """Verify ROS package metadata no longer contains scaffold placeholders."""
+
+    def test_package_metadata_has_no_todo_placeholders(self) -> None:
+        metadata_files = [
+            *_REPO_ROOT.glob("src/*/package.xml"),
+            *_REPO_ROOT.glob("src/*/setup.py"),
+        ]
+
+        offenders = []
+        for path in sorted(metadata_files):
+            text = path.read_text(encoding="utf-8")
+            if (
+                "TODO: License declaration" in text
+                or "user@todo.todo" in text
+                or "hieu@todo.todo" in text
+                or "todo@example.com" in text
+                or 'maintainer="user"' in text
+                or ">user</maintainer>" in text
+            ):
+                offenders.append(str(path.relative_to(_REPO_ROOT)))
+
+        self.assertEqual(offenders, [])
+
+
+class TestSafetyChainValidatorContract(unittest.TestCase):
+    """Pin the machine-readable fail-closed calibration status used by CI."""
+
+    def test_uncalibrated_extrinsics_has_dedicated_status(self) -> None:
+        module = importlib.import_module("tools.validate_safety_chain")
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stderr(stderr):
+            status = module.main()
+
+        self.assertEqual(status, 2)
+        self.assertIn(
+            "validate_safety_chain_status=fail_closed_extrinsics_not_calibrated",
+            stderr.getvalue(),
+        )
+
+
 class TestHmiTrustBoundary(unittest.TestCase):
     """Verify HMI safety boundary elements exist."""
 
@@ -60,6 +125,7 @@ class TestHmiTrustBoundary(unittest.TestCase):
         mod = importlib.import_module("hmi.backend.services.hardware_gate")
         self.assertTrue(hasattr(mod, "HardwareGateEvaluator"))
         self.assertTrue(hasattr(mod, "HARDWARE_GATE_ENV"))
+        self.assertTrue(hasattr(mod, "HARDWARE_GATE_PATH_ENV"))
 
     def test_session_lock_service_exists(self) -> None:
         mod = importlib.import_module("hmi.backend.services.session_lock_service")

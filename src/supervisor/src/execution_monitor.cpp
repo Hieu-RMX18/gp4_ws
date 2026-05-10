@@ -466,7 +466,7 @@ ExecutionMonitor::TrackedGoal ExecutionMonitor::build_default_goal(
     const unique_identifier_msgs::msg::UUID &goal_id,
     const rclcpp::Time &accepted_time) const {
   ExecuteMotionGoal synthetic_goal;
-  synthetic_goal.velocity_scale = 1.0;
+  synthetic_goal.velocity_scale = kDefaultTrackedVelocityScale;
   return build_tracked_goal(goal_id, synthetic_goal, accepted_time);
 }
 

@@ -4,7 +4,7 @@ import pytest
 import yaml
 from pathlib import Path
 
-from llm_gateway.semantic_validator import SemanticValidator
+from llm_gateway.intent_engine import SemanticValidator
 
 
 def _load_workspace_bounds() -> dict:

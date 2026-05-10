@@ -263,6 +263,7 @@ def generate_launch_description():
                 ),
                 "require_planning_scene": True,
                 # Motion limits from safety_rules.yaml
+                "safety_rules_yaml_path": _safety_yaml_path,
                 "max_velocity_scale": _motion_limits.get("max_velocity_scale", 0.06),
                 "max_acceleration_scale": _motion_limits.get(
                     "max_acceleration_scale", 0.06

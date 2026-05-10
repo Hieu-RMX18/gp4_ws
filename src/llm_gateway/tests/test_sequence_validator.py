@@ -40,7 +40,7 @@ class FakeSemanticValidator:
 
 
 def _validator(**kwargs):
-    from llm_gateway.sequence_validator import SequenceValidator
+    from llm_gateway.intent_engine import SequenceValidator
 
     defaults = {
         "schema_validator": FakeSchemaValidator(),
@@ -99,7 +99,7 @@ def test_single_valid_stop():
 
 
 def test_rejects_empty_sequence():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -108,7 +108,7 @@ def test_rejects_empty_sequence():
 
 
 def test_rejects_non_list_input():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -117,7 +117,7 @@ def test_rejects_non_list_input():
 
 
 def test_rejects_non_dict_step():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -129,7 +129,7 @@ def test_rejects_non_dict_step():
 
 
 def test_rejects_step_missing_primitive_type():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -144,7 +144,7 @@ def test_rejects_step_missing_primitive_type():
 
 
 def test_rejects_sequence_longer_than_limit():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator(max_sequence_length=2)
 
@@ -164,7 +164,7 @@ def test_rejects_sequence_longer_than_limit():
 
 
 def test_rejects_stop_before_final_step():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -181,7 +181,7 @@ def test_rejects_stop_before_final_step():
 
 
 def test_rejects_stop_when_not_sole_primitive():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -201,7 +201,7 @@ def test_rejects_stop_when_not_sole_primitive():
 
 
 def test_rejects_query_primitive_in_sequence():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -221,7 +221,7 @@ def test_rejects_query_primitive_in_sequence():
 
 
 def test_rejects_missing_reference_frame_for_cartesian_step():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -240,7 +240,7 @@ def test_rejects_missing_reference_frame_for_cartesian_step():
 
 
 def test_rejects_missing_reference_frame_for_ptp():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -259,7 +259,7 @@ def test_rejects_missing_reference_frame_for_ptp():
 
 
 def test_rejects_missing_reference_frame_for_cartesian_path():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -298,7 +298,7 @@ def test_accepts_cartesian_path_with_reference_frame():
 
 
 def test_rejects_unsupported_reference_frame():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -321,7 +321,7 @@ def test_rejects_unsupported_reference_frame():
 
 def test_rejects_mixed_reference_frames():
     """Different frames across steps are rejected even if each is individually valid."""
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -351,7 +351,7 @@ def test_rejects_mixed_reference_frames():
 
 
 def test_rejects_excessive_cumulative_move_rel_distance():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator(max_cumulative_move_rel_distance_m=0.15)
 
@@ -409,7 +409,7 @@ def test_accepts_cumulative_move_rel_within_budget():
 
 
 def test_surfaces_schema_stage_and_step():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -430,7 +430,7 @@ def test_surfaces_schema_stage_and_step():
 
 
 def test_surfaces_normalize_stage_and_step():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -446,7 +446,7 @@ def test_surfaces_normalize_stage_and_step():
 
 
 def test_surfaces_semantic_stage_and_step():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     validator = _validator()
 
@@ -548,7 +548,7 @@ def test_diagnostics_mention_not_yet_implemented():
 
 
 def test_error_includes_stage_and_reason_in_str():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     err = SequenceValidationError("frame_policy", "unsupported frame", step_index=2)
 
@@ -560,7 +560,7 @@ def test_error_includes_stage_and_reason_in_str():
 
 
 def test_error_without_step_index():
-    from llm_gateway.sequence_validator import SequenceValidationError
+    from llm_gateway.intent_engine import SequenceValidationError
 
     err = SequenceValidationError("sequence_length", "too long")
 

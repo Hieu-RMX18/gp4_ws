@@ -11,6 +11,6 @@ bool is_finite_vector(const std::vector<double> &values);
 bool validate_trajectory_structure(
     const trajectory_msgs::msg::JointTrajectory &traj, std::string &reason);
 
-}  // namespace motion_core
+} // namespace motion_core
 
-#endif  // MOTION_CORE__TRAJECTORY_VALIDATOR_HPP_
+#endif // MOTION_CORE__TRAJECTORY_VALIDATOR_HPP_

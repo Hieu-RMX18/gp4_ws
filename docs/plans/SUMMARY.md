@@ -141,4 +141,15 @@ Do not skip ahead. Wave dependencies are real — skipping creates rework.
 
 **Reliability tag:** `[VERIFIED]` for the verified-facts table (every row has file:line evidence from discovery output 2026-05-03). `[NEEDS-VALIDATION]` for the effort estimates (they assume codebase is frozen during rebuild — every external commit shifts them). The 5-mechanism anti-bloat design is `[VERIFIED]` against software engineering principles, not against any specific tool config; agent must adapt commands to the local environment.
 
+## Rebuild completion status (2026-05-10)
+
+All waves W0–W8 are **software-verified**. The remaining blockers are physical hardware:
+
+1. D435i hand-eye calibration (extrinsics.yaml still `<NOT_CALIBRATED>`).
+2. YRC1000micro read-only hardware validation.
+3. Hardware execution authorization.
+
+The deprecated `docs/Rebuild_Agent_v2.md` (955-line pre-rebuild agent harness) has been removed.
+See `docs/PROJECT_COMPLETION_REPORT.md` for the full completion report.
+
 End of SUMMARY.

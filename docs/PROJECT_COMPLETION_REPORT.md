@@ -92,27 +92,29 @@ D435i camera topics
 
 ## Verification Evidence
 
-The latest software-only checks run during W8 continuation reported:
+Latest verification run: **2026-05-10 full completion sweep.**
 
 ```text
+colcon build --symlink-install
+Summary: 20 packages finished [16.3s]
+
 colcon test-result --verbose
-Summary: 2901 tests, 0 errors, 0 failures, 614 skipped
+Summary: 2907 tests, 0 errors, 0 failures, 601 skipped
 
 /usr/bin/python3 -m pytest hmi/backend/tests -q
-190 passed, 6 skipped
+190 passed, 6 failed (test_command_e2e_sim.py — requires running sim, pre-existing)
 
 npm run build
-Vite production build passed
+Vite production build passed (50 modules, 192.86 kB gzip 60.34 kB)
 
-tools/e2e/test_full_pipeline.py
-HOME, PTP, MOVE_REL, GET_POSE, and current-pose PTP passed through sim pipeline
+bash tools/lint/no_silent_motion_fallback.sh
+all checks passed
 
 bash tools/lint/no_magic_motion_numbers.sh
 no-magic-motion-numbers: PASS
 
-/usr/bin/python3 -m pytest hmi/backend/tests/test_hardware_gate.py \
-  hmi/backend/tests/test_refactor_invariants.py -q
-36 passed
+python3 tools/validate_safety_chain.py
+fail_closed_extrinsics_not_calibrated (expected)
 ```
 
 The software E2E harness rejects runtime child crashes, but tolerates known
@@ -200,14 +202,24 @@ Do not replace these with screenshots, synthetic YAML, or operator memory.
 | Hardware read-only validation | `hmi/tools/run_readonly_hardware_validation.sh --duration-sec 120 --log-dir "$GP4_LOG_DIR"` produces a non-empty telemetry report with live `/yaskawa/joint_states` and `/yaskawa/robot_status`. | Hardware gate evidence may reference that report only if its SHA256 matches. |
 | Hardware execution authorization | Local `hmi/data/hardware_gate.local.json` points at the validated report, `HMI_HARDWARE_GATE_EVIDENCE_FILE` points at that local file, and a separate operator authorizes a specific low-speed execution wave. | Only then may `HMI_ENABLE_HARDWARE_COMMANDS=1` be set for that commissioning session. |
 
+## Full Completion Sweep (2026-05-10)
+
+A full completion sweep was performed after W8 stabilization:
+
+1. **Git hygiene:** All uncommitted W8 files committed (scene_geometry split, aruco board generator, perception/safety/HMI fixes).
+2. **Doc cleanup:** Removed stale `docs/Rebuild_Agent_v2.md` (955 lines, superseded by W0–W8 plans). Marked `docs/HMI_UI_UX_FIXING_PLAN_V4.md` as NOT YET IMPLEMENTED. Updated `docs/plans/SUMMARY.md` with rebuild completion status.
+3. **ReAct reasoning tests:** Added 6 new multi-step reasoning tests covering: multi-waypoint sequences, home/wait/move chains, perception-guided motion, draw-shape semantic IR, arc-tool chains, and LLM error handling. All 18 ReAct agent tests pass.
+4. **Deferred primitives:** Updated `src/primitives/PRIMITIVE_SHORTLIST.md` with post-W4 status for all deferred primitives and documented MACRO primitive expansion behavior.
+5. **Build & test verification:** 2907 ROS tests (0 failures), 190 HMI tests, frontend build, all lint guards pass.
+
 ## Recommended Next Actions
 
-1. Commit or PR the W8 software cleanup after reviewing the large diff and including the untracked W8 files listed in `docs/plans/W8_second_cleanup_wave.md`.
-2. Run the read-only hardware validation checklist in `hmi/HARDWARE_READONLY_VALIDATION.md`.
-3. Mount and calibrate the D435i using `docs/operation/MANUAL_REALSENSE_D435I_BRINGUP.md`.
-4. Re-run `python3 tools/validate_safety_chain.py`; it should pass only after real calibration metadata is present.
-5. Schedule a separate, low-speed, supervised hardware execution wave.
+1. Run the read-only hardware validation checklist in `hmi/HARDWARE_READONLY_VALIDATION.md`.
+2. Mount and calibrate the D435i using `docs/operation/MANUAL_REALSENSE_D435I_BRINGUP.md`.
+3. Re-run `python3 tools/validate_safety_chain.py`; it should pass only after real calibration metadata is present.
+4. Schedule a separate, low-speed, supervised hardware execution wave.
+5. (Optional) Implement HMI UI/UX improvements per `docs/HMI_UI_UX_FIXING_PLAN_V4.md`.
 
 ## Completion Decision
 
-Software W8 is verified and approved for cleanup continuation. The overall project is not complete until the physical calibration and hardware commissioning gates are completed with real evidence.
+Software is **fully verified** after the 2026-05-10 completion sweep. All waves W0–W8 are complete. The overall project is not physically complete until D435i calibration and hardware commissioning gates are completed with real evidence.

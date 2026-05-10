@@ -1,5 +1,7 @@
 # GP4 HMI UI/UX Fixing Plan v4
 
+**Status:** NOT YET IMPLEMENTED — planned for a future iteration after hardware commissioning.
+
 This plan replaces the earlier UI-only plan with one that matches the current
 codebase contracts and the safety logic already present in the HMI.
 

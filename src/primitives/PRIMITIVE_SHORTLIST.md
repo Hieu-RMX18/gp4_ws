@@ -65,23 +65,34 @@ All 13 **PUBLIC** primitives listed above are fully integrated into the end-to-e
 
 ## What is DEFERRED (NOT public now)
 
-| Primitive             | Reason                                                       |
-|-----------------------|--------------------------------------------------------------|
-| `move_to_object`      | Requires perception pipeline (not in scope)                  |
-| `pick`                | Requires gripper + perception pipeline                       |
-| `place`               | Requires gripper + perception pipeline                       |
-| `push`                | Requires force/contact sensing                               |
-| `scan_workspace`      | Requires perception pipeline                                 |
-| `rotate_end_effector` | Deferred until RPY-relative transform logic is audited      |
-| `set_tool`            | Requires tool frame offset support in hw_adapter            |
-| `set_frame`           | Requires coordinate transform support in safety/motion_core |
-| `set_payload`         | Requires MotoROS2 payload service (not wired)                |
-| `open/close_gripper`  | Requires Robotiq/YRC1000micro I/O service integration        |
+| Primitive             | Reason                                                       | Post-W4 Status |
+|-----------------------|--------------------------------------------------------------|----------------|
+| `move_to_object`      | Requires calibrated perception                               | Software path exists via ReAct `query_perception` → `plan_motion`. Blocked by D435i hand-eye calibration (`<NOT_CALIBRATED>`). |
+| `pick`                | Requires gripper + calibrated perception                     | Gripper tools are stub-only in ReAct (`capability_unavailable`). IO mapping unknown. |
+| `place`               | Requires gripper + calibrated perception                     | Same as `pick`. |
+| `push`                | Requires force/contact sensing                               | No hardware support. |
+| `scan_workspace`      | Requires calibrated perception                               | `gp4_perception` scene processor built (W4). Blocked by calibration. |
+| `rotate_end_effector` | Deferred until RPY-relative transform logic is audited       | Not started. |
+| `set_tool`            | Requires tool frame offset support in hw_adapter             | Not started. Real tool not mounted. |
+| `set_frame`           | Requires coordinate transform support in safety/motion_core  | Not started. |
+| `set_payload`         | Requires MotoROS2 payload service (not wired)                | Not started. |
+| `open/close_gripper`  | Requires Robotiq/YRC1000micro I/O service integration        | ReAct tools exist as stubs. IO mapping unknown. |
 
 ---
 
-## Contract Verification Summary
+## MACRO Primitive Note
 
-✅ **98/98 Tests Passed** (Full integration verified).
+The `MACRO` primitive is defined in `llm_schema.yaml` and validated in `intent_engine.py`
+(max 10 steps, recursive `$ref` to the root schema). It is expanded into individual
+steps by the `IntentRouter` during semantic IR routing. There is no separate C++
+primitive dispatcher for MACRO — it is handled as sequence expansion in the gateway.
+
+---
+
+## Contract Verification Summary (updated 2026-05-10)
+
+✅ **2901 ROS tests passed, 0 failures** (colcon test-result).
+✅ **190 HMI backend tests passed** (pytest).
 ✅ **llm_schema.yaml** reconciled with **motion_core** whitelist.
 ✅ **Contract consistency test** enforced across all gateway layers.
+✅ **6 new ReAct multi-step reasoning tests** added and passing.

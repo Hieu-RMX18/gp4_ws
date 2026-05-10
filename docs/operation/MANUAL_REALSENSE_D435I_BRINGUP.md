@@ -53,6 +53,13 @@ ros2 topic list | grep camera
 Use the ArUco board defined in `config/fiducials.yaml` (DICT_5X5_100, 5×7 grid, 35 mm markers).
 Print the board at 1:1 scale. Attach it rigidly to the gripper flange.
 
+```bash
+python3 tools/generate_aruco_board.py --output aruco_board_5x7.png
+```
+
+Print the generated PNG at the reported DPI. Do not rescale it in the print
+dialog; wrong scale invalidates the hand-eye solve.
+
 ### 3.2 Collect calibration data
 
 ```bash

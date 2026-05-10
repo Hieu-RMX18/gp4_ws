@@ -72,6 +72,7 @@ D435i camera topics
 | Bring up simulation | `ros2 launch gp4_bringup sim.launch.py` | Does not authorize physical robot movement. |
 | Prepare hardware read-only validation | `hmi/HARDWARE_READONLY_VALIDATION.md` | Requires YRC1000micro, MotoROS2, micro-ROS Agent, and live `/yaskawa/*` telemetry. |
 | Prepare D435i calibration | `docs/operation/MANUAL_REALSENSE_D435I_BRINGUP.md` | Requires final camera mount and hand-eye calibration samples. |
+| Generate the D435i calibration board | `python3 tools/generate_aruco_board.py --output aruco_board_5x7.png` | Uses `src/gp4_perception/config/fiducials.yaml` as the board geometry source of truth. |
 
 ## Prompt-To-Artifact Checklist
 
@@ -95,10 +96,10 @@ The latest software-only checks run during W8 continuation reported:
 
 ```text
 colcon test-result --verbose
-Summary: 2896 tests, 0 errors, 0 failures, 601 skipped
+Summary: 2901 tests, 0 errors, 0 failures, 614 skipped
 
-pytest hmi/backend/tests -q
-188 passed, 6 skipped
+/usr/bin/python3 -m pytest hmi/backend/tests -q
+190 passed, 6 skipped
 
 npm run build
 Vite production build passed
@@ -109,8 +110,9 @@ HOME, PTP, MOVE_REL, GET_POSE, and current-pose PTP passed through sim pipeline
 bash tools/lint/no_magic_motion_numbers.sh
 no-magic-motion-numbers: PASS
 
-/usr/bin/python3 -m pytest hmi/backend/tests/test_refactor_invariants.py -q
-20 passed
+/usr/bin/python3 -m pytest hmi/backend/tests/test_hardware_gate.py \
+  hmi/backend/tests/test_refactor_invariants.py -q
+36 passed
 ```
 
 The software E2E harness rejects runtime child crashes, but tolerates known

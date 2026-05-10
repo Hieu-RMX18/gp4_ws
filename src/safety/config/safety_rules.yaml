@@ -13,7 +13,7 @@ workspace_bounds:
   y_min: -0.16   # station front wall -0.197m + 37mm; kept above front_wall_guard max
   y_max:  0.52   # reach-limited  (back wall at +0.806m, beyond reach)
   z_min:  0.23   # table-top estimated 0.20m + 30mm margin
-  z_max:  0.56   # relaxed from 0.52 for commissioning; current TCP z~0.53 when START
+  z_max:  0.56   # conservative cap; raise only with station + MoveRelLimits review
 
 # Backward-compatible keys still used by safety.command_validator.
 joint_limits_override:

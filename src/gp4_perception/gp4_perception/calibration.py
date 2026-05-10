@@ -220,26 +220,30 @@ class CalibrationService(Node):
         with self._lock:
             samples = self._samples[:]
 
-        R_gripper2base = []
-        t_gripper2base = []
+        # Eye-to-hand: pass R_base2gripper directly (NOT inverted).
+        # OpenCV calibrateHandEye expects (gripper2base, target2cam) for
+        # eye-in-hand. For eye-to-hand, passing base2gripper instead
+        # makes the solver return camera-to-base (not camera-to-gripper).
+        R_base2gripper_list = []
+        t_base2gripper_list = []
         R_target2cam = []
         t_target2cam = []
         for R_b2g, t_b2g, R_t2c, t_t2c in samples:
-            R_gripper2base.append(R_b2g.T)
-            t_gripper2base.append(-R_b2g.T @ t_b2g)
+            R_base2gripper_list.append(R_b2g)
+            t_base2gripper_list.append(t_b2g)
             R_target2cam.append(R_t2c)
             t_target2cam.append(t_t2c)
 
-        R_gripper2base = np.array(R_gripper2base)
-        t_gripper2base = np.array(t_gripper2base).reshape(-1, 3, 1)
+        R_base2gripper_arr = np.array(R_base2gripper_list)
+        t_base2gripper_arr = np.array(t_base2gripper_list).reshape(-1, 3, 1)
         R_target2cam = np.array(R_target2cam)
         t_target2cam = np.array(t_target2cam).reshape(-1, 3, 1)
 
-        # Solve AX = XB with PARK method
+        # Solve AX = XB with PARK method (eye-to-hand convention)
         try:
             R_cam2base, t_cam2base = cv2.calibrateHandEye(
-                R_gripper2base,
-                t_gripper2base,
+                R_base2gripper_arr,
+                t_base2gripper_arr,
                 R_target2cam,
                 t_target2cam,
                 method=cv2.CALIB_HAND_EYE_PARK,
@@ -252,33 +256,45 @@ class CalibrationService(Node):
         R_cam2base = np.asarray(R_cam2base)
         t_cam2base = np.asarray(t_cam2base).reshape(3)
 
-        # Reprojection error: mean translation error across samples.
-        # For each sample, compare the target position estimated via
-        # two paths: (1) cam → base using solved extrinsics, and
-        # (2) gripper → base using robot FK. The difference is the
-        # residual error of the hand-eye solution.
+        # Reprojection error via pairwise relative-motion consistency.
+        # For each pair (i,j), the relative motion seen by the camera
+        # should match the relative robot motion. We check:
+        #   T_cam2base @ T_t2c_j @ T_t2c_i^{-1} @ T_cam2base^{-1}
+        #   vs T_b2g_j @ T_b2g_i^{-1}
+        # and report the mean translational residual.
         reproj_mm = 0.0
         try:
             T_cam2base = np.eye(4)
             T_cam2base[:3, :3] = R_cam2base
             T_cam2base[:3, 3] = t_cam2base
+            T_base2cam = np.linalg.inv(T_cam2base)
 
             errors = []
-            for R_b2g, t_b2g, R_t2c, t_t2c in samples:
-                # Path via camera: target → cam → base
-                T_target2cam = np.eye(4)
-                T_target2cam[:3, :3] = R_t2c
-                T_target2cam[:3, 3] = t_t2c.flatten()
-                T_target_via_cam = T_cam2base @ T_target2cam
-
-                # Path via robot: target on gripper → base
-                T_base2grip = np.eye(4)
-                T_base2grip[:3, :3] = R_b2g
-                T_base2grip[:3, 3] = t_b2g.flatten()
-
-                # Positional error between the two paths
-                err = np.linalg.norm(T_target_via_cam[:3, 3] - T_base2grip[:3, 3])
-                errors.append(err)
+            n_pairs = min(len(samples), 50)  # cap to avoid O(n^2) blowup
+            for i in range(n_pairs):
+                R_b2g_i, t_b2g_i, R_t2c_i, t_t2c_i = samples[i]
+                T_b2g_i = np.eye(4)
+                T_b2g_i[:3, :3] = R_b2g_i
+                T_b2g_i[:3, 3] = t_b2g_i.flatten()
+                T_t2c_i = np.eye(4)
+                T_t2c_i[:3, :3] = R_t2c_i
+                T_t2c_i[:3, 3] = t_t2c_i.flatten()
+                T_t2c_i_inv = np.linalg.inv(T_t2c_i)
+                T_b2g_i_inv = np.linalg.inv(T_b2g_i)
+                for j in range(i + 1, n_pairs):
+                    R_b2g_j, t_b2g_j, R_t2c_j, t_t2c_j = samples[j]
+                    T_b2g_j = np.eye(4)
+                    T_b2g_j[:3, :3] = R_b2g_j
+                    T_b2g_j[:3, 3] = t_b2g_j.flatten()
+                    T_t2c_j = np.eye(4)
+                    T_t2c_j[:3, :3] = R_t2c_j
+                    T_t2c_j[:3, 3] = t_t2c_j.flatten()
+                    # Relative robot motion
+                    T_robot_rel = T_b2g_j @ T_b2g_i_inv
+                    # Relative motion via camera + solved extrinsics
+                    T_cam_rel = T_cam2base @ T_t2c_j @ T_t2c_i_inv @ T_base2cam
+                    err = np.linalg.norm(T_robot_rel[:3, 3] - T_cam_rel[:3, 3])
+                    errors.append(err)
 
             reproj_mm = float(np.mean(errors)) * 1000.0 if errors else 0.0
         except Exception as exc:

@@ -309,7 +309,7 @@ class TelemetrySnapshotMixin:
                 topic=self._review_intent_service,
                 last_seen_at=snapshot.review_intent_ready_at,
                 freshness_sec=CONNECTION_FRESHNESS_SEC["command_interface"],
-                active=active and snapshot.review_intent_ready,
+                active=active,
                 detail=(
                     "ready at " + self._review_intent_service
                     if snapshot.review_intent_ready

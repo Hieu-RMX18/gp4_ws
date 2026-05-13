@@ -68,13 +68,6 @@ class SupervisorExecutionMixin:
             }
 
         hardware_gate = self._hardware_gate_evaluator.evaluate()
-        if require_hardware_gate and not hardware_gate.unlocked:
-            return {
-                "accepted": False,
-                "message": "; ".join(hardware_gate.reasons)
-                or "hardware gate is locked.",
-            }
-
         preflight = self._execution_preflight(requested_mode=RuntimeMode.HARDWARE)
         if require_hardware_gate and not preflight["accepted"]:
             return {
@@ -95,7 +88,7 @@ class SupervisorExecutionMixin:
             session_id=session_id,
             operator_id=operator_id,
             command_id=None,
-            message=f"{action_label} requested through supervised hardware gate",
+            message=f"{action_label} requested through supervised hardware preflight",
             payload={
                 "leaseId": lease.lease_id,
                 "hardwareGate": hardware_gate.to_dict(),

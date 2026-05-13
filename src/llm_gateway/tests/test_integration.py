@@ -52,14 +52,21 @@ class ImmediateFuture:
         return self._result
 
 
-def test_gateway_full_flow_uses_sanitized_json(openai_payload):
+def test_gateway_full_flow_uses_sanitized_json():
     node = LLMGatewayNode()
     node.set_parameters([Parameter("runtime_mode", value="sim")])
     statuses = []
     debug_messages = []
     command_messages = []
     node.publish_status = lambda status: statuses.append(status)
-    node._llm_client.generate_response = MagicMock(return_value=openai_payload)
+    semantic_ir_payload = json.dumps(
+        {
+            "intent": "absolute_move_lin",
+            "target_pose": {"position": {"x": 0.30, "y": 0.0, "z": 0.30}},
+            "reference_frame": "base_link",
+        }
+    )
+    node._llm_client.generate_response = MagicMock(return_value=semantic_ir_payload)
     node._llm_debug_publisher.publish = MagicMock(
         side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
     )
@@ -112,14 +119,34 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
     node.destroy_node()
 
 
-def test_gateway_rejects_plan_only_before_validate_or_execute():
+def test_gateway_plan_only_does_precheck_without_execution():
     node = LLMGatewayNode()
     debug_messages = []
     node._llm_debug_publisher.publish = MagicMock(
         side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
     )
     node._validate_client.wait_for_service = MagicMock(return_value=True)
-    node._validate_client.call_async = MagicMock()
+    node._validate_client.call_async = MagicMock(
+        return_value=ImmediateFuture(
+            SimpleNamespace(
+                valid=True,
+                reason="",
+                sanitized_json=json.dumps(
+                    {
+                        "primitive_type": "HOME",
+                        "velocity_scale": 0.06,
+                        "acceleration_scale": 0.06,
+                        "planner_id": "PILZ_PTP",
+                        "plan_only": True,
+                    }
+                ),
+            )
+        )
+    )
+    command_messages = []
+    node._command_publisher.publish = MagicMock(
+        side_effect=lambda msg: command_messages.append(json.loads(msg.data))
+    )
     node._execute_client.send_goal_async = MagicMock()
 
     node.process_raw_command(
@@ -134,19 +161,30 @@ def test_gateway_rejects_plan_only_before_validate_or_execute():
         )
     )
 
-    node._validate_client.wait_for_service.assert_not_called()
-    node._validate_client.call_async.assert_not_called()
+    node._validate_client.call_async.assert_called_once()
+    assert command_messages == []
     node._execute_client.send_goal_async.assert_not_called()
-    assert debug_messages[-1]["stage"] == "plan_only_not_executable"
-    assert "plan_only" in debug_messages[-1]["reason"]
+    # Look for the precheck success message in debug stream
+    precheck_msgs = [m for m in debug_messages if m.get("stage") == "plan_only"]
+    assert (
+        precheck_msgs
+    ), f"Expected plan_only stage in debug messages, got {debug_messages}"
+    assert precheck_msgs[-1]["status"] == "plan_precheck_succeeded"
 
     node.destroy_node()
 
 
-def test_gateway_fails_closed_when_validate_service_unavailable(openai_payload):
+def test_gateway_fails_closed_when_validate_service_unavailable():
     node = LLMGatewayNode()
     debug_messages = []
-    node._llm_client.generate_response = MagicMock(return_value=openai_payload)
+    semantic_ir_payload = json.dumps(
+        {
+            "intent": "absolute_move_lin",
+            "target_pose": {"position": {"x": 0.30, "y": 0.0, "z": 0.30}},
+            "reference_frame": "base_link",
+        }
+    )
+    node._llm_client.generate_response = MagicMock(return_value=semantic_ir_payload)
     node._llm_debug_publisher.publish = MagicMock(
         side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
     )
@@ -161,10 +199,17 @@ def test_gateway_fails_closed_when_validate_service_unavailable(openai_payload):
     node.destroy_node()
 
 
-def test_gateway_fails_closed_when_execute_motion_unavailable(openai_payload):
+def test_gateway_fails_closed_when_execute_motion_unavailable():
     node = LLMGatewayNode()
     debug_messages = []
-    node._llm_client.generate_response = MagicMock(return_value=openai_payload)
+    semantic_ir_payload = json.dumps(
+        {
+            "intent": "absolute_move_lin",
+            "target_pose": {"position": {"x": 0.30, "y": 0.0, "z": 0.30}},
+            "reference_frame": "base_link",
+        }
+    )
+    node._llm_client.generate_response = MagicMock(return_value=semantic_ir_payload)
     node._llm_debug_publisher.publish = MagicMock(
         side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
     )

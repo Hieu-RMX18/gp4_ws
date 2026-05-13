@@ -31,7 +31,7 @@ export function CommandComposer({
 }: CommandComposerProps) {
   const reasons = hardwareGate.reasons ?? [];
   const primaryReason =
-    reasons[0] ?? 'Dual gate is not satisfied: runtime flag + signed evidence checklist are required.';
+    reasons[0] ?? 'Hardware evidence is advisory; runtime preflight controls execution.';
   const primaryReasonVi = reasonToVietnamese(primaryReason);
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -46,7 +46,7 @@ export function CommandComposer({
 
   const placeholder = readOnlyBridge
     ? mode === 'hardware' && !hardwareGate.unlocked
-      ? `Hardware gate locked: ${primaryReason} | VI: ${primaryReasonVi}`
+      ? `Command ingress locked: ${primaryReason} | VI: ${primaryReasonVi}`
       : 'Command ingress is read only until mode + telemetry + preflight gates are satisfied.'
     : 'Type intent in English or Vietnamese. Ctrl+Enter to submit · Shift+Enter for newline.';
 
@@ -57,7 +57,7 @@ export function CommandComposer({
           <span className="input-blocked-icon">⊘</span>
           <span>
             {readOnlyBridge
-              ? 'Command ingress is blocked. Check telemetry freshness, hardware gate, and runtime state.'
+              ? 'Command ingress is blocked. Check telemetry freshness, runtime preflight, and runtime state.'
               : 'Submit disabled — waiting for command-capable conditions.'}
           </span>
         </div>

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -336,7 +338,55 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertEqual(
             client.requests[0].review_token,
             adapter_module.build_review_intent_token(
-                shared_secret="review-token",
+                shared_secret="review-token",  # pragma: allowlist secret
+                raw_text="go home",
+                runtime_mode="sim",
+                session_id="session-a",
+                operator_id="operator-a",
+                command_id="command-a",
+            ),
+        )
+
+    def test_submit_text_for_review_reads_review_token_from_env_file(self) -> None:
+        response = SimpleNamespace(
+            accepted=True,
+            error="",
+            semantic_ir_json='{"intent":"go_home"}',
+        )
+        client = _FakeReviewClient(response)
+        adapter = WorkspaceRosAdapter()
+        adapter._node = object()  # pylint: disable=protected-access
+        adapter._review_intent_client = client  # pylint: disable=protected-access
+
+        with TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / ".env"
+            env_path.write_text(
+                "GP4_REVIEW_INTENT_TOKEN=review-token\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.object(
+                    adapter_module, "ReviewIntent", _FakeReviewIntent, create=True
+                ),
+                patch.dict(
+                    os.environ,
+                    {"GP4_LLM_ENV_FILE": str(env_path)},
+                    clear=True,
+                ),
+            ):
+                result = adapter.submit_text_for_review(
+                    raw_text="go home",
+                    runtime_mode="sim",
+                    session_id="session-a",
+                    operator_id="operator-a",
+                    command_id="command-a",
+                )
+
+        self.assertTrue(result["accepted"])
+        self.assertEqual(
+            client.requests[0].review_token,
+            adapter_module.build_review_intent_token(
+                shared_secret="review-token",  # pragma: allowlist secret
                 raw_text="go home",
                 runtime_mode="sim",
                 session_id="session-a",

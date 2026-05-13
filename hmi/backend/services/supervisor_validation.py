@@ -109,9 +109,6 @@ class SupervisorValidationMixin:
                 f"runtime state {runtime.system_state.value} is hard-blocking for command-capable actions"
             )
 
-        if requested_mode == RuntimeMode.HARDWARE and not hardware_gate.unlocked:
-            blocking_reasons.extend(hardware_gate.reasons)
-
         stale_sources = [
             source.name
             for source in critical_sources

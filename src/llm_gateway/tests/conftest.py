@@ -73,6 +73,21 @@ def semantic_validator():
     return SemanticValidator()
 
 
+@pytest.fixture(autouse=True)
+def disable_react_for_legacy_gateway_tests(request, monkeypatch):
+    """Keep legacy gateway integration tests on the mocked single-shot LLM path."""
+    if request.module.__name__.split(".")[-1] not in {
+        "test_get_pose",
+        "test_integration",
+    }:
+        return
+    try:
+        from llm_gateway.llm_gateway_node import LLMGatewayNode
+    except ImportError:
+        return
+    monkeypatch.setattr(LLMGatewayNode, "_load_react_enabled", lambda self: False)
+
+
 @pytest.fixture
 def canonical_command() -> dict:
     return {

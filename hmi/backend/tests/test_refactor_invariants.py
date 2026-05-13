@@ -57,15 +57,15 @@ class TestPackageImports(unittest.TestCase):
 
 
 class TestMigrationDocs(unittest.TestCase):
-    """Verify migration reports stay in docs/ after W8 cleanup."""
+    """Verify removed migration reports do not return as root-level noise."""
 
     def test_migration_reports_are_not_root_level_files(self) -> None:
         root_reports = sorted(_REPO_ROOT.glob("MIGRATION-W*.md"))
         self.assertEqual(root_reports, [])
 
-    def test_migration_reports_live_under_docs(self) -> None:
+    def test_migration_reports_are_not_required_for_current_cleanup(self) -> None:
         docs_reports = sorted((_REPO_ROOT / "docs").glob("MIGRATION-W*.md"))
-        self.assertGreaterEqual(len(docs_reports), 1)
+        self.assertEqual(docs_reports, [])
 
     def test_local_hardware_gate_evidence_is_ignored(self) -> None:
         result = subprocess.run(

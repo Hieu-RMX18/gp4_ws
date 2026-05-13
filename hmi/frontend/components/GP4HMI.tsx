@@ -36,6 +36,7 @@ import {
   TelemetrySources,
   ControlLeasePanel,
   SystemLog,
+  RuntimeConsole,
 } from './gp4-hmi';
 
 interface GP4HMIProps {
@@ -56,6 +57,7 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
     isController,
     blockingRuntime,
     submitCommand,
+    submitQuickCommand,
     confirmCommandById,
     acquireControllerLease,
     releaseLease,
@@ -275,7 +277,44 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
           <div className="panel-header">Robot Monitor</div>
           <JointMonitor orderedJoints={orderedJoints} runtime={state.runtime} activeCommand={activeCommand} />
           <CommandPipelinePanel traceSteps={traceSteps} />
-          <QuickCommands canSubmit={canSubmitCommands} onSelect={(intent) => { setDraft(intent); setSubmitError(null); }} />
+          <QuickCommands canSubmit={canSubmitCommands} onSelect={(quickCommandId) => {
+            if (!canSubmitCommands) return;
+            void (async () => {
+              try {
+                const response = await submitQuickCommand(quickCommandId);
+                if (!response.accepted) {
+                  const reason = resolveDeclineReason(response.reason, response.command);
+                  pushActionFeedback('err', `Quick command declined · ${reason ?? 'no reason provided'}`, reason);
+                  return;
+                }
+                pushActionFeedback('ok', `Quick command · ${summarizeMutationResponse(response)}`, response.reason);
+                const shouldAutoConfirmSim =
+                  response.jobType === 'command' &&
+                  response.command !== null &&
+                  response.command.lifecycleState === 'NEEDS_CONFIRMATION' &&
+                  response.command.mode === 'sim' &&
+                  response.command.planFingerprint !== null;
+                if (shouldAutoConfirmSim) {
+                  const cmd = response.command as NonNullable<typeof response.command>;
+                  try {
+                    const cr = await confirmCommandById(response.commandId as string, cmd.planFingerprint as string);
+                    const crReason = resolveDeclineReason(cr.reason, cr.command);
+                    if (!cr.accepted) {
+                      pushActionFeedback('err', `Sim auto-confirm declined · ${crReason ?? 'no reason provided'}`, crReason);
+                      return;
+                    }
+                    pushActionFeedback('ok', `Sim auto-confirm · ${summarizeMutationResponse(cr)}`, cr.reason);
+                  } catch (e: unknown) {
+                    const msg = e instanceof Error ? e.message : 'Sim auto-confirm failed.';
+                    pushActionFeedback('err', `Sim auto-confirm failed · ${msg}`, msg);
+                  }
+                }
+              } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : 'Quick command failed.';
+                pushActionFeedback('err', `Quick command failed · ${msg}`, msg);
+              }
+            })();
+          }} />
         </aside>
 
         <main className="center-panel">
@@ -331,6 +370,7 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
             onRelease={() => void releaseLease()}
           />
           <SystemLog logEntries={logEntries} />
+          <RuntimeConsole events={state.consoleEvents} />
         </aside>
       </div>
     </div>

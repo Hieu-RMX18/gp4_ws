@@ -6,7 +6,6 @@ import hmac
 import importlib.util
 import json
 import logging
-import os
 from pathlib import Path
 import sys
 from threading import Lock, Thread
@@ -20,6 +19,7 @@ from .telemetry_snapshot import (
     _TelemetryState,
 )
 from ..domain.constants import GP4_JOINT_NAMES as DEFAULT_JOINT_NAMES
+from ..services.env_file import lookup_env_or_dotenv
 
 __all__ = ["DEFAULT_JOINT_NAMES", "WorkspaceRosAdapter", "build_review_intent_token"]
 
@@ -333,7 +333,7 @@ class WorkspaceRosAdapter(
         request.session_id = session_id
         request.operator_id = operator_id
         request.command_id = command_id
-        shared_secret = os.getenv("GP4_REVIEW_INTENT_TOKEN", "").strip()
+        shared_secret = lookup_env_or_dotenv("GP4_REVIEW_INTENT_TOKEN")
         request.review_token = (
             build_review_intent_token(
                 shared_secret=shared_secret,
@@ -669,7 +669,7 @@ class WorkspaceRosAdapter(
                     lambda msg, joint_topic=topic: self._on_joint_state(
                         joint_topic, msg
                     ),
-                    10,
+                    qos_profile_sensor_data,
                 )
             )
 

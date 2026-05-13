@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from llm_gateway.react_planner import load_llm_backend_config
+from llm_gateway.react_planner import load_llm_backend_config, lookup_env_or_dotenv
 
 
 def _write_config(
@@ -52,7 +52,7 @@ def test_load_llm_backend_config_reads_api_key_from_nearby_dotenv(
 
     config = load_llm_backend_config(str(config_path))
 
-    assert config.api_key == "from_dotenv"
+    assert config.api_key == "from_dotenv"  # pragma: allowlist secret
 
 
 def test_load_llm_backend_config_prefers_process_env_over_dotenv_and_yaml(
@@ -71,7 +71,7 @@ def test_load_llm_backend_config_prefers_process_env_over_dotenv_and_yaml(
 
     config = load_llm_backend_config(str(config_path))
 
-    assert config.api_key == "from_process_env"
+    assert config.api_key == "from_process_env"  # pragma: allowlist secret
 
 
 def test_load_llm_backend_config_supports_explicit_env_file_override(
@@ -105,6 +105,26 @@ def test_load_llm_backend_config_supports_explicit_env_file_override(
 
     assert config.api_key == "from_explicit_env_file"  # pragma: allowlist secret
     assert config.model == "from_dotenv_model"
+
+
+def test_lookup_env_or_dotenv_reads_review_token_from_explicit_env_file(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = _write_config(tmp_path, '"${GP4_LLM_API_KEY}"')
+    env_file = tmp_path / "secrets.env"
+    env_file.write_text(
+        "GP4_REVIEW_INTENT_TOKEN=review-token\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("GP4_REVIEW_INTENT_TOKEN", raising=False)
+    monkeypatch.setenv("GP4_LLM_ENV_FILE", str(env_file))
+
+    assert (
+        lookup_env_or_dotenv("GP4_REVIEW_INTENT_TOKEN", str(config_path))
+        == "review-token"
+    )
 
 
 def test_load_llm_backend_config_reads_dotenv_from_current_working_directory(

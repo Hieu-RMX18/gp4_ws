@@ -693,7 +693,7 @@ class SemanticValidator:
     _DEFAULT_BOUNDS = {
         "x": (-0.45, 0.45),
         "y": (-0.16, 0.52),
-        "z": (0.23, 0.56),
+        "z": (0.23, 0.65),
     }
 
     def __init__(self, safety_rules: dict | None = None):
@@ -2975,6 +2975,51 @@ def load_srdf_named_poses(srdf_path: str | None = None) -> Dict[str, List[float]
     return named_poses
 
 
+# ── Named-pose alias canonicalizer ──────────────────────────────────────────
+# Maps common operator variations to the exact SRDF group_state name.
+# Unknown inputs return None so callers can fail-closed.
+
+_NAMED_POSE_ALIASES: Dict[str, str] = {
+    # exact SRDF names (identity)
+    "home": "home",
+    "ready": "ready",
+    "posea": "poseA",
+    "poseb": "poseB",
+    # English aliases
+    "pose a": "poseA",
+    "pose b": "poseB",
+    "a": "poseA",
+    "b": "poseB",
+    "point a": "poseA",
+    "point b": "poseB",
+    # Vietnamese aliases
+    "điểm a": "poseA",
+    "điểm b": "poseB",
+    "diem a": "poseA",
+    "diem b": "poseB",
+}
+
+
+def canonicalize_named_pose(
+    raw_name: str, available_poses: Dict[str, Any] | None = None
+) -> str | None:
+    """Return the canonical SRDF pose name for *raw_name*, or None if unknown.
+
+    Lookup order:
+      1. Exact match against *available_poses* keys (case-sensitive).
+      2. Case-insensitive alias lookup via ``_NAMED_POSE_ALIASES``.
+    """
+    stripped = str(raw_name or "").strip()
+    if not stripped:
+        return None
+    if available_poses is not None and stripped in available_poses:
+        return stripped
+    normalized = stripped.lower()
+    if available_poses is not None and normalized in available_poses:
+        return normalized
+    return _NAMED_POSE_ALIASES.get(normalized)
+
+
 def load_macro_policy(policy_path: str | None = None) -> Dict[str, Any]:
     resolved_path = policy_path or _default_macro_policy_path()
     with open(resolved_path, "r", encoding="utf-8") as policy_file:
@@ -3113,15 +3158,23 @@ class IntentRouter(DrawRouterMixin):
             self._validate_reference_frame(reference_frame)
             command["reference_frame"] = reference_frame
             return command
+        if intent == "return_to_start":
+            return self._route_return_to_start(payload)
         if intent == "circular_move":
             return self._route_circular_move(payload)
 
         raise ValueError(f"unsupported semantic intent '{intent}'")
 
     def _route_named_pose(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        pose_name = str(payload.get("pose_name") or payload.get("name") or "").strip()
-        if not pose_name:
+        raw_pose = str(payload.get("pose_name") or payload.get("name") or "").strip()
+        if not raw_pose:
             raise ValueError("move_named_pose requires pose_name.")
+        pose_name = canonicalize_named_pose(raw_pose, self._named_pose_targets)
+        if pose_name is None:
+            raise ValueError(
+                f"unknown named pose '{raw_pose}'; "
+                f"available named poses: {sorted(self._named_pose_targets)}"
+            )
         joint_target = self._named_pose_targets.get(pose_name)
         if joint_target is None:
             raise ValueError(
@@ -3221,6 +3274,22 @@ class IntentRouter(DrawRouterMixin):
             "joint_target": [float(value) for value in joint_target],
             **self._optional_motion_fields(payload),
         }
+
+    def _route_return_to_start(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert return_to_start semantic intent to captured MOVE_JOINTS.
+
+        If the payload carries a captured ``joint_target`` (e.g. from a
+        sequence pose snapshot), use it directly. Without that snapshot,
+        fail closed instead of guessing that HOME is the original start.
+        """
+        joint_target = payload.get("joint_target")
+        if isinstance(joint_target, list) and len(joint_target) == 6:
+            return {
+                "primitive_type": "MOVE_JOINTS",
+                "joint_target": [float(v) for v in joint_target],
+                **self._optional_motion_fields(payload),
+            }
+        raise ValueError("return_to_start requires a captured joint_target.")
 
     def _resolve_position(
         self, raw_position: Any, *, field_prefix: str

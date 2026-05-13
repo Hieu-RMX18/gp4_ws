@@ -1,7 +1,7 @@
 import { INTENT_TEMPLATES } from './intentTemplates';
 
 interface QuickCommandsProps {
-  onSelect: (intent: string) => void;
+  onSelect: (quickCommandId: string) => void;
   canSubmit: boolean;
 }
 
@@ -17,7 +17,7 @@ export function QuickCommands({ onSelect, canSubmit }: QuickCommandsProps) {
             className="qcmd"
             disabled={!canSubmit}
             title={canSubmit ? template.intent : 'Command ingress is blocked'}
-            onClick={() => onSelect(template.intent)}
+            onClick={() => onSelect(template.id)}
           >
             <span className="cmd-icon">&gt;</span>
             <span className="qcmd-text">

@@ -206,6 +206,7 @@ def create_app(
             operator_id=request.operatorId,
             lease_token=request.leaseToken,
             raw_text=request.intentText,
+            quick_command_id=request.quickCommandId,
             mode=request.mode,
         )
 

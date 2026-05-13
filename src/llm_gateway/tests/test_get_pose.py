@@ -138,8 +138,10 @@ def test_gateway_routes_get_pose_to_query_service(ros_integration_context):
         side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
     )
 
-    # Mock the LLM to return a GET_POSE command
-    get_pose_payload = json.dumps({"primitive_type": "GET_POSE"})
+    # Mock the LLM to return a GET_POSE semantic IR command
+    get_pose_payload = json.dumps(
+        {"intent": "get_pose", "reference_frame": "base_link"}
+    )
     node._llm_client.generate_response = MagicMock(return_value=get_pose_payload)
 
     # Mock the query service
@@ -205,7 +207,9 @@ def test_gateway_fails_closed_when_get_pose_service_unavailable(
         side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
     )
 
-    get_pose_payload = json.dumps({"primitive_type": "GET_POSE"})
+    get_pose_payload = json.dumps(
+        {"intent": "get_pose", "reference_frame": "base_link"}
+    )
     node._llm_client.generate_response = MagicMock(return_value=get_pose_payload)
     node._get_pose_client.wait_for_service = MagicMock(return_value=False)
 
@@ -237,7 +241,9 @@ def test_gateway_handles_get_pose_service_failure(ros_integration_context):
         side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
     )
 
-    get_pose_payload = json.dumps({"primitive_type": "GET_POSE"})
+    get_pose_payload = json.dumps(
+        {"intent": "get_pose", "reference_frame": "base_link"}
+    )
     node._llm_client.generate_response = MagicMock(return_value=get_pose_payload)
 
     mock_response = SimpleNamespace(
@@ -272,7 +278,7 @@ def test_gateway_get_pose_does_not_affect_motion_path(ros_integration_context):
     node._llm_debug_publisher.publish = MagicMock()
 
     # HOME command — must go through ValidateCommand, not query path
-    home_payload = json.dumps({"primitive_type": "HOME"})
+    home_payload = json.dumps({"intent": "go_home"})
     node._llm_client.generate_response = MagicMock(return_value=home_payload)
     node._validate_client.wait_for_service = MagicMock(return_value=True)
     sanitized_json = json.dumps(

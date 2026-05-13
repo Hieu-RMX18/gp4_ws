@@ -93,7 +93,7 @@ def _signed_review_token(
     from llm_gateway.llm_gateway_node import build_review_intent_token
 
     return build_review_intent_token(
-        shared_secret="review-token",
+        shared_secret="review-token",  # pragma: allowlist secret
         raw_text=raw_text,
         runtime_mode=runtime_mode,
         session_id=session_id,
@@ -138,6 +138,158 @@ def test_review_intent_returns_semantic_ir_without_dispatching_motion():
         '{"intent":"move_named_pose","pose_name":"ready"}'
     )
     assert node._react_agent.user_text == "move to ready"
+    assert dispatched == []
+    assert "routed" not in statuses
+
+
+def test_review_intent_home_motion_uses_react_without_dispatching_motion():
+    node, statuses, dispatched = _make_gateway_shell({"intent": "go_home"})
+    request = SimpleNamespace(
+        raw_text="di ve home",
+        runtime_mode="hardware",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token=_signed_review_token(
+            raw_text="di ve home",
+            runtime_mode="hardware",
+        ),
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is True
+    assert result.error == ""
+    assert result.semantic_ir_json == '{"intent":"go_home"}'
+    assert node._react_agent.user_text == "di ve home"
+    assert dispatched == []
+    assert "routed" not in statuses
+
+
+@pytest.mark.parametrize(
+    ("raw_text", "expected_semantic_ir_json"),
+    [
+        ("stop", '{"intent":"stop"}'),
+        ("get pose", '{"intent":"get_pose","reference_frame":"base_link"}'),
+        ("wait 2 s", '{"intent":"wait","wait_duration_sec":2.0}'),
+    ],
+)
+def test_review_intent_direct_quick_commands_skip_react_tools(
+    raw_text, expected_semantic_ir_json
+):
+    node, statuses, dispatched = _make_gateway_shell(
+        {"intent": "error", "error": "react should not run for quick commands"}
+    )
+    request = SimpleNamespace(
+        raw_text=raw_text,
+        runtime_mode="hardware",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token=_signed_review_token(
+            raw_text=raw_text,
+            runtime_mode="hardware",
+        ),
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is True
+    assert result.error == ""
+    assert result.semantic_ir_json == expected_semantic_ir_json
+    assert node._react_agent.user_text is None
+    assert dispatched == []
+    assert "routed" not in statuses
+
+
+@pytest.mark.parametrize(
+    ("raw_text", "react_result"),
+    [
+        ("move to pose A", {"intent": "move_named_pose", "pose_name": "poseA"}),
+        ("move to posea", {"intent": "move_named_pose", "pose_name": "poseA"}),
+        ("go to A", {"intent": "move_named_pose", "pose_name": "poseA"}),
+        ("go to B", {"intent": "move_named_pose", "pose_name": "poseB"}),
+        ("move to ready", {"intent": "move_named_pose", "pose_name": "ready"}),
+        ("đến pose A", {"intent": "move_named_pose", "pose_name": "poseA"}),
+        ("tới điểm B", {"intent": "move_named_pose", "pose_name": "poseB"}),
+        ("về pose home", {"intent": "move_named_pose", "pose_name": "home"}),
+        ("ve poseb", {"intent": "move_named_pose", "pose_name": "poseB"}),
+    ],
+)
+def test_review_intent_named_pose_motion_uses_react(raw_text, react_result):
+    node, statuses, dispatched = _make_gateway_shell(react_result)
+    request = SimpleNamespace(
+        raw_text=raw_text,
+        runtime_mode="hardware",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token=_signed_review_token(
+            raw_text=raw_text,
+            runtime_mode="hardware",
+        ),
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is True
+    assert result.error == ""
+    import json
+
+    semantic_ir = json.loads(result.semantic_ir_json)
+    assert semantic_ir["intent"] == "move_named_pose"
+    assert semantic_ir["pose_name"] == react_result["pose_name"]
+    assert node._react_agent.user_text == raw_text
+    assert dispatched == []
+    assert "routed" not in statuses
+
+
+@pytest.mark.parametrize(
+    ("raw_text", "react_result"),
+    [
+        (
+            "move up 5 cm",
+            {
+                "intent": "move_relative",
+                "delta": {"x": 0.0, "y": 0.0, "z": 5.0},
+                "linear_unit": "cm",
+                "reference_frame": "base_link",
+            },
+        ),
+        (
+            "move to Cartesian x 300 mm y 0 z 400",
+            {
+                "intent": "absolute_move_ptp",
+                "target_pose": {"position": {"x": 300.0, "y": 0.0, "z": 400.0}},
+                "linear_unit": "mm",
+                "reference_frame": "base_link",
+            },
+        ),
+    ],
+)
+def test_review_intent_cartesian_motion_text_uses_react(raw_text, react_result):
+    node, statuses, dispatched = _make_gateway_shell(react_result)
+    request = SimpleNamespace(
+        raw_text=raw_text,
+        runtime_mode="hardware",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token=_signed_review_token(
+            raw_text=raw_text,
+            runtime_mode="hardware",
+        ),
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is True
+    assert result.error == ""
+    assert node._react_agent.user_text == raw_text
     assert dispatched == []
     assert "routed" not in statuses
 
@@ -463,5 +615,6 @@ def test_gateway_react_state_callbacks_update_state_injector():
     snapshot = node._react_state_injector.snapshot()["robot_state"]
     assert snapshot["joint_names"] == joint_names
     assert snapshot["joints_rad"] == joint_positions
+    assert node._latest_joint_positions_rad == joint_positions
     assert snapshot["mode"] == "MOVING"
     assert snapshot["active_alarms"] == ["42"]

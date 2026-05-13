@@ -294,6 +294,12 @@ class TimelineEventModel(StrictModel):
     payload: dict[str, Any] | None = None
 
 
+class ConsoleEventModel(StrictModel):
+    stage: str
+    timestamp: str
+    fields: str | None = None
+
+
 class ReplayDetailModel(StrictModel):
     jobType: Literal["command", "sequence"]
     command: CommandViewModel | None = None
@@ -319,6 +325,7 @@ class HmiStateSnapshotModel(StrictModel):
     jointPositions: list[JointPositionModel]
     planMetrics: PlanMetricsModel | None
     replayItems: list[ReplayListItemModel]
+    consoleEvents: list[ConsoleEventModel] = Field(default_factory=list)
 
 
 class RuntimeStateResponseModel(StrictModel):
@@ -377,12 +384,17 @@ class CommandIntentRequestModel(StrictModel):
     operatorId: str
     leaseToken: str | None
     intentText: str | None = None
+    quickCommandId: str | None = None
     mode: Literal["sim", "hardware"]
 
     @model_validator(mode="after")
     def validate_intent_payload(self) -> "CommandIntentRequestModel":
-        if not (self.intentText and self.intentText.strip()):
-            raise ValueError("intentText is required")
+        has_text = bool(self.intentText and self.intentText.strip())
+        has_quick = bool(self.quickCommandId and self.quickCommandId.strip())
+        if not has_text and not has_quick:
+            raise ValueError("intentText or quickCommandId is required")
+        if has_text and has_quick:
+            raise ValueError("submit exactly one of intentText or quickCommandId")
         return self
 
 
@@ -445,12 +457,14 @@ class CommandLifecycleStreamEventModel(StrictModel):
     command: CommandViewModel
     messages: list[ChatMessageModel] = Field(default_factory=list)
     planMetrics: PlanMetricsModel | None = None
+    consoleEvents: list[ConsoleEventModel] = Field(default_factory=list)
 
 
 class SequenceLifecycleStreamEventModel(StrictModel):
     type: Literal["sequence_lifecycle"]
     sequence: SequenceViewModel
     messages: list[ChatMessageModel] = Field(default_factory=list)
+    consoleEvents: list[ConsoleEventModel] = Field(default_factory=list)
 
 
 class ReplayUpdatedStreamEventModel(StrictModel):

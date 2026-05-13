@@ -63,9 +63,7 @@ class HardwareGateEvaluatorTests(unittest.TestCase):
         if env_value is not None:
             env_patch["HMI_ENABLE_HARDWARE_COMMANDS"] = env_value
 
-        with mock.patch.dict(os.environ, env_patch, clear=False):
-            if env_value is None:
-                os.environ.pop("HMI_ENABLE_HARDWARE_COMMANDS", None)
+        with mock.patch.dict(os.environ, env_patch, clear=True):
             evaluator = HardwareGateEvaluator(evidence_path=evidence_path)
             return evaluator.evaluate()
 
@@ -204,7 +202,7 @@ class HardwareGateEvaluatorTests(unittest.TestCase):
                 "HMI_ENABLE_HARDWARE_COMMANDS": "1",
                 "HMI_HARDWARE_GATE_EVIDENCE_FILE": str(evidence_path),
             },
-            clear=False,
+            clear=True,
         ):
             snapshot = HardwareGateEvaluator().evaluate()
 

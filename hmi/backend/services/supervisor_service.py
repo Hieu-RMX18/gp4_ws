@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from threading import Lock
@@ -93,6 +94,7 @@ class SupervisorService(
         self._active_command_id: str | None = None
         self._active_sequence_id: str | None = None
         self._messages: deque[ChatMessage] = deque(maxlen=200)
+        self._console_events: deque[dict[str, Any]] = deque(maxlen=100)
         self._lock = Lock()
 
     @property
@@ -117,8 +119,47 @@ class SupervisorService(
             rendered_fields.append(f"{key}={rendered}")
         if rendered_fields:
             LOGGER.info("[HMI CMD] %s | %s", stage, " | ".join(rendered_fields))
-            return
-        LOGGER.info("[HMI CMD] %s", stage)
+        else:
+            LOGGER.info("[HMI CMD] %s", stage)
+        event: dict[str, Any] = {"stage": stage, "timestamp": utcnow().isoformat()}
+        if rendered_fields:
+            event["fields"] = " | ".join(rendered_fields)
+        with self._lock:
+            command_id = fields.get("command_id")
+            record = self._commands.get(str(command_id)) if command_id else None
+            session_id = fields.get("session_id") or (
+                record.session_id if record else None
+            )
+            operator_id = fields.get("operator_id") or (
+                record.operator_id if record else None
+            )
+            if session_id:
+                event["_session_id"] = str(session_id)
+            if operator_id:
+                event["_operator_id"] = str(operator_id)
+            self._console_events.append(event)
+
+    def _console_events_for(
+        self, session_id: str, operator_id: str
+    ) -> list[dict[str, Any]]:
+        def visible(event: dict[str, Any]) -> bool:
+            event_session = event.get("_session_id")
+            event_operator = event.get("_operator_id")
+            if event_session is None and event_operator is None:
+                return True
+            return event_session == session_id and event_operator == operator_id
+
+        def public_event(event: dict[str, Any]) -> dict[str, Any]:
+            return {
+                key: value
+                for key, value in event.items()
+                if key in {"stage", "timestamp", "fields"}
+            }
+
+        with self._lock:
+            return [
+                public_event(event) for event in self._console_events if visible(event)
+            ]
 
     def bind_telemetry_service(self, telemetry_service: TelemetryBridgeService) -> None:
         self._telemetry = telemetry_service
@@ -147,6 +188,7 @@ class SupervisorService(
                 active_command.metrics if active_command else None
             ),
             "replayItems": [self._serialize_replay_item(item) for item in replay_items],
+            "consoleEvents": self._console_events_for(session_id, operator_id),
         }
 
     def acquire_lease(
@@ -401,6 +443,16 @@ class SupervisorService(
 
     def _current_joints(self) -> list[JointPosition]:
         return self._ros.read_joint_positions()
+
+    def _current_joints_rad(self) -> list[float]:
+        """Return current joint positions in radians, or empty list if unavailable."""
+        try:
+            joints = self._ros.read_joint_positions()
+        except Exception:
+            return []
+        if len(joints) != 6 or any(j.position_deg is None for j in joints):
+            return []
+        return [math.radians(float(j.position_deg)) for j in joints]
 
     def _read_source_statuses(self) -> list[Any]:
         reader = getattr(self._ros, "read_source_statuses", None)

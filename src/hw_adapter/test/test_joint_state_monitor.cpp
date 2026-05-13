@@ -77,7 +77,7 @@ TEST_F(JointStateMonitorTest, invalid_before_first_message) {
   EXPECT_NE(snapshot.status_message.find("unknown"), std::string::npos);
 }
 
-TEST_F(JointStateMonitorTest, subscribes_with_default_reliable_qos) {
+TEST_F(JointStateMonitorTest, subscribes_with_sensor_data_qos_for_motoros2) {
   const std::string topic = "/test_hw_adapter/joint_state_qos";
   auto monitor_node =
       std::make_shared<rclcpp::Node>("joint_state_monitor_qos_test");
@@ -87,7 +87,7 @@ TEST_F(JointStateMonitorTest, subscribes_with_default_reliable_qos) {
   const auto topic_info = monitor_node->get_subscriptions_info_by_topic(topic);
   ASSERT_EQ(topic_info.size(), 1U);
   EXPECT_EQ(topic_info.front().qos_profile().reliability(),
-            rclcpp::ReliabilityPolicy::Reliable);
+            rclcpp::ReliabilityPolicy::BestEffort);
   EXPECT_EQ(topic_info.front().qos_profile().durability(),
             rclcpp::DurabilityPolicy::Volatile);
 }
@@ -103,7 +103,7 @@ TEST_F(JointStateMonitorTest, reorders_joint_positions_to_canonical_layout) {
 
   auto publisher =
       publisher_node->create_publisher<sensor_msgs::msg::JointState>(
-          topic, rclcpp::QoS(10));
+          topic, rclcpp::SensorDataQoS());
 
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(monitor_node);
@@ -137,7 +137,7 @@ TEST_F(JointStateMonitorTest, stale_joint_state_is_invalid) {
 
   auto publisher =
       publisher_node->create_publisher<sensor_msgs::msg::JointState>(
-          topic, rclcpp::QoS(10));
+          topic, rclcpp::SensorDataQoS());
 
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(monitor_node);

@@ -140,6 +140,61 @@ def test_move_named_pose_rejects_unknown_srdf_group_state():
         router.route({"intent": "move_named_pose", "pose_name": "park_safe"})
 
 
+@pytest.mark.parametrize(
+    "raw_pose_name",
+    ["poseA", "pose A", "pose a", "A", "a", "point A", "điểm A", "diem a"],
+)
+def test_move_named_pose_canonicalizes_aliases_to_poseA(raw_pose_name):
+    router = _router()
+
+    result = router.route({"intent": "move_named_pose", "pose_name": raw_pose_name})
+
+    assert result.route_type == "primitive"
+    command = result.commands[0]
+    assert command["primitive_type"] == "PTP"
+    assert command["planner_id"] == "PILZ_PTP"
+    assert len(command["joint_target"]) == 6
+
+
+@pytest.mark.parametrize(
+    "raw_pose_name",
+    ["poseB", "pose B", "B", "point B", "điểm B"],
+)
+def test_move_named_pose_canonicalizes_aliases_to_poseB(raw_pose_name):
+    router = _router()
+
+    result = router.route({"intent": "move_named_pose", "pose_name": raw_pose_name})
+
+    assert result.route_type == "primitive"
+    assert result.commands[0]["primitive_type"] == "PTP"
+
+
+def test_move_named_pose_rejects_unknown_alias():
+    router = _router()
+
+    with pytest.raises(ValueError, match="unknown named pose.*available"):
+        router.route({"intent": "move_named_pose", "pose_name": "poseZ"})
+
+
+def test_return_to_start_requires_captured_joint_target():
+    router = _router()
+
+    with pytest.raises(ValueError, match="captured joint_target"):
+        router.route({"intent": "return_to_start"})
+
+
+def test_return_to_start_routes_captured_joint_target_to_move_joints():
+    router = _router()
+
+    result = router.route(
+        {"intent": "return_to_start", "joint_target": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]}
+    )
+
+    assert result.route_type == "primitive"
+    assert result.commands[0]["primitive_type"] == "MOVE_JOINTS"
+    assert result.commands[0]["joint_target"] == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+
+
 def test_stop():
     router = _router()
 

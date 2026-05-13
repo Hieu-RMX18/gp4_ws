@@ -9,3 +9,4 @@ export { SystemMetrics } from './SystemMetrics';
 export { TelemetrySources } from './TelemetrySources';
 export { ControlLeasePanel } from './ControlLeasePanel';
 export { SystemLog } from './SystemLog';
+export { RuntimeConsole } from './RuntimeConsole';

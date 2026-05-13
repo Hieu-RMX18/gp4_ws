@@ -54,6 +54,22 @@ class AlwaysUnlockedHardwareGate:
         )
 
 
+class AlwaysLockedHardwareGate:
+    def evaluate(self) -> HardwareGateStatusSnapshot:
+        return HardwareGateStatusSnapshot(
+            unlocked=False,
+            reasons=["hardware gate evidence is not approved."],
+            flag_enabled=False,
+            evidence_path="hmi/data/hardware_gate.json",
+            approved_by=None,
+            approved_at=None,
+            report_path=None,
+            report_sha256=None,
+            report_sha256_match=False,
+            checklist=None,
+        )
+
+
 class FakeSupervisorAdapter:
     def __init__(self) -> None:
         self.started = False
@@ -420,7 +436,7 @@ class SupervisorServiceTests(unittest.TestCase):
         self._review_token_patch = patch.dict(
             os.environ,
             {"GP4_REVIEW_INTENT_TOKEN": "test-review-secret"},
-            clear=False,
+            clear=True,
         )
         self._review_token_patch.start()
         self.addCleanup(self._review_token_patch.stop)
@@ -452,14 +468,15 @@ class SupervisorServiceTests(unittest.TestCase):
     def test_ros_adapter_property_exposes_constructor_instance(self) -> None:
         self.assertIs(self.supervisor.ros_adapter, self.adapter)
 
-    def test_capabilities_block_text_submission_when_review_intent_is_not_ready(
+    def test_capabilities_allow_deterministic_commands_when_review_intent_is_not_ready(
         self,
     ) -> None:
         self.adapter.set_review_intent_ready(False)
 
         overlay = self.supervisor.snapshot_overlay(self.session_id, self.operator_id)
 
-        self.assertFalse(overlay["capabilities"]["canSubmitCommands"])
+        self.assertTrue(overlay["capabilities"]["canSubmitCommands"])
+        self.assertTrue(overlay["capabilities"]["commandIngressAvailable"])
 
     def test_review_intent_outage_preserves_existing_controller_lease(self) -> None:
         lease_token = self._acquire_lease()
@@ -467,12 +484,14 @@ class SupervisorServiceTests(unittest.TestCase):
 
         overlay = self.supervisor.snapshot_overlay(self.session_id, self.operator_id)
 
-        self.assertFalse(overlay["capabilities"]["canSubmitCommands"])
+        self.assertTrue(overlay["capabilities"]["canSubmitCommands"])
         self.assertTrue(overlay["capabilities"]["canConfirmCommands"])
         self.assertTrue(overlay["lease"]["ownsControl"])
         self.assertEqual(overlay["lease"]["leaseToken"], lease_token)
 
-    def test_hardware_capabilities_require_review_intent_token(self) -> None:
+    def test_hardware_capabilities_allow_deterministic_commands_without_review_token(
+        self,
+    ) -> None:
         supervisor = SupervisorService(
             audit_service=self.audit,
             session_lock_service=self.session_lock,
@@ -486,10 +505,47 @@ class SupervisorServiceTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             overlay = supervisor.snapshot_overlay(self.session_id, self.operator_id)
 
-        self.assertFalse(overlay["capabilities"]["canSubmitCommands"])
-        self.assertFalse(overlay["capabilities"]["commandIngressAvailable"])
+        self.assertTrue(overlay["capabilities"]["canSubmitCommands"])
+        self.assertTrue(overlay["capabilities"]["commandIngressAvailable"])
 
-    def test_sim_capabilities_require_review_intent_token(self) -> None:
+    def test_hardware_gate_lock_is_advisory_for_existing_controller_lease(
+        self,
+    ) -> None:
+        supervisor = SupervisorService(
+            audit_service=self.audit,
+            session_lock_service=self.session_lock,
+            ros_adapter=self.adapter,
+            confirmation_window_sec=5.0,
+            hardware_gate_evaluator=AlwaysLockedHardwareGate(),
+        )
+        supervisor.bind_telemetry_service(self.telemetry)
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+        lease_token = self._acquire_lease()
+
+        overlay = supervisor.snapshot_overlay(self.session_id, self.operator_id)
+
+        self.assertTrue(overlay["capabilities"]["canSubmitCommands"])
+        self.assertTrue(overlay["capabilities"]["canConfirmCommands"])
+        self.assertFalse(overlay["capabilities"]["hardwareGate"]["unlocked"])
+        self.assertTrue(overlay["lease"]["ownsControl"])
+        self.assertEqual(overlay["lease"]["role"], "controller")
+        self.assertEqual(overlay["lease"]["leaseToken"], lease_token)
+        self.assertIn("active", overlay["lease"]["statusText"])
+        self.assertNotIn("locked", overlay["lease"]["statusText"])
+
+        response = supervisor.release_lease(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+        )
+
+        self.assertTrue(response["accepted"])
+        self.assertFalse(response["lease"]["ownsControl"])
+        self.assertIsNone(response["lease"]["leaseToken"])
+
+    def test_sim_capabilities_allow_deterministic_commands_without_review_token(
+        self,
+    ) -> None:
         self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.SIM)
 
         with patch.dict(os.environ, {}, clear=True):
@@ -498,8 +554,8 @@ class SupervisorServiceTests(unittest.TestCase):
                 self.operator_id,
             )
 
-        self.assertFalse(overlay["capabilities"]["canSubmitCommands"])
-        self.assertFalse(overlay["capabilities"]["commandIngressAvailable"])
+        self.assertTrue(overlay["capabilities"]["canSubmitCommands"])
+        self.assertTrue(overlay["capabilities"]["commandIngressAvailable"])
 
     def test_hardware_capabilities_allow_review_when_token_configured(self) -> None:
         supervisor = SupervisorService(
@@ -514,6 +570,39 @@ class SupervisorServiceTests(unittest.TestCase):
 
         with patch.dict(os.environ, {"GP4_REVIEW_INTENT_TOKEN": "review-token"}):
             overlay = supervisor.snapshot_overlay(self.session_id, self.operator_id)
+
+        self.assertTrue(overlay["capabilities"]["canSubmitCommands"])
+        self.assertTrue(overlay["capabilities"]["commandIngressAvailable"])
+        self.assertIn("request", overlay["lease"]["statusText"])
+        self.assertNotIn("locked", overlay["lease"]["statusText"])
+
+    def test_hardware_capabilities_read_review_token_from_env_file(self) -> None:
+        supervisor = SupervisorService(
+            audit_service=self.audit,
+            session_lock_service=self.session_lock,
+            ros_adapter=self.adapter,
+            confirmation_window_sec=5.0,
+            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
+        )
+        supervisor.bind_telemetry_service(self.telemetry)
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+
+        with TemporaryDirectory() as temp_dir:
+            env_path = Path(temp_dir) / ".env"
+            env_path.write_text(
+                "GP4_REVIEW_INTENT_TOKEN=review-token\n",
+                encoding="utf-8",
+            )
+
+            with patch.dict(
+                os.environ,
+                {"GP4_LLM_ENV_FILE": str(env_path)},
+                clear=True,
+            ):
+                overlay = supervisor.snapshot_overlay(
+                    self.session_id,
+                    self.operator_id,
+                )
 
         self.assertTrue(overlay["capabilities"]["canSubmitCommands"])
         self.assertTrue(overlay["capabilities"]["commandIngressAvailable"])
@@ -739,6 +828,34 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertAlmostEqual(normalized["joint_target"][0], 1.938101818035138)
         self.assertEqual(response["command"]["lifecycleState"], "NEEDS_CONFIRMATION")
 
+    def test_gateway_review_canonical_pose_alias_reaches_confirmation(
+        self,
+    ) -> None:
+        self.adapter.set_review_result(
+            accepted=True,
+            adapter="fake-gateway-review",
+            semanticIr={"intent": "move_named_pose", "pose_name": "poseA"},
+        )
+        lease_token = self._acquire_lease()
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="move to pose A",
+            mode="sim",
+        )
+
+        self.assertTrue(response["accepted"], msg=response)
+        self.assertEqual(self.adapter.confirm_calls, [])
+        parsed = response["command"]["parsedIntent"]
+        self.assertEqual(parsed["action"], "PTP")
+        normalized = parsed["normalizedCommand"]
+        self.assertEqual(normalized["primitive_type"], "PTP")
+        self.assertEqual(normalized["planner_id"], "PILZ_PTP")
+        self.assertEqual(len(normalized["joint_target"]), 6)
+        self.assertEqual(response["command"]["lifecycleState"], "NEEDS_CONFIRMATION")
+
     def test_gateway_review_sequence_semantic_ir_enters_sequence_path(
         self,
     ) -> None:
@@ -780,6 +897,52 @@ class SupervisorServiceTests(unittest.TestCase):
             all(
                 step["intentSource"] == "text" for step in response["sequence"]["steps"]
             )
+        )
+
+    def test_gateway_review_sequence_return_to_start_uses_start_joints(
+        self,
+    ) -> None:
+        self.adapter.set_review_result(
+            accepted=True,
+            adapter="fake-gateway-review",
+            semanticIr={
+                "intent": "sequence",
+                "steps": [
+                    {"intent": "move_named_pose", "pose_name": "poseA"},
+                    {"intent": "return_to_start"},
+                ],
+            },
+        )
+        lease_token = self._acquire_lease()
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="move to pose A then return to start",
+            mode="sim",
+        )
+
+        self.assertTrue(response["accepted"], msg=response)
+        self.assertEqual(response["jobType"], "sequence")
+        self.assertEqual(
+            [step["parsedIntent"]["action"] for step in response["sequence"]["steps"]],
+            ["PTP", "MOVE_JOINTS"],
+        )
+        normalized = response["sequence"]["steps"][1]["parsedIntent"][
+            "normalizedCommand"
+        ]
+        self.assertEqual(normalized["primitive_type"], "MOVE_JOINTS")
+        self.assertEqual(len(normalized["joint_target"]), 6)
+        self.assertAlmostEqual(normalized["joint_target"][0], 0.0)
+        self.assertAlmostEqual(normalized["joint_target"][1], 0.08726646259971647)
+        self.assertEqual(
+            response["sequence"]["structuredIntent"]["steps"][1]["intent"],
+            "return_to_start",
+        )
+        self.assertIn(
+            "joint_target",
+            response["sequence"]["structuredIntent"]["steps"][1],
         )
 
     def test_gateway_review_named_pose_sequence_confirms_in_order(
@@ -866,9 +1029,12 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
         self.assertIn("joint_states_fallback", response["reason"])
 
-    def test_hardware_mode_requires_dual_gate_before_command_ingress(self) -> None:
+    def test_hardware_mode_allows_command_when_evidence_gate_is_locked(
+        self,
+    ) -> None:
         lease_token = self._acquire_lease()
         self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+        self.adapter.set_preflight(accepted=True, reasons=[])
         response = self.supervisor.submit_intent(
             session_id=self.session_id,
             operator_id=self.operator_id,
@@ -876,9 +1042,9 @@ class SupervisorServiceTests(unittest.TestCase):
             raw_text="home",
             mode="hardware",
         )
-        self.assertFalse(response["accepted"])
-        self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
-        self.assertIn("HMI_ENABLE_HARDWARE_COMMANDS", response["reason"])
+        self.assertTrue(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "NEEDS_CONFIRMATION")
+        self.assertEqual(response["command"]["mode"], "hardware")
 
     def test_hardware_mode_allows_command_when_gate_and_preflight_pass(self) -> None:
         supervisor = SupervisorService(
@@ -982,21 +1148,14 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertTrue(response["accepted"])
         self.assertEqual(self.adapter.stop_motion_calls, 1)
 
-    def test_servo_start_calls_adapter_only_after_hardware_gate_and_lease(
+    def test_servo_start_calls_adapter_after_preflight_and_lease_without_evidence_gate(
         self,
     ) -> None:
-        supervisor = SupervisorService(
-            audit_service=self.audit,
-            session_lock_service=self.session_lock,
-            ros_adapter=self.adapter,
-            confirmation_window_sec=5.0,
-            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
-        )
-        supervisor.bind_telemetry_service(self.telemetry)
         lease_token = self._acquire_lease()
         self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+        self.adapter.set_preflight(accepted=True, reasons=[])
 
-        response = supervisor.start_servo(
+        response = self.supervisor.start_servo(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
@@ -1086,6 +1245,44 @@ class SupervisorServiceTests(unittest.TestCase):
         )
         self.assertFalse(response["accepted"])
         self.assertIn("joint_states_fallback", response["reason"])
+
+    def test_fast_path_review_still_requires_hardware_preflight(self) -> None:
+        supervisor = SupervisorService(
+            audit_service=self.audit,
+            session_lock_service=self.session_lock,
+            ros_adapter=self.adapter,
+            confirmation_window_sec=5.0,
+            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
+        )
+        supervisor.bind_telemetry_service(self.telemetry)
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+        self.adapter.set_review_result(
+            accepted=True,
+            semanticIr={
+                "intent": "move_relative",
+                "delta": {"x": 0.0, "y": 0.0, "z": 5.0},
+                "linear_unit": "cm",
+                "reference_frame": "base_link",
+            },
+        )
+        self.adapter.set_preflight(
+            accepted=False,
+            reasons=["required telemetry source robot_status is stale."],
+        )
+        lease_token = self._acquire_lease()
+
+        response = supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="move up 5 cm",
+            mode="hardware",
+        )
+
+        self.assertFalse(response["accepted"])
+        self.assertEqual(response["command"]["lifecycleState"], "REJECTED")
+        self.assertIn("robot_status", response["reason"])
+        self.assertEqual(self.adapter.confirm_calls, [])
 
     def test_confirmation_expires_correctly(self) -> None:
         lease_token = self._acquire_lease()

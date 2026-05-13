@@ -27,8 +27,14 @@ export function ControlLeasePanel({
   const hardwareGate = capabilities.hardwareGate;
   const reasons = hardwareGate.reasons ?? [];
   const primaryReason =
-    reasons[0] ?? 'Dual gate is not satisfied: runtime flag + signed evidence checklist are required.';
+    reasons[0] ??
+    (hardwareGate.unlocked
+      ? 'ReviewIntent service/token gate is not satisfied.'
+      : 'Hardware evidence is advisory; runtime preflight controls execution.');
   const primaryReasonVi = reasonToVietnamese(primaryReason);
+  const readOnlyHardwareText = hardwareGate.unlocked
+    ? `Command ingress locked: ${primaryReason}`
+    : `Command ingress locked: ${primaryReason}`;
 
   return (
     <section className="section">
@@ -47,7 +53,7 @@ export function ControlLeasePanel({
       <div className="lease-caption">
         {readOnlyBridge
           ? mode === 'hardware'
-            ? `Hardware gate locked: ${primaryReason}`
+            ? readOnlyHardwareText
             : 'Telemetry is live, but command ingress stays read-only until command-capable mode and freshness gates are satisfied.'
           : lease.statusText}
       </div>

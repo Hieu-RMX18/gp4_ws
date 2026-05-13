@@ -152,6 +152,12 @@ export interface ChatMessage {
   tag?: string | null;
 }
 
+export interface ConsoleEvent {
+  stage: string;
+  timestamp: string;
+  fields?: string | null;
+}
+
 export interface CommandValidationResult {
   accepted: boolean;
   leaseValid: boolean;
@@ -308,6 +314,7 @@ export interface HmiStateSnapshot {
   jointPositions: JointPosition[];
   planMetrics: PlanMetrics | null;
   replayItems: ReplayListItem[];
+  consoleEvents: ConsoleEvent[];
 }
 
 export interface RuntimeStateResponse {
@@ -360,6 +367,7 @@ export interface CommandIntentRequest {
   operatorId: string;
   leaseToken: string | null;
   intentText?: string | null;
+  quickCommandId?: string | null;
   mode: 'sim' | 'hardware';
 }
 
@@ -411,8 +419,8 @@ export type HmiStreamEvent =
   | { type: 'snapshot'; snapshot: HmiStateSnapshot }
   | { type: 'heartbeat'; schemaVersion: string; generatedAt: string; transportState: TransportState; telemetryState: TelemetryState }
   | { type: 'lease_state'; lease: LeaseView; capabilities: BridgeCapabilities }
-  | { type: 'command_lifecycle'; command: CommandView; messages?: ChatMessage[]; planMetrics?: PlanMetrics | null }
-  | { type: 'sequence_lifecycle'; sequence: SequenceView; messages?: ChatMessage[] }
+  | { type: 'command_lifecycle'; command: CommandView; messages?: ChatMessage[]; planMetrics?: PlanMetrics | null; consoleEvents?: ConsoleEvent[] }
+  | { type: 'sequence_lifecycle'; sequence: SequenceView; messages?: ChatMessage[]; consoleEvents?: ConsoleEvent[] }
   | { type: 'replay_updated'; replayItems: ReplayListItem[] }
   | { type: 'connection_state'; transportState: TransportState; connections?: BridgeConnection[] }
   | { type: 'jog_bridge_status'; jogBridgeStatus: JogBridgeStatusSnapshot };

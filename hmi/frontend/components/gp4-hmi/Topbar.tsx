@@ -83,7 +83,7 @@ export function Topbar({
             className="servo-btn servo-start"
             disabled={!canStartServo || pendingServoAction !== null}
             onClick={() => { void runServoAction('start'); }}
-            title={canStartServo ? 'Servo START' : 'Hardware gate and controller lease required'}
+            title={canStartServo ? 'Servo START' : 'Hardware mode, preflight, and controller lease required'}
           >
             {pendingServoAction === 'start' ? 'STARTING' : 'START'}
           </button>

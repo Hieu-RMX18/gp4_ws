@@ -251,11 +251,12 @@ export function reasonToVietnamese(reason: string): string {
   if (n.includes('runtime state')) return 'Trạng thái runtime hiện tại đang chặn lệnh.';
   if (n.includes('telemetry') && n.includes('stale')) return 'Telemetry nguồn bắt buộc đang stale hoặc unavailable.';
   if (n.includes('preflight')) return 'Preflight phần cứng thất bại.';
+  if (n.includes('reviewintent') || n.includes('review intent')) return 'Cổng ReviewIntent hoặc token ký lệnh chưa sẵn sàng.';
   return 'Điều kiện an toàn chưa đạt, hệ thống giữ fail-closed.';
 }
 
 export function hardwareGateLabel(unlocked: boolean): string {
-  return unlocked ? 'UNLOCKED · MỞ KHÓA' : 'LOCKED · KHÓA';
+  return unlocked ? 'RECORDED · ĐÃ GHI' : 'ADVISORY · THAM KHẢO';
 }
 
 export function summarizeMutationResponse(response: CommandMutationResponse): string {

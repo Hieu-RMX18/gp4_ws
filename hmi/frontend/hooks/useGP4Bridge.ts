@@ -96,6 +96,7 @@ function createDisconnectedSnapshot(): HmiStateSnapshot {
     jointPositions: DEFAULT_JOINTS,
     planMetrics: null,
     replayItems: [],
+    consoleEvents: [],
   };
 }
 
@@ -134,6 +135,7 @@ function applyEvent(snapshot: HmiStateSnapshot, event: HmiStreamEvent): HmiState
           activeSequence: mergeSequenceStep(snapshot.activeSequence, event.command),
           planMetrics: event.planMetrics ?? event.command.metrics ?? snapshot.planMetrics,
           messages: event.messages ? [...snapshot.messages, ...event.messages] : snapshot.messages,
+          consoleEvents: event.consoleEvents ?? snapshot.consoleEvents,
         };
       }
       return {
@@ -142,6 +144,7 @@ function applyEvent(snapshot: HmiStateSnapshot, event: HmiStreamEvent): HmiState
         activeCommand: event.command,
         planMetrics: event.planMetrics ?? event.command.metrics ?? snapshot.planMetrics,
         messages: event.messages ? [...snapshot.messages, ...event.messages] : snapshot.messages,
+        consoleEvents: event.consoleEvents ?? snapshot.consoleEvents,
       };
     case 'sequence_lifecycle':
       return {
@@ -153,6 +156,7 @@ function applyEvent(snapshot: HmiStateSnapshot, event: HmiStreamEvent): HmiState
             ? snapshot.activeCommand
             : event.sequence.steps[event.sequence.currentStepIndex ?? 0] ?? snapshot.activeCommand,
         messages: event.messages ? [...snapshot.messages, ...event.messages] : snapshot.messages,
+        consoleEvents: event.consoleEvents ?? snapshot.consoleEvents,
       };
     case 'replay_updated':
       return {
@@ -200,6 +204,7 @@ export interface UseGp4BridgeResult {
   isController: boolean;
   blockingRuntime: boolean;
   submitCommand: (rawText: string) => Promise<CommandMutationResponse>;
+  submitQuickCommand: (quickCommandId: string) => Promise<CommandMutationResponse>;
   confirmCommandById: (commandId: string, planFingerprint: string) => Promise<CommandMutationResponse>;
   acquireControllerLease: () => Promise<LeaseMutationResponse>;
   releaseLease: () => Promise<LeaseMutationResponse | null>;
@@ -298,6 +303,23 @@ export function useGP4Bridge(
       operatorId,
       leaseToken: state.lease.leaseToken,
       intentText: rawText,
+      mode: state.mode,
+    });
+    if (response.snapshot) {
+      setState(response.snapshot);
+    }
+    return response;
+  }, [client, operatorId, sessionId, state.lease.leaseToken, state.mode]);
+
+  const submitQuickCommand = useCallback(async (quickCommandId: string) => {
+    if (state.mode !== 'sim' && state.mode !== 'hardware') {
+      throw new Error('Command mode is not command-capable.');
+    }
+    const response = await client.submitCommand({
+      sessionId,
+      operatorId,
+      leaseToken: state.lease.leaseToken,
+      quickCommandId,
       mode: state.mode,
     });
     if (response.snapshot) {
@@ -405,6 +427,7 @@ export function useGP4Bridge(
     isController: state.lease.ownsControl && state.lease.leaseToken !== null,
     blockingRuntime,
     submitCommand,
+    submitQuickCommand,
     confirmCommandById,
     acquireControllerLease,
     releaseLease,

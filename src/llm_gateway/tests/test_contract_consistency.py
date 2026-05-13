@@ -76,6 +76,7 @@ _INTENT_TO_PRIMITIVES = {
     "io_set": {"IO_SET"},
     "draw_shape": {"PTP", "CARTESIAN_PATH", "BLENDED_SEQUENCE", "MACRO"},
     "draw_text": {"PTP", "CARTESIAN_PATH", "BLENDED_SEQUENCE", "MACRO"},
+    "return_to_start": {"MOVE_JOINTS"},
 }
 
 
@@ -189,13 +190,13 @@ def test_top_level_output_intents_include_sequence():
 
 
 def test_no_deprecated_schema_loaded_at_runtime():
-    """command_schema.json must not exist (deprecated to .DEPRECATED)."""
+    """command_schema.json must not exist (legacy, removal_date=2026-04-01)."""
     deprecated_path = (
         Path(__file__).resolve().parents[1] / "config" / "command_schema.json"
     )
     assert (
         not deprecated_path.exists()
-    ), "command_schema.json should have been renamed to .DEPRECATED"
+    ), "command_schema.json should have been removed (removal_date=2026-04-01)"
 
 
 def test_macro_policy_declares_draw_shape_and_draw_text():

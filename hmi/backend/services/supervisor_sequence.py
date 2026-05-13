@@ -159,6 +159,32 @@ class SupervisorSequenceMixin:
             return None
         return reader(reference_frame="base_link")
 
+    @staticmethod
+    def _inject_return_to_start_joints(
+        payload: dict[str, Any],
+        start_joints_rad: list[float] | None,
+    ) -> dict[str, Any]:
+        """If any step is return_to_start, inject captured joint_target."""
+        enriched = dict(payload)
+        intent_name = str(enriched.get("intent") or "").strip().lower()
+        if intent_name == "return_to_start":
+            if not start_joints_rad or len(start_joints_rad) != 6:
+                return enriched
+            enriched["joint_target"] = [float(v) for v in start_joints_rad]
+            return enriched
+        if intent_name == "sequence":
+            steps = enriched.get("steps")
+            if isinstance(steps, list):
+                enriched["steps"] = [
+                    SupervisorSequenceMixin._inject_return_to_start_joints(
+                        step, start_joints_rad
+                    )
+                    if isinstance(step, dict)
+                    else step
+                    for step in steps
+                ]
+        return enriched
+
     def _parse_sequence_steps(
         self,
         *,
@@ -171,6 +197,8 @@ class SupervisorSequenceMixin:
     ]:
         diagnostics: list[str] = []
         parsed_steps: list[dict[str, Any]] = []
+        # Capture start joints for possible return_to_start expansion.
+        start_joints_rad = self._current_joints_rad()
         if (
             structured_intent is not None
             and str(structured_intent.get("intent") or "").strip().lower() == "sequence"
@@ -183,7 +211,10 @@ class SupervisorSequenceMixin:
                     {"intent": "sequence"},
                 )
             try:
-                routed = IntentRouter(runtime_mode=mode.value).route(structured_intent)
+                routed_payload = self._inject_return_to_start_joints(
+                    structured_intent, start_joints_rad
+                )
+                routed = IntentRouter(runtime_mode=mode.value).route(routed_payload)
                 if routed.route_type != "sequence":
                     return (
                         None,

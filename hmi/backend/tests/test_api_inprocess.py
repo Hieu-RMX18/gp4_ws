@@ -10,6 +10,7 @@ from hmi.backend.api.app import create_app
 from hmi.backend.api.contracts import (
     CommandConfirmRequestModel,
     CommandIntentRequestModel,
+    HmiStateSnapshotModel,
     LeaseAcquireRequestModel,
     ServoControlRequestModel,
 )
@@ -105,6 +106,14 @@ async def _post_json(app, path: str, payload: dict):
         transport=transport, base_url="http://testserver"
     ) as client:
         return await client.post(path, json=payload)
+
+
+async def _get(app, path: str, params: dict | None = None):
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        return await client.get(path, params=params)
 
 
 async def _post_json_from_client(app, path: str, payload: dict, client_addr: str):
@@ -362,6 +371,97 @@ def test_command_intent_route_review_and_confirm_flow():
         assert [call["parsed_intent"]["action"] for call in adapter.confirm_calls] == [
             "HOME"
         ]
+    finally:
+        temp_dir.cleanup()
+
+
+def test_command_intent_route_accepts_quick_command_id():
+    temp_dir, adapter, _supervisor, app = _build_test_app()
+    try:
+        acquire_lease = _route_endpoint(app, "/api/hmi/lease/acquire")
+        submit_intent = _route_endpoint(app, "/api/hmi/commands/intent")
+        lease_payload = acquire_lease(
+            LeaseAcquireRequestModel(
+                sessionId="api-quick-session",
+                operatorId="api-quick-operator",
+                requestedRole="controller",
+            )
+        )
+        lease_token = lease_payload["lease"]["leaseToken"]
+
+        submit_payload = submit_intent(
+            CommandIntentRequestModel(
+                sessionId="api-quick-session",
+                operatorId="api-quick-operator",
+                leaseToken=lease_token,
+                mode="sim",
+                quickCommandId="home",
+            )
+        )
+
+        assert submit_payload["accepted"] is True
+        assert submit_payload["command"]["structuredIntent"]["intent"] == "go_home"
+        assert adapter.submit_calls == []
+    finally:
+        temp_dir.cleanup()
+
+
+def test_snapshot_route_includes_console_events_contract_field():
+    temp_dir, _adapter, supervisor, app = _build_test_app()
+    try:
+        supervisor._trace("test.console_event", command_id="cmd-a")
+        get_snapshot = _route_endpoint(app, "/api/hmi/snapshot")
+
+        payload = get_snapshot(session_id="session-a", operator_id="operator-a")
+        validated = HmiStateSnapshotModel.model_validate(payload)
+
+        assert validated.consoleEvents[-1].stage == "test.console_event"
+    finally:
+        temp_dir.cleanup()
+
+
+def test_snapshot_route_scopes_console_events_to_session_and_operator():
+    temp_dir, _adapter, supervisor, app = _build_test_app()
+    try:
+        supervisor._trace(
+            "validation.accepted",
+            session_id="session-a",
+            operator_id="operator-a",
+            command_id="cmd-a",
+            plan_fingerprint="sensitive-fingerprint",
+        )
+        get_snapshot = _route_endpoint(app, "/api/hmi/snapshot")
+
+        same_session = get_snapshot(session_id="session-a", operator_id="operator-a")
+        other_session = get_snapshot(session_id="session-b", operator_id="operator-b")
+
+        assert same_session["consoleEvents"]
+        assert same_session["consoleEvents"][-1]["stage"] == "validation.accepted"
+        assert other_session["consoleEvents"] == []
+    finally:
+        temp_dir.cleanup()
+
+
+def test_command_intent_http_route_rejects_text_and_quick_command_together():
+    temp_dir, _adapter, _supervisor, app = _build_test_app()
+    try:
+        response = asyncio.run(
+            _post_json(
+                app,
+                "/api/hmi/commands/intent",
+                {
+                    "sessionId": "session-a",
+                    "operatorId": "operator-a",
+                    "leaseToken": "lease-token",
+                    "mode": "sim",
+                    "intentText": "go home",
+                    "quickCommandId": "home",
+                },
+            )
+        )
+
+        assert response.status_code == 422
+        assert "exactly one" in response.text
     finally:
         temp_dir.cleanup()
 

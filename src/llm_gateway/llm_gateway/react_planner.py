@@ -119,6 +119,14 @@ def _load_dotenv_values(config_path: str) -> dict[str, str]:
     return {}
 
 
+def lookup_env_or_dotenv(env_name: str, config_path: str | None = None) -> str:
+    env_value = os.getenv(env_name)
+    if env_value:
+        return env_value
+    resolved_path = config_path or _default_config_path()
+    return _load_dotenv_values(resolved_path).get(env_name, "")
+
+
 def _pick_first_non_empty(*values: Any) -> str:
     for value in values:
         if value is None:
@@ -250,6 +258,7 @@ FROZEN_SEMANTIC_INTENTS = frozenset(
         "io_set",
         "draw_shape",
         "draw_text",
+        "return_to_start",
     }
 )
 FROZEN_TOP_LEVEL_OUTPUT_INTENTS = FROZEN_SEMANTIC_INTENTS | {"sequence"}
@@ -260,7 +269,7 @@ _DEFAULT_WORKSPACE_BOUNDS = {
     "y_min": -0.16,
     "y_max": 0.52,
     "z_min": 0.23,
-    "z_max": 0.56,
+    "z_max": 0.65,
 }
 
 _LOGGER = logging.getLogger(__name__)
@@ -438,10 +447,15 @@ absolute_move_ptp
 
 move_named_pose
   Move to a verified SRDF named pose by name. This resolves to a PTP joint target.
-  Required: pose_name ("home"|"ready"|"poseA"|"poseB")
+  Required: pose_name — MUST be one of the canonical enum values: "home"|"ready"|"poseA"|"poseB"
+  IMPORTANT: Always canonicalize the user's input to the exact enum value above.
+    "pose A" / "A" / "point A" / "điểm A" → pose_name: "poseA"
+    "pose B" / "B" / "point B" / "điểm B" → pose_name: "poseB"
+    Never output "pose A" or "Pose A" — always "poseA".
   Use only when the operator explicitly names one of these taught poses.
-  VN: "đến pose ready", "về pose home", "đến điểm poseA"
+  VN: "đến pose ready", "về pose home", "đến điểm poseA", "tới A", "về B"
   → {"intent": "move_named_pose", "pose_name": "ready"}
+  → {"intent": "move_named_pose", "pose_name": "poseA"}
 
 absolute_move_lin
   Straight-line motion to absolute Cartesian position.
@@ -525,6 +539,12 @@ draw_text
      "workplane":{"mode":"base","origin":{"position":{"x":0.3,"y":0.0,"z":0.4}}},
      "font":{"type":"single_stroke_builtin","height":2,"alignment":"left"}}
 
+return_to_start
+  Sequence step only. Move the robot back to the pose it had when the current sequence began.
+  No required slots. Never output return_to_start as a standalone top-level intent.
+  VN: "quay về vị trí ban đầu", "trở về điểm xuất phát", "về chỗ cũ"
+  → inside sequence only: {"intent": "return_to_start"}
+
 sequence
   Use only when the user explicitly asks for multiple ordered robot actions in one request.
   Output: {"intent":"sequence","steps":[<step1>,<step2>,...]}
@@ -598,6 +618,14 @@ User: "chạy tới điểm x 0.3, y 0, z 0.5 theo đường thẳng nhé"
 User: "move to x=0.3 y=0 z=0.4"
 → {"intent": "absolute_move_ptp", "target_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}}
 
+User: "move to Cartesian x 300 mm y 0 z 400"
+→ {"intent": "absolute_move_ptp", "target_pose": {"position": {"x": 300.0, "y": 0.0, "z": 400.0}},
+   "linear_unit": "mm", "reference_frame": "base_link"}
+
+User: "đi tới tọa độ x 300 mm y 0 z 400"
+→ {"intent": "absolute_move_ptp", "target_pose": {"position": {"x": 300.0, "y": 0.0, "z": 400.0}},
+   "linear_unit": "mm", "reference_frame": "base_link"}
+
 User: "move to x=0.3 y=0 z=0.4 with tool pointing forward"
 → {"intent": "absolute_move_ptp", "target_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}},
    "orientation_preset": "tool-forward"}
@@ -637,6 +665,25 @@ User: "reset lỗi"
 
 User: "bật đầu ra 10010"
 → {"intent": "io_set", "io_address": 10010, "io_value": 1}
+
+User: "move to pose A"
+→ {"intent": "move_named_pose", "pose_name": "poseA"}
+
+User: "go to B"
+→ {"intent": "move_named_pose", "pose_name": "poseB"}
+
+User: "đến điểm A"
+→ {"intent": "move_named_pose", "pose_name": "poseA"}
+
+User: "về pose ready"
+→ {"intent": "move_named_pose", "pose_name": "ready"}
+
+User: "move to pose A then pose B then home"
+→ {"intent":"sequence","steps":[
+  {"intent":"move_named_pose","pose_name":"poseA"},
+  {"intent":"move_named_pose","pose_name":"poseB"},
+  {"intent":"go_home"}
+]}
 
 User: "vẽ hình tròn bán kính 5 cm"
 → {"intent":"draw_shape","shape_type":"circle","units":"cm","frame_id":"base_link",

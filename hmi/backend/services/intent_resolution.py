@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 import re
 import sys
@@ -114,6 +115,18 @@ class IntentResolutionService(IntentNormalizationMixin):
         route_metadata = self._sequence_candidate_metadata(candidate_payload)
         diagnostics: list[str] = []
         working_payload = dict(candidate_payload)
+        try:
+            working_payload = self._inject_return_to_start_joints(
+                working_payload, current_joints
+            )
+        except IntentResolutionError as exc:
+            return {
+                "parsed_steps": None,
+                "diagnostics": diagnostics,
+                "parse_error": exc.operator_message(),
+                "route_metadata": route_metadata,
+                "structured_intent": working_payload,
+            }
         if intent_name in {"draw_shape", "draw_text"}:
             try:
                 working_payload = self._hydrate_draw_workplane(
@@ -222,6 +235,65 @@ class IntentResolutionService(IntentNormalizationMixin):
             "route_metadata": route_metadata,
             "structured_intent": working_payload,
         }
+
+    def _inject_return_to_start_joints(
+        self, payload: dict[str, Any], current_joints: list[Any]
+    ) -> dict[str, Any]:
+        if not self._semantic_ir_contains_intent(payload, "return_to_start"):
+            return dict(payload)
+        joint_target = self._current_joint_target_rad(current_joints)
+        return self._inject_return_to_start_joints_recursive(payload, joint_target)
+
+    def _semantic_ir_contains_intent(self, payload: Any, target_intent: str) -> bool:
+        if isinstance(payload, dict):
+            if str(payload.get("intent") or "").strip().lower() == target_intent:
+                return True
+            return any(
+                self._semantic_ir_contains_intent(value, target_intent)
+                for value in payload.values()
+            )
+        if isinstance(payload, list):
+            return any(
+                self._semantic_ir_contains_intent(value, target_intent)
+                for value in payload
+            )
+        return False
+
+    def _current_joint_target_rad(self, current_joints: list[Any]) -> list[float]:
+        if len(current_joints) != len(JOINT_NAMES):
+            raise IntentResolutionError(
+                "return_to_start requires a complete current joint snapshot.",
+                missing_slots=["joint_positions"],
+            )
+        joint_target: list[float] = []
+        for index, joint in enumerate(current_joints):
+            position_deg = getattr(joint, "position_deg", None)
+            if position_deg is None:
+                raise IntentResolutionError(
+                    "return_to_start requires a complete current joint snapshot.",
+                    missing_slots=[f"joint_positions[{index}]"],
+                )
+            joint_target.append(math.radians(float(position_deg)))
+        return joint_target
+
+    def _inject_return_to_start_joints_recursive(
+        self, payload: dict[str, Any], joint_target: list[float]
+    ) -> dict[str, Any]:
+        enriched = dict(payload)
+        intent_name = str(enriched.get("intent") or "").strip().lower()
+        if intent_name == "return_to_start" and "joint_target" not in enriched:
+            enriched["joint_target"] = list(joint_target)
+            return enriched
+        if intent_name == "sequence":
+            steps = enriched.get("steps")
+            if isinstance(steps, list):
+                enriched["steps"] = [
+                    self._inject_return_to_start_joints_recursive(step, joint_target)
+                    if isinstance(step, dict)
+                    else step
+                    for step in steps
+                ]
+        return enriched
 
     def resolve(
         self,

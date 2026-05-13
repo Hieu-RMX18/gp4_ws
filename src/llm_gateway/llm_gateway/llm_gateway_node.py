@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import threading
 from typing import Any, Dict, List
 
@@ -60,11 +61,23 @@ from llm_gateway.react_planner import (
     ToolRegistry,
     WaitForStateTool,
     load_llm_backend_config,
+    lookup_env_or_dotenv,
 )
+from llm_gateway.semantic_ir_contract import validate_semantic_ir_contract
 
 
 EXECUTOR_SHUTDOWN_TIMEOUT_SEC = 2.0
 _REVIEW_INTENT_HMAC_VERSION = "v1"
+_DIRECT_STOP_REVIEW_TEXTS = {"stop", "stop motion", "cancel motion", "halt"}
+_DIRECT_GET_POSE_REVIEW_TEXTS = {
+    "get pose",
+    "current pose",
+    "where is robot",
+    "where is tcp",
+}
+_DIRECT_WAIT_REVIEW_RE = re.compile(
+    r"(?:wait|pause)\s+([+-]?\d+(?:\.\d+)?)\s*(?:s|sec|second|seconds)?"
+)
 
 
 def build_review_intent_token(
@@ -99,6 +112,7 @@ class _SequenceExecutionState:
     normalized_commands: List[Dict[str, Any]]
     step_count: int
     diagnostics: List[str] = field(default_factory=list)
+    start_joints_rad: List[float] = field(default_factory=list)
     current_step_index: int = 0
     executed_io_side_effects: bool = False
 
@@ -165,7 +179,10 @@ class LLMGatewayNode(Node):
         )
         runtime_mode = self._resolve_runtime_mode()
         self._runtime_mode = runtime_mode
-        self._review_intent_token = os.getenv("GP4_REVIEW_INTENT_TOKEN", "").strip()
+        self._review_intent_token = lookup_env_or_dotenv(
+            "GP4_REVIEW_INTENT_TOKEN",
+            llm_config_path,
+        ).strip()
         self._review_intent_requires_token = True
         self._intent_router = intent_router or IntentRouter(runtime_mode=runtime_mode)
         self._sequence_validator = sequence_validator or SequenceValidator(
@@ -173,6 +190,7 @@ class LLMGatewayNode(Node):
             normalizer=self._normalizer,
             semantic_validator=self._semantic_validator,
         )
+        self._latest_joint_positions_rad: List[float] = []
         llm_backend_config = load_llm_backend_config(llm_config_path)
         self._llm_client = llm_client or OpenAICompatibleLLMClient(
             llm_backend_config, self._schema_validator.schema_as_json()
@@ -335,7 +353,6 @@ class LLMGatewayNode(Node):
 
     def _load_react_enabled(self) -> bool:
         """Read llm.react.enabled from safety_rules.yaml SSOT."""
-        import os
         from pathlib import Path
 
         import yaml
@@ -396,16 +413,43 @@ class LLMGatewayNode(Node):
             intent_text=intent_text,
         )
 
+    @staticmethod
+    def _direct_review_semantic_ir(intent_text: str) -> Dict[str, Any] | None:
+        normalized = " ".join(str(intent_text or "").strip().lower().split())
+        normalized = normalized.strip(" .!?")
+        if normalized in _DIRECT_STOP_REVIEW_TEXTS:
+            return {"intent": "stop"}
+        if normalized in {"home", "go home", "return home"}:
+            return {"intent": "go_home"}
+        if normalized in _DIRECT_GET_POSE_REVIEW_TEXTS:
+            return {"intent": "get_pose", "reference_frame": "base_link"}
+
+        wait_match = _DIRECT_WAIT_REVIEW_RE.fullmatch(normalized)
+        if wait_match:
+            duration_sec = float(wait_match.group(1))
+            if duration_sec < 0.0:
+                return {
+                    "intent": "error",
+                    "error": "wait duration must be non-negative",
+                }
+            return {"intent": "wait", "wait_duration_sec": duration_sec}
+        return None
+
     def _generate_review_semantic_ir(self, intent_text: str) -> Dict[str, Any]:
+        direct_review = self._direct_review_semantic_ir(intent_text)
+        if direct_review is not None:
+            return direct_review
+
         if self._react_enabled and self._react_agent is not None:
             react_result = self._react_agent.run(intent_text)
             if not react_result.get("_handoff"):
                 return react_result
-            self.get_logger().warning(
-                "ReAct review handoff "
-                f"({react_result.get('reason', 'unknown')}); "
-                "falling back to legacy LLM review."
-            )
+            reason = react_result.get("reason", "unknown")
+            return {
+                "error": "REACT_HANDOFF",
+                "message": f"ReAct could not resolve the request: {reason}.",
+                "hint": "Rephrase the command with clearer intent or check that all required parameters are provided.",
+            }
 
         llm_response = self._llm_client.generate_response(intent_text)
         return self._parser.parse(llm_response)
@@ -493,6 +537,22 @@ class LLMGatewayNode(Node):
             response.error = "review result must be a JSON object."
             response.semantic_ir_json = ""
             return response
+
+        contract = validate_semantic_ir_contract(semantic_ir)
+        if not contract.valid:
+            response.accepted = False
+            response.error = contract.reason
+            response.semantic_ir_json = json.dumps(
+                {
+                    "error": "SEMANTIC_IR_CONTRACT_REJECTED",
+                    "reason": contract.reason,
+                    "hint": contract.hint,
+                },
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            return response
+
         response.semantic_ir_json = json.dumps(
             semantic_ir,
             separators=(",", ":"),
@@ -506,35 +566,76 @@ class LLMGatewayNode(Node):
             response.accepted = False
             response.error = "review result must be Semantic IR with an intent field."
             return response
-        try:
-            routed = IntentRouter(runtime_mode=effective_runtime_mode).route(
-                semantic_ir
-            )
-        except Exception as exc:
-            response.accepted = False
-            response.error = str(exc)
-            return response
-        if routed.route_type == "error":
-            error_payload = routed.error_payload or {}
-            response.accepted = False
-            response.error = str(
-                error_payload.get("message")
-                or error_payload.get("error")
-                or "review result was rejected by the intent router."
-            )
-            return response
+        if not self._semantic_ir_contains_intent(semantic_ir, "return_to_start"):
+            try:
+                routed = IntentRouter(runtime_mode=effective_runtime_mode).route(
+                    semantic_ir
+                )
+            except Exception as exc:
+                response.accepted = False
+                response.error = str(exc)
+                return response
+            if routed.route_type == "error":
+                error_payload = routed.error_payload or {}
+                response.accepted = False
+                response.error = str(
+                    error_payload.get("message")
+                    or error_payload.get("error")
+                    or "review result was rejected by the intent router."
+                )
+                return response
 
         response.accepted = True
         response.error = ""
         return response
 
     def _react_joint_state_callback(self, msg: JointState) -> None:
+        self._latest_joint_positions_rad = [float(value) for value in msg.position]
         self._react_state_injector.update_joint_states(
             {
                 "name": list(msg.name),
-                "position": [float(value) for value in msg.position],
+                "position": list(self._latest_joint_positions_rad),
             }
         )
+
+    @staticmethod
+    def _semantic_ir_contains_intent(payload: Any, target_intent: str) -> bool:
+        if isinstance(payload, dict):
+            if str(payload.get("intent") or "").strip() == target_intent:
+                return True
+            return any(
+                LLMGatewayNode._semantic_ir_contains_intent(value, target_intent)
+                for value in payload.values()
+            )
+        if isinstance(payload, list):
+            return any(
+                LLMGatewayNode._semantic_ir_contains_intent(value, target_intent)
+                for value in payload
+            )
+        return False
+
+    @staticmethod
+    def _inject_return_to_start_joints(
+        payload: Dict[str, Any], start_joints_rad: List[float]
+    ) -> Dict[str, Any]:
+        enriched = dict(payload)
+        intent = str(enriched.get("intent") or "").strip()
+        if intent == "return_to_start" and "joint_target" not in enriched:
+            if start_joints_rad:
+                enriched["joint_target"] = [float(value) for value in start_joints_rad]
+            return enriched
+        if intent == "sequence":
+            steps = enriched.get("steps")
+            if isinstance(steps, list):
+                enriched["steps"] = [
+                    LLMGatewayNode._inject_return_to_start_joints(
+                        step, start_joints_rad
+                    )
+                    if isinstance(step, dict)
+                    else step
+                    for step in steps
+                ]
+        return enriched
 
     def _react_robot_status_callback(self, msg: RobotStatus) -> None:
         if self._tri_state_is_true(msg.in_error) or self._tri_state_is_true(
@@ -561,41 +662,44 @@ class LLMGatewayNode(Node):
     def process_intent(self, intent_text: str) -> None:
         self.publish_status("received")
 
+        payload: str
         if self._react_enabled and self._react_agent is not None:
-            # W3 ReAct path: agent produces semantic IR, then IntentRouter downstream.
             try:
                 react_result = self._react_agent.run(intent_text)
             except Exception as exc:
                 self._reject("react_agent_failed", str(exc), intent_text=intent_text)
                 return
             if react_result.get("_handoff"):
-                self.get_logger().warning(
-                    "ReAct handoff "
-                    f"({react_result.get('reason', 'unknown')}); "
-                    "falling back to legacy /llm_intent path."
+                self._reject(
+                    "react_handoff",
+                    f"ReAct could not resolve the request: {react_result.get('reason', 'unknown')}.",
+                    intent_text=intent_text,
+                    hint="Rephrase the command with clearer intent or check that all required parameters are provided.",
                 )
-                llm_response = self._llm_client.generate_response(intent_text)
-                self.publish_status("llm_response_received")
-                self._process_llm_payload(intent_text, llm_response)
                 return
-            # react_result is the final semantic IR dict — feed through existing pipeline
-            self._process_llm_payload(intent_text, json.dumps(react_result))
-            return
+            payload = json.dumps(react_result)
+        else:
+            try:
+                llm_response = self._llm_client.generate_response(intent_text)
+            except Exception as exc:
+                self._reject("llm_request_failed", str(exc), intent_text=intent_text)
+                return
+            self.publish_status("llm_response_received")
+            payload = llm_response
 
-        try:
-            llm_response = self._llm_client.generate_response(intent_text)
-        except Exception as exc:
-            self._reject("llm_request_failed", str(exc), intent_text=intent_text)
-            return
-
-        self.publish_status("llm_response_received")
-        self._process_llm_payload(intent_text, llm_response)
+        self._process_llm_payload(intent_text, payload, enforce_contract=True)
 
     def process_raw_command(self, raw_payload: str) -> None:
         self.publish_status("received")
-        self._process_llm_payload("", raw_payload)
+        self._process_llm_payload("", raw_payload, enforce_contract=False)
 
-    def _process_llm_payload(self, intent_text: str, raw_payload: str) -> None:
+    def _process_llm_payload(
+        self,
+        intent_text: str,
+        raw_payload: str,
+        *,
+        enforce_contract: bool = True,
+    ) -> None:
         try:
             parsed_command = self._parser.parse(raw_payload)
         except Exception as exc:
@@ -617,6 +721,22 @@ class LLMGatewayNode(Node):
                 parsed_command=parsed_command,
             )
             return
+
+        if enforce_contract:
+            contract = validate_semantic_ir_contract(parsed_command)
+            if not contract.valid:
+                self._reject(
+                    "semantic_ir_contract_rejected",
+                    contract.reason,
+                    intent_text=intent_text,
+                    hint=contract.hint,
+                    parsed_command=parsed_command,
+                )
+                return
+
+        parsed_command = self._inject_return_to_start_joints(
+            parsed_command, list(getattr(self, "_latest_joint_positions_rad", []))
+        )
 
         self.publish_status("parsed")
         try:
@@ -742,6 +862,7 @@ class LLMGatewayNode(Node):
             normalized_commands=list(sequence_result.normalized_commands),
             step_count=sequence_result.step_count,
             diagnostics=list(sequence_result.diagnostics),
+            start_joints_rad=list(getattr(self, "_latest_joint_positions_rad", [])),
         )
         self._dispatch_sequence_step(sequence_state)
 
@@ -779,27 +900,6 @@ class LLMGatewayNode(Node):
         sequence_state: _SequenceExecutionState | None = None,
     ) -> None:
         primitive_type = normalized_command.get("primitive_type", "")
-
-        if normalized_command.get("plan_only"):
-            command_payload = self._goal_mapper.to_command_payload(normalized_command)
-            reason = (
-                "plan_only_not_executable: plan_only requests are not executable "
-                "through /execute_motion."
-            )
-            if sequence_state is None:
-                self._reject(
-                    "plan_only_not_executable",
-                    reason,
-                    intent_text=intent_text,
-                    validated_command=command_payload,
-                )
-            else:
-                self._reject_sequence_step(
-                    sequence_state,
-                    reason,
-                    validated_command=command_payload,
-                )
-            return
 
         if sequence_state is None and self._is_query_command(primitive_type):
             self._publish_command(
@@ -1007,12 +1107,34 @@ class LLMGatewayNode(Node):
                 )
             return
 
+        if normalized_command.get("plan_only") or command_payload.get("plan_only"):
+            precheck_payload = {
+                "status": "plan_precheck_succeeded",
+                "stage": "plan_only",
+                "intent": intent_text,
+                "validated_command": self._goal_mapper.to_command_payload(
+                    normalized_command
+                ),
+            }
+            if sequence_state is not None:
+                precheck_payload["sequence_step_index"] = (
+                    sequence_state.current_step_index
+                )
+                precheck_payload["sequence_step_count"] = sequence_state.step_count
+            self._publish_debug(precheck_payload)
+            if sequence_state is None:
+                self.publish_status("plan_precheck_succeeded")
+                return
+            sequence_state.current_step_index += 1
+            self._dispatch_sequence_step(sequence_state)
+            return
+
         try:
             execution_command = self._prepare_execution_command(normalized_command)
         except Exception as exc:
             if sequence_state is None:
                 self._reject(
-                    "plan_only_not_executable",
+                    "prepare_execution_failed",
                     str(exc),
                     intent_text=intent_text,
                     validated_command=command_payload,
@@ -1024,6 +1146,7 @@ class LLMGatewayNode(Node):
                     validated_command=command_payload,
                 )
             return
+
         goal_payload = self._goal_mapper.to_command_payload(execution_command)
         self._publish_command(goal_payload)
         validated_debug_payload = {
@@ -1038,6 +1161,7 @@ class LLMGatewayNode(Node):
             )
             validated_debug_payload["sequence_step_count"] = sequence_state.step_count
         self._publish_debug(validated_debug_payload)
+
         if sequence_state is None:
             self.publish_status("safety_approved")
 
@@ -1352,19 +1476,21 @@ class LLMGatewayNode(Node):
         raw_llm_output: str | None = None,
         parsed_command: Dict[str, Any] | None = None,
         validated_command: Dict[str, Any] | None = None,
+        hint: str = "",
     ) -> None:
         self.get_logger().warning(f"{stage}: {reason}")
-        self._publish_debug(
-            {
-                "status": "rejected",
-                "stage": stage,
-                "reason": reason,
-                "intent": intent_text,
-                "raw_llm_output": raw_llm_output,
-                "parsed_command": parsed_command,
-                "validated_command": validated_command,
-            }
-        )
+        debug_payload: Dict[str, Any] = {
+            "status": "rejected",
+            "stage": stage,
+            "reason": reason,
+            "intent": intent_text,
+            "raw_llm_output": raw_llm_output,
+            "parsed_command": parsed_command,
+            "validated_command": validated_command,
+        }
+        if hint:
+            debug_payload["hint"] = hint
+        self._publish_debug(debug_payload)
         self.publish_status(f"rejected:{stage}")
 
     def _publish_debug(self, payload: Dict[str, Any]) -> None:

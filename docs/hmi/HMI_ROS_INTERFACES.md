@@ -61,7 +61,7 @@ HMI frontend connects to the HMI backend via WebSocket (`/api/hmi/stream`), NOT 
 Every wave from W2 onward that touches a ROS surface must:
 1. Re-run the inventory grep matrix and diff against this file.
 2. Update the `Change sensitivity` column if needed.
-3. List breaking changes (if any) in that wave's MIGRATION-W<N>.md.
+3. List breaking changes (if any) in the active wave report or retained migration note.
 
 This rule is enforced by the "Hard never" bullet in AGENTS.md:
 > Never change a HIGH-sensitivity ROS surface without paired hmi/ patch in the same PR.

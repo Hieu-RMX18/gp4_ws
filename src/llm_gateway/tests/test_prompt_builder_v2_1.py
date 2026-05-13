@@ -60,6 +60,7 @@ _EXPECTED_INTENTS = frozenset(
         "io_set",
         "draw_shape",
         "draw_text",
+        "return_to_start",
     }
 )
 
@@ -199,6 +200,12 @@ def test_prompt_absolute_move_uses_target_pose(prompt: str):
     assert (
         '"target_pose":' in prompt
     ), "absolute_move must use 'target_pose' slot matching IntentRouter._route_absolute_move"
+
+
+def test_prompt_includes_common_cartesian_operator_phrasings(prompt: str):
+    assert "move to Cartesian x 300 mm y 0 z 400" in prompt
+    assert "đi tới tọa độ x 300 mm y 0 z 400" in prompt
+    assert '"linear_unit": "mm"' in prompt
 
 
 def test_prompt_wait_uses_wait_duration_sec(prompt: str):

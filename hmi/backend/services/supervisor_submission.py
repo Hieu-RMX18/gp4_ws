@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 from uuid import uuid4
 
@@ -20,8 +21,60 @@ def _utcnow():
     return datetime.now(timezone.utc)
 
 
+# Deterministic quick-command map: quickCommandId -> Semantic IR dict.
+# These bypass the LLM and go straight to IntentRouter, but still require
+# all HMI gates (lease, confirmation, validation, execution).
+_QUICK_COMMAND_STATIC_MAP: dict[str, dict[str, Any]] = {
+    "home": {"intent": "go_home"},
+    "stop": {"intent": "stop"},
+    "get_pose": {"intent": "get_pose", "reference_frame": "base_link"},
+    "up_5cm": {
+        "intent": "move_relative",
+        "delta": {"x": 0.0, "y": 0.0, "z": 0.05},
+        "reference_frame": "base_link",
+    },
+    "down_2cm": {
+        "intent": "move_relative",
+        "delta": {"x": 0.0, "y": 0.0, "z": -0.02},
+        "reference_frame": "base_link",
+    },
+    "wait_2s": {"intent": "wait", "wait_duration_sec": 2.0},
+}
+
+
 class SupervisorSubmissionMixin:
     """Mixin providing submit_intent, _submit_single_command, _submit_sequence."""
+
+    def _build_joint_delta_semantic_ir(
+        self, joint_deltas_deg: list[float]
+    ) -> dict[str, Any] | None:
+        """Build a move_joints Semantic IR from current joint positions + deltas (deg)."""
+        try:
+            current_joints = self._ros.read_joint_positions()
+        except Exception:
+            return None
+        if len(current_joints) != len(joint_deltas_deg):
+            return None
+        joint_target: list[float] = []
+        for joint, delta_deg in zip(current_joints, joint_deltas_deg):
+            if joint.position_deg is None:
+                return None
+            joint_target.append(math.radians(joint.position_deg + delta_deg))
+        return {
+            "intent": "move_joints",
+            "joint_target": joint_target,
+            "reference_frame": "base_link",
+        }
+
+    def _resolve_quick_command_semantic_ir(
+        self, quick_command_id: str
+    ) -> dict[str, Any] | None:
+        if quick_command_id in _QUICK_COMMAND_STATIC_MAP:
+            return dict(_QUICK_COMMAND_STATIC_MAP[quick_command_id])
+        if quick_command_id == "joint_1_plus_5":
+            deltas_deg = [5.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+            return self._build_joint_delta_semantic_ir(deltas_deg)
+        return None
 
     def submit_intent(
         self,
@@ -30,15 +83,21 @@ class SupervisorSubmissionMixin:
         operator_id: str,
         lease_token: str | None,
         raw_text: str | None = None,
+        quick_command_id: str | None = None,
         structured_intent: dict[str, Any] | None = None,
         mode: str,
     ) -> dict[str, Any]:
         self._expire_pending_confirmations()
         raw_text = (raw_text or "").strip()
-        if not raw_text and structured_intent is None:
+        quick_command_id = (quick_command_id or "").strip()
+        if not raw_text and not quick_command_id and structured_intent is None:
             from .supervisor_service import ConflictError
 
-            raise ConflictError("intentText or structuredIntent is required")
+            raise ConflictError("intentText or quickCommandId is required")
+        if raw_text and quick_command_id:
+            from .supervisor_service import ConflictError
+
+            raise ConflictError("submit exactly one of intentText or quickCommandId")
 
         lease = self._assert_controller(session_id, operator_id, lease_token)
         runtime = self._current_runtime()
@@ -63,42 +122,76 @@ class SupervisorSubmissionMixin:
                 correlation_id=correlation_id,
                 reason=(
                     "structuredIntent is not accepted from the HMI command API; "
-                    "submit intentText so llm_gateway ReviewIntent can produce Semantic IR."
+                    "submit intentText or quickCommandId."
                 ),
             )
-        review_result = self._submit_text_for_gateway_review(
-            raw_text=raw_text,
-            structured_intent=structured_intent,
-            requested_mode=requested_mode,
-            session_id=session_id,
-            operator_id=operator_id,
-            command_id=command_id,
-            correlation_id=correlation_id,
-        )
-        effective_structured_intent = self._semantic_ir_from_review_result(
-            review_result
-        )
-        if effective_structured_intent is None:
-            review_error = (
-                review_result.get("error")
-                if isinstance(review_result, dict)
-                else "review_intent returned no Semantic IR"
+
+        effective_structured_intent: dict[str, Any] | None = None
+        if quick_command_id:
+            effective_structured_intent = self._resolve_quick_command_semantic_ir(
+                quick_command_id
             )
-            return self._reject_intent_submission(
-                session_id=session_id,
-                operator_id=operator_id,
-                lease=lease,
-                runtime=runtime,
-                requested_mode=requested_mode,
-                raw_text=raw_text,
-                structured_intent=None,
+            if effective_structured_intent is None:
+                if quick_command_id == "joint_1_plus_5":
+                    reason = (
+                        "Joint state unavailable or incomplete for quickCommandId "
+                        "'joint_1_plus_5'."
+                    )
+                else:
+                    reason = f"Unknown quickCommandId: '{quick_command_id}'."
+                return self._reject_intent_submission(
+                    session_id=session_id,
+                    operator_id=operator_id,
+                    lease=lease,
+                    runtime=runtime,
+                    requested_mode=requested_mode,
+                    raw_text=raw_text,
+                    structured_intent=None,
+                    command_id=command_id,
+                    correlation_id=correlation_id,
+                    reason=reason,
+                )
+            self._trace(
+                "quick_command.deterministic_semantic_ir",
                 command_id=command_id,
                 correlation_id=correlation_id,
-                reason=(
-                    "review_intent did not accept this command: "
-                    f"{review_error or 'missing Semantic IR'}"
-                ),
+                quick_command_id=quick_command_id,
+                semantic_ir=json.dumps(effective_structured_intent),
             )
+        else:
+            review_result = self._submit_text_for_gateway_review(
+                raw_text=raw_text,
+                structured_intent=structured_intent,
+                requested_mode=requested_mode,
+                session_id=session_id,
+                operator_id=operator_id,
+                command_id=command_id,
+                correlation_id=correlation_id,
+            )
+            effective_structured_intent = self._semantic_ir_from_review_result(
+                review_result
+            )
+            if effective_structured_intent is None:
+                review_error = (
+                    review_result.get("error")
+                    if isinstance(review_result, dict)
+                    else "review_intent returned no Semantic IR"
+                )
+                return self._reject_intent_submission(
+                    session_id=session_id,
+                    operator_id=operator_id,
+                    lease=lease,
+                    runtime=runtime,
+                    requested_mode=requested_mode,
+                    raw_text=raw_text,
+                    structured_intent=None,
+                    command_id=command_id,
+                    correlation_id=correlation_id,
+                    reason=(
+                        "review_intent did not accept this command: "
+                        f"{review_error or 'missing Semantic IR'}"
+                    ),
+                )
         sequence_segments: list[str] = []
         prepared_sequence = self._prepare_sequence_request(
             raw_text=raw_text,
@@ -160,6 +253,8 @@ class SupervisorSubmissionMixin:
                 "review.unavailable",
                 command_id=command_id,
                 correlation_id=correlation_id,
+                session_id=session_id,
+                operator_id=operator_id,
                 reason=str(exc),
             )
             return {"accepted": False, "error": str(exc)}
@@ -172,6 +267,8 @@ class SupervisorSubmissionMixin:
                 "review.fallback_to_local_parse",
                 command_id=command_id,
                 correlation_id=correlation_id,
+                session_id=session_id,
+                operator_id=operator_id,
                 accepted=review_result.get("accepted"),
                 error=review_result.get("error"),
             )
@@ -180,6 +277,8 @@ class SupervisorSubmissionMixin:
                 "review.semantic_ir_accepted",
                 command_id=command_id,
                 correlation_id=correlation_id,
+                session_id=session_id,
+                operator_id=operator_id,
             )
         return dict(review_result)
 

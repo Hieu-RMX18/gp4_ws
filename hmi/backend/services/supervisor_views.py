@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
+from .env_file import lookup_env_or_dotenv
 from ..domain.models import (
     BridgeCapabilities,
     ChatMessage,
@@ -26,7 +26,7 @@ def _utcnow() -> datetime:
 class SupervisorViewsMixin:
     def _review_intent_ready(self, runtime_mode: RuntimeMode) -> bool:
         _ = runtime_mode
-        review_token = os.getenv("GP4_REVIEW_INTENT_TOKEN", "").strip()
+        review_token = lookup_env_or_dotenv("GP4_REVIEW_INTENT_TOKEN")
         if not review_token:
             return False
         source_reader = getattr(self._ros, "read_source_statuses", None)
@@ -41,18 +41,23 @@ class SupervisorViewsMixin:
             )
         return False
 
+    def _deterministic_quick_commands_ready(self) -> bool:
+        return True
+
     def _bridge_capabilities(self) -> BridgeCapabilities:
         runtime = self._current_runtime()
         hardware_gate = self._hardware_gate_evaluator.evaluate()
         review_intent_ready = self._review_intent_ready(runtime.mode)
+        deterministic_quick_ready = self._deterministic_quick_commands_ready()
+        command_ingress_ready = review_intent_ready or deterministic_quick_ready
         if runtime.mode == RuntimeMode.SIM:
-            command_ingress_available = review_intent_ready
+            command_ingress_available = command_ingress_ready
             confirmation_available = True
             sim_only = True
         elif runtime.mode == RuntimeMode.HARDWARE:
-            command_ingress_available = hardware_gate.unlocked and review_intent_ready
-            confirmation_available = hardware_gate.unlocked
-            sim_only = not hardware_gate.unlocked
+            command_ingress_available = command_ingress_ready
+            confirmation_available = True
+            sim_only = False
         else:
             command_ingress_available = False
             confirmation_available = False
@@ -79,17 +84,16 @@ class SupervisorViewsMixin:
         runtime = self._current_runtime()
         lease = self._session_lock.current_controller()
         if lease is None:
-            if runtime.mode == RuntimeMode.HARDWARE:
-                status_text = "Hardware command ingress locked — " + (
-                    capabilities.hardware_gate.reasons[0]
-                    if capabilities.hardware_gate.reasons
-                    else "dual hardware gate is not satisfied."
+            if capabilities.can_acquire_lease:
+                status_text = "Observer mode — request the supervisor lease before submitting commands."
+            elif runtime.mode == RuntimeMode.HARDWARE:
+                status_text = (
+                    "Hardware command ingress unavailable — command review path is "
+                    "not ready."
                 )
             else:
                 status_text = (
-                    "Observer mode — request the supervisor lease before submitting commands."
-                    if capabilities.can_acquire_lease
-                    else "Read-only telemetry mode — command lease acquisition is disabled."
+                    "Read-only telemetry mode — command lease acquisition is disabled."
                 )
             return {
                 "leaseId": None,
@@ -108,17 +112,26 @@ class SupervisorViewsMixin:
             lease.session_id == session_id and lease.operator_id == operator_id
         )
         if not capabilities.confirmation_available:
-            role = LeaseRole.OBSERVER.value
-            lease_token: str | None = None
-            owns_control = False
+            role = (
+                LeaseRole.CONTROLLER.value if owns_control else LeaseRole.OBSERVER.value
+            )
+            lease_token: str | None = lease.lease_token if owns_control else None
             if runtime.mode == RuntimeMode.HARDWARE:
-                status_text = "Hardware command ingress locked — " + (
-                    capabilities.hardware_gate.reasons[0]
-                    if capabilities.hardware_gate.reasons
-                    else "dual hardware gate is not satisfied."
+                locked_text = (
+                    "Hardware command ingress unavailable — command review path "
+                    "is not ready."
+                )
+                status_text = (
+                    f"Controller lease active for this session; {locked_text}"
+                    if owns_control
+                    else locked_text
                 )
             else:
-                status_text = "Read-only telemetry mode — command lease is disabled."
+                status_text = (
+                    "Controller lease active for this session; command ingress is read-only."
+                    if owns_control
+                    else "Read-only telemetry mode — command lease is disabled."
+                )
         else:
             role = (
                 LeaseRole.CONTROLLER.value if owns_control else LeaseRole.OBSERVER.value
@@ -449,6 +462,9 @@ class SupervisorViewsMixin:
                 if messages
                 else [],
                 "planMetrics": self._serialize_metrics(command.metrics),
+                "consoleEvents": self._console_events_for(
+                    command.session_id, command.operator_id
+                ),
             }
         )
         self._broadcast_replay_update()
@@ -467,6 +483,9 @@ class SupervisorViewsMixin:
                 "messages": [message.to_dict() for message in messages]
                 if messages
                 else [],
+                "consoleEvents": self._console_events_for(
+                    command.session_id, command.operator_id
+                ),
             }
         )
         self._broadcast_replay_update()

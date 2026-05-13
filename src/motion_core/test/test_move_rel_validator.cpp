@@ -311,11 +311,11 @@ TEST(MoveRelValidatorTest, FullFlowValidDeltaInsideBounds) {
 }
 
 TEST(MoveRelValidatorTest, FullFlowDeltaPushesTargetOutOfBounds) {
-  // Simulate: current near ceiling, move up 0.03 m -> exceeds z_max=0.56
+  // Simulate: current near ceiling, move up 0.03 m -> exceeds z_max=0.65
   geometry_msgs::msg::Pose current;
   current.position.x = 0.0;
   current.position.y = 0.0;
-  current.position.z = 0.54; // just below kZMax = 0.56
+  current.position.z = 0.63; // just below kZMax = 0.65
   current.orientation.w = 1.0;
 
   std::string reason;

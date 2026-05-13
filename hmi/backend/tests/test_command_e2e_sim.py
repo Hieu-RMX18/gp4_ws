@@ -135,13 +135,7 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
         result = await self._run_sequence_case(
             session_id="e2e-session-draw-shape",
             operator_id="e2e-operator-draw-shape",
-            structured_intent={
-                "intent": "draw_shape",
-                "shape_type": "circle",
-                "units": "mm",
-                "frame_id": "base_link",
-                "params": {"radius": 10},
-            },
+            intent_text="draw a circle with radius 10 mm",
             expected_macro_name="draw_shape",
         )
 
@@ -157,13 +151,7 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
         result = await self._run_sequence_case(
             session_id="e2e-session-draw-text-structured",
             operator_id="e2e-operator-draw-text-structured",
-            structured_intent={
-                "intent": "draw_text",
-                "text": "GP4",
-                "units": "mm",
-                "frame_id": "base_link",
-                "font": {"type": "single_stroke_builtin", "height": 10},
-            },
+            intent_text="write GP4",
             expected_macro_name="draw_text",
         )
 

@@ -114,10 +114,11 @@ class CommandValidator:
         if not command.get("extended_mode"):
             return True, ""
         cfg = self.safety_rules.get("operational_joint_limits", {}).get("joint_6_t")
+        disabled_reason = "extended_mode disabled; use default joint_6_t envelope"
         if not isinstance(cfg, dict):
-            return False, "extended_mode requested but config has no tiered joint_6_t"
+            return False, disabled_reason
         if "extended" not in cfg:
-            return False, "extended_mode requested but config has no extended tier"
+            return False, disabled_reason
 
         pre = cfg.get("extended_preconditions", {})
 

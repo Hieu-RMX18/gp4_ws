@@ -36,6 +36,7 @@ try:
     from interfaces.msg import RobotReadiness
     from rclpy.executors import ExternalShutdownException
     from rclpy.node import Node
+    from rclpy.qos import qos_profile_sensor_data
     from std_msgs.msg import String
 
     JointState = _load_joint_state_type()
@@ -248,14 +249,24 @@ class HardwareTelemetryValidationNode(Node):
         self.create_subscription(
             DiagnosticStatus, args.supervisor_alert_topic, self._on_supervisor_alert, 10
         )
+        # MotoROS2 publishes with Best Effort reliability; must match QoS
         self.create_subscription(
-            RobotStatus, args.robot_status_topic, self._on_robot_status, 10
+            RobotStatus,
+            args.robot_status_topic,
+            self._on_robot_status,
+            qos_profile_sensor_data,
         )
         self.create_subscription(
-            JointState, args.joint_primary_topic, self._on_joint_primary, 10
+            JointState,
+            args.joint_primary_topic,
+            self._on_joint_primary,
+            qos_profile_sensor_data,
         )
         self.create_subscription(
-            JointState, args.joint_fallback_topic, self._on_joint_fallback, 10
+            JointState,
+            args.joint_fallback_topic,
+            self._on_joint_fallback,
+            qos_profile_sensor_data,
         )
         self.create_timer(0.1, self._on_timer)
 

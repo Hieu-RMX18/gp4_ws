@@ -18,11 +18,8 @@ references/*
 !references/*.pdf
 !references/*.repos
 
-# 4a. Governance + CI files (W0)
+# 4a. Governance files
 !AGENTS.md
-!.pre-commit-config.yaml
-!.github/
-!.github/**
 !tools/
 !tools/**
 

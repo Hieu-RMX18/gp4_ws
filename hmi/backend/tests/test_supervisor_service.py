@@ -12,8 +12,6 @@ from hmi.backend.api.contracts import CommandExecutionResultModel
 from hmi.backend.domain.models import (
     BridgeConnection,
     ConnectionHealth,
-    HardwareGateChecklistSnapshot,
-    HardwareGateStatusSnapshot,
     JointPosition,
     RobotStatusSnapshot,
     RuntimeMode,
@@ -30,44 +28,6 @@ from hmi.backend.services.supervisor_service import (
     SupervisorService,
 )
 from hmi.backend.services.telemetry_bridge_service import TelemetryBridgeService
-
-
-class AlwaysUnlockedHardwareGate:
-    def evaluate(self) -> HardwareGateStatusSnapshot:
-        return HardwareGateStatusSnapshot(
-            unlocked=True,
-            reasons=[],
-            flag_enabled=True,
-            evidence_path="hmi/data/hardware_gate.json",
-            approved_by="qa.engineer",
-            approved_at="2026-04-18T12:00:00Z",
-            report_path="hmi/HARDWARE_TELEMETRY_VALIDATION.md",
-            report_sha256="f" * 64,
-            report_sha256_match=True,
-            checklist=HardwareGateChecklistSnapshot(
-                timing_jitter=True,
-                disconnect_reconnect=True,
-                robot_status_semantics=True,
-                joint_source_precedence=True,
-                audit_visibility=True,
-            ),
-        )
-
-
-class AlwaysLockedHardwareGate:
-    def evaluate(self) -> HardwareGateStatusSnapshot:
-        return HardwareGateStatusSnapshot(
-            unlocked=False,
-            reasons=["hardware gate evidence is not approved."],
-            flag_enabled=False,
-            evidence_path="hmi/data/hardware_gate.json",
-            approved_by=None,
-            approved_at=None,
-            report_path=None,
-            report_sha256=None,
-            report_sha256_match=False,
-            checklist=None,
-        )
 
 
 class FakeSupervisorAdapter:
@@ -497,7 +457,6 @@ class SupervisorServiceTests(unittest.TestCase):
             session_lock_service=self.session_lock,
             ros_adapter=self.adapter,
             confirmation_window_sec=5.0,
-            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
         )
         supervisor.bind_telemetry_service(self.telemetry)
         self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
@@ -507,41 +466,6 @@ class SupervisorServiceTests(unittest.TestCase):
 
         self.assertTrue(overlay["capabilities"]["canSubmitCommands"])
         self.assertTrue(overlay["capabilities"]["commandIngressAvailable"])
-
-    def test_hardware_gate_lock_is_advisory_for_existing_controller_lease(
-        self,
-    ) -> None:
-        supervisor = SupervisorService(
-            audit_service=self.audit,
-            session_lock_service=self.session_lock,
-            ros_adapter=self.adapter,
-            confirmation_window_sec=5.0,
-            hardware_gate_evaluator=AlwaysLockedHardwareGate(),
-        )
-        supervisor.bind_telemetry_service(self.telemetry)
-        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
-        lease_token = self._acquire_lease()
-
-        overlay = supervisor.snapshot_overlay(self.session_id, self.operator_id)
-
-        self.assertTrue(overlay["capabilities"]["canSubmitCommands"])
-        self.assertTrue(overlay["capabilities"]["canConfirmCommands"])
-        self.assertFalse(overlay["capabilities"]["hardwareGate"]["unlocked"])
-        self.assertTrue(overlay["lease"]["ownsControl"])
-        self.assertEqual(overlay["lease"]["role"], "controller")
-        self.assertEqual(overlay["lease"]["leaseToken"], lease_token)
-        self.assertIn("active", overlay["lease"]["statusText"])
-        self.assertNotIn("locked", overlay["lease"]["statusText"])
-
-        response = supervisor.release_lease(
-            session_id=self.session_id,
-            operator_id=self.operator_id,
-            lease_token=lease_token,
-        )
-
-        self.assertTrue(response["accepted"])
-        self.assertFalse(response["lease"]["ownsControl"])
-        self.assertIsNone(response["lease"]["leaseToken"])
 
     def test_sim_capabilities_allow_deterministic_commands_without_review_token(
         self,
@@ -563,7 +487,6 @@ class SupervisorServiceTests(unittest.TestCase):
             session_lock_service=self.session_lock,
             ros_adapter=self.adapter,
             confirmation_window_sec=5.0,
-            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
         )
         supervisor.bind_telemetry_service(self.telemetry)
         self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
@@ -582,7 +505,6 @@ class SupervisorServiceTests(unittest.TestCase):
             session_lock_service=self.session_lock,
             ros_adapter=self.adapter,
             confirmation_window_sec=5.0,
-            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
         )
         supervisor.bind_telemetry_service(self.telemetry)
         self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
@@ -966,10 +888,9 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertTrue(response["accepted"], msg=response)
         self.assertEqual(response["jobType"], "sequence")
         self.assertEqual(self.adapter.confirm_calls, [])
-        # W5: motion-only sequences collapse into a single BLENDED_SEQUENCE step
         self.assertEqual(
             [step["parsedIntent"]["action"] for step in response["sequence"]["steps"]],
-            ["BLENDED_SEQUENCE"],
+            ["PTP", "PTP", "HOME"],
         )
 
         confirm_response = self.supervisor.confirm_sequence(
@@ -982,16 +903,16 @@ class SupervisorServiceTests(unittest.TestCase):
 
         self.assertTrue(confirm_response["accepted"])
         self.assertEqual(confirm_response["sequence"]["finalState"], "SUCCEEDED")
-        self.assertEqual(len(self.adapter.confirm_calls), 1)
+        self.assertEqual(len(self.adapter.confirm_calls), 3)
         self.assertEqual(
             [call["parsed_intent"]["action"] for call in self.adapter.confirm_calls],
-            ["BLENDED_SEQUENCE"],
+            ["PTP", "PTP", "HOME"],
         )
 
-    def test_gateway_review_motion_only_sequence_emits_blended_sequence(
+    def test_gateway_review_named_home_sequence_runs_step_by_step(
         self,
     ) -> None:
-        """W6: Verify motion-only sequence collapses to BLENDED_SEQUENCE with correct step structure."""
+        """Named/home sequences stay step-by-step so each step passes safety gates."""
         self.adapter.set_review_result(
             accepted=True,
             adapter="fake-gateway-review",
@@ -1016,31 +937,11 @@ class SupervisorServiceTests(unittest.TestCase):
 
         self.assertTrue(response["accepted"], msg=response)
         self.assertEqual(response["jobType"], "sequence")
-        self.assertEqual(response["sequence"]["stepCount"], 1)
+        self.assertEqual(response["sequence"]["stepCount"], 3)
 
-        step = response["sequence"]["steps"][0]
-        self.assertEqual(step["parsedIntent"]["action"], "BLENDED_SEQUENCE")
-        normalized = step["parsedIntent"]["normalizedCommand"]
-        self.assertEqual(normalized["primitive_type"], "BLENDED_SEQUENCE")
+        actions = [step["parsedIntent"]["action"] for step in response["sequence"]["steps"]]
+        self.assertEqual(actions, ["PTP", "PTP", "HOME"])
 
-        seq_steps = normalized["sequence_steps"]
-        self.assertEqual(len(seq_steps), 3)
-
-        # First two are PTP steps resolved from named poses (joint targets)
-        for idx in range(2):
-            self.assertEqual(seq_steps[idx]["primitive_type"], "PTP")
-            self.assertEqual(seq_steps[idx]["goal_type"], 1)  # GOAL_JOINTS
-            self.assertEqual(seq_steps[idx]["blend_radius_m"], 0.01)
-            self.assertIn("joint_target", seq_steps[idx])
-            self.assertEqual(len(seq_steps[idx]["joint_target"]), 6)
-
-        # Last step is HOME (named goal) with zero blend radius
-        self.assertEqual(seq_steps[2]["primitive_type"], "HOME")
-        self.assertEqual(seq_steps[2]["goal_type"], 2)  # GOAL_NAMED
-        self.assertEqual(seq_steps[2]["named_target"], "home")
-        self.assertEqual(seq_steps[2]["blend_radius_m"], 0.0)
-
-        # Confirm and verify single execution call
         confirm_response = self.supervisor.confirm_sequence(
             session_id=self.session_id,
             operator_id=self.operator_id,
@@ -1050,10 +951,10 @@ class SupervisorServiceTests(unittest.TestCase):
         )
         self.assertTrue(confirm_response["accepted"])
         self.assertEqual(confirm_response["sequence"]["finalState"], "SUCCEEDED")
-        self.assertEqual(len(self.adapter.confirm_calls), 1)
+        self.assertEqual(len(self.adapter.confirm_calls), 3)
         self.assertEqual(
-            self.adapter.confirm_calls[0]["parsed_intent"]["action"],
-            "BLENDED_SEQUENCE",
+            [call["parsed_intent"]["action"] for call in self.adapter.confirm_calls],
+            ["PTP", "PTP", "HOME"],
         )
 
     def test_sim_auto_confirm_executes_immediately_when_enabled(self) -> None:
@@ -1115,7 +1016,6 @@ class SupervisorServiceTests(unittest.TestCase):
             session_lock_service=self.session_lock,
             ros_adapter=self.adapter,
             confirmation_window_sec=5.0,
-            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
         )
         supervisor.bind_telemetry_service(self.telemetry)
         lease_token = self._acquire_lease()
@@ -1138,7 +1038,6 @@ class SupervisorServiceTests(unittest.TestCase):
             session_lock_service=self.session_lock,
             ros_adapter=self.adapter,
             confirmation_window_sec=5.0,
-            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
         )
         supervisor.bind_telemetry_service(self.telemetry)
         lease_token = self._acquire_lease()
@@ -1159,7 +1058,6 @@ class SupervisorServiceTests(unittest.TestCase):
             session_lock_service=self.session_lock,
             ros_adapter=self.adapter,
             confirmation_window_sec=5.0,
-            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
         )
         supervisor.bind_telemetry_service(self.telemetry)
         self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
@@ -1187,7 +1085,7 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertTrue(response["accepted"])
         self.assertEqual(self.adapter.stop_motion_calls, 1)
 
-    def test_servo_hold_calls_adapter_even_when_hardware_preflight_fails(
+    def test_servo_hold_rejected_when_hardware_preflight_fails(
         self,
     ) -> None:
         supervisor = SupervisorService(
@@ -1195,7 +1093,6 @@ class SupervisorServiceTests(unittest.TestCase):
             session_lock_service=self.session_lock,
             ros_adapter=self.adapter,
             confirmation_window_sec=5.0,
-            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
         )
         supervisor.bind_telemetry_service(self.telemetry)
         lease_token = self._acquire_lease()
@@ -1208,25 +1105,11 @@ class SupervisorServiceTests(unittest.TestCase):
             lease_token=lease_token,
         )
 
-        self.assertTrue(response["accepted"])
-        self.assertEqual(self.adapter.stop_motion_calls, 1)
+        self.assertFalse(response["accepted"])
+        self.assertIn("stale", response["message"].lower())
+        self.assertEqual(self.adapter.stop_motion_calls, 0)
 
-    def test_servo_start_calls_adapter_after_preflight_and_lease_without_evidence_gate(
-        self,
-    ) -> None:
-        lease_token = self._acquire_lease()
-        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
-        self.adapter.set_preflight(accepted=True, reasons=[])
-
-        response = self.supervisor.start_servo(
-            session_id=self.session_id,
-            operator_id=self.operator_id,
-            lease_token=lease_token,
-        )
-
-        self.assertTrue(response["accepted"])
-        self.assertEqual(self.adapter.start_traj_mode_calls, 1)
-
+    
     def test_reviewed_sequence_ignores_stale_review_intent_event_source(
         self,
     ) -> None:
@@ -1315,7 +1198,6 @@ class SupervisorServiceTests(unittest.TestCase):
             session_lock_service=self.session_lock,
             ros_adapter=self.adapter,
             confirmation_window_sec=5.0,
-            hardware_gate_evaluator=AlwaysUnlockedHardwareGate(),
         )
         supervisor.bind_telemetry_service(self.telemetry)
         self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)

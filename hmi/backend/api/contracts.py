@@ -45,25 +45,10 @@ class BridgeCapabilitiesModel(StrictModel):
     hardwareGate: HardwareGateStatusModel
 
 
-class HardwareGateChecklistModel(StrictModel):
-    timingJitter: bool
-    disconnectReconnect: bool
-    robotStatusSemantics: bool
-    jointSourcePrecedence: bool
-    auditVisibility: bool
-
-
 class HardwareGateStatusModel(StrictModel):
-    unlocked: bool
-    reasons: list[str]
-    flagEnabled: bool
-    evidencePath: str
-    approvedBy: str | None
-    approvedAt: str | None
-    reportPath: str | None
-    reportSha256: str | None
-    reportSha256Match: bool
-    checklist: HardwareGateChecklistModel | None
+    unlocked: bool = True
+    reasons: list[str] = Field(default_factory=list)
+    flagEnabled: bool = True
 
 
 class JointPositionModel(StrictModel):
@@ -294,12 +279,6 @@ class TimelineEventModel(StrictModel):
     payload: dict[str, Any] | None = None
 
 
-class ConsoleEventModel(StrictModel):
-    stage: str
-    timestamp: str
-    fields: str | None = None
-
-
 class ReplayDetailModel(StrictModel):
     jobType: Literal["command", "sequence"]
     command: CommandViewModel | None = None
@@ -325,7 +304,6 @@ class HmiStateSnapshotModel(StrictModel):
     jointPositions: list[JointPositionModel]
     planMetrics: PlanMetricsModel | None
     replayItems: list[ReplayListItemModel]
-    consoleEvents: list[ConsoleEventModel] = Field(default_factory=list)
 
 
 class RuntimeStateResponseModel(StrictModel):
@@ -457,14 +435,11 @@ class CommandLifecycleStreamEventModel(StrictModel):
     command: CommandViewModel
     messages: list[ChatMessageModel] = Field(default_factory=list)
     planMetrics: PlanMetricsModel | None = None
-    consoleEvents: list[ConsoleEventModel] = Field(default_factory=list)
-
 
 class SequenceLifecycleStreamEventModel(StrictModel):
     type: Literal["sequence_lifecycle"]
     sequence: SequenceViewModel
     messages: list[ChatMessageModel] = Field(default_factory=list)
-    consoleEvents: list[ConsoleEventModel] = Field(default_factory=list)
 
 
 class ReplayUpdatedStreamEventModel(StrictModel):

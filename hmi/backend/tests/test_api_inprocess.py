@@ -23,10 +23,7 @@ from hmi.backend.services.supervisor_service import (
 )
 from hmi.backend.services.telemetry_bridge_service import TelemetryBridgeService
 from hmi.backend.services.jog_service import DEFAULT_JOG_STATUS
-from hmi.backend.tests.test_supervisor_service import (
-    AlwaysUnlockedHardwareGate,
-    FakeSupervisorAdapter,
-)
+from hmi.backend.tests.test_supervisor_service import FakeSupervisorAdapter
 from pydantic import ValidationError
 
 
@@ -42,7 +39,6 @@ class NoopJogService:
 
 
 def _build_test_services():
-    os.environ.setdefault("GP4_REVIEW_INTENT_TOKEN", "test-review-secret")
     temp_dir = TemporaryDirectory()
     audit = AuditService(Path(temp_dir.name) / "audit.sqlite3")
     session_lock = SessionLockService()
@@ -63,8 +59,7 @@ def _build_test_services():
     return temp_dir, adapter, supervisor
 
 
-def _build_test_app(*, hardware_gate_evaluator=None):
-    os.environ.setdefault("GP4_REVIEW_INTENT_TOKEN", "test-review-secret")
+def _build_test_app():
     temp_dir = TemporaryDirectory()
     audit = AuditService(Path(temp_dir.name) / "audit.sqlite3")
     session_lock = SessionLockService()
@@ -80,7 +75,6 @@ def _build_test_app(*, hardware_gate_evaluator=None):
         session_lock_service=session_lock,
         ros_adapter=adapter,
         confirmation_window_sec=5.0,
-        hardware_gate_evaluator=hardware_gate_evaluator,
     )
     supervisor.bind_telemetry_service(telemetry)
     app = create_app(
@@ -158,7 +152,7 @@ def test_reviewed_named_pose_sequence_api_confirms_without_tcp_socket():
         assert [
             step["parsedIntent"]["action"]
             for step in submit_payload["sequence"]["steps"]
-        ] == ["BLENDED_SEQUENCE"]
+        ] == ["PTP", "PTP", "HOME"]
         assert adapter.confirm_calls == []
 
         confirm_payload = supervisor.confirm_sequence(
@@ -171,7 +165,9 @@ def test_reviewed_named_pose_sequence_api_confirms_without_tcp_socket():
         assert confirm_payload["accepted"] is True
         assert confirm_payload["sequence"]["finalState"] == "SUCCEEDED"
         assert [call["parsed_intent"]["action"] for call in adapter.confirm_calls] == [
-            "BLENDED_SEQUENCE",
+            "PTP",
+            "PTP",
+            "HOME",
         ]
     finally:
         temp_dir.cleanup()
@@ -219,9 +215,7 @@ def test_servo_control_contract_rejects_missing_body_fields():
 
 
 def test_servo_routes_enforce_controller_lease_before_adapter_call():
-    temp_dir, adapter, _supervisor, app = _build_test_app(
-        hardware_gate_evaluator=AlwaysUnlockedHardwareGate()
-    )
+    temp_dir, adapter, _supervisor, app = _build_test_app()
     try:
         adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
         servo_start = _route_endpoint(app, "/api/hmi/servo/start")
@@ -247,9 +241,7 @@ def test_servo_routes_enforce_controller_lease_before_adapter_call():
 
 
 def test_servo_routes_dispatch_after_valid_hardware_gate_and_lease():
-    temp_dir, adapter, supervisor, app = _build_test_app(
-        hardware_gate_evaluator=AlwaysUnlockedHardwareGate()
-    )
+    temp_dir, adapter, supervisor, app = _build_test_app()
     try:
         lease_payload = supervisor.acquire_lease(
             session_id="api-servo-session",
@@ -400,7 +392,7 @@ def test_command_intent_route_accepts_quick_command_id():
         temp_dir.cleanup()
 
 
-def test_snapshot_route_includes_console_events_contract_field():
+def test_snapshot_route_omits_console_events_contract_field():
     temp_dir, _adapter, supervisor, app = _build_test_app()
     try:
         supervisor._trace("test.console_event", command_id="cmd-a")
@@ -409,12 +401,13 @@ def test_snapshot_route_includes_console_events_contract_field():
         payload = get_snapshot(session_id="session-a", operator_id="operator-a")
         validated = HmiStateSnapshotModel.model_validate(payload)
 
-        assert validated.consoleEvents[-1].stage == "test.console_event"
+        assert "consoleEvents" not in payload
+        assert "consoleEvents" not in validated.model_fields_set
     finally:
         temp_dir.cleanup()
 
 
-def test_snapshot_route_scopes_console_events_to_session_and_operator():
+def test_snapshot_route_does_not_expose_console_events_to_any_session():
     temp_dir, _adapter, supervisor, app = _build_test_app()
     try:
         supervisor._trace(
@@ -429,9 +422,8 @@ def test_snapshot_route_scopes_console_events_to_session_and_operator():
         same_session = get_snapshot(session_id="session-a", operator_id="operator-a")
         other_session = get_snapshot(session_id="session-b", operator_id="operator-b")
 
-        assert same_session["consoleEvents"]
-        assert same_session["consoleEvents"][-1]["stage"] == "validation.accepted"
-        assert other_session["consoleEvents"] == []
+        assert "consoleEvents" not in same_session
+        assert "consoleEvents" not in other_session
     finally:
         temp_dir.cleanup()
 
@@ -497,9 +489,7 @@ def test_command_intent_route_fails_closed_when_review_intent_rejects():
 
 
 def test_servo_start_http_rejects_missing_lease_body_fields():
-    temp_dir, _adapter, _supervisor, app = _build_test_app(
-        hardware_gate_evaluator=AlwaysUnlockedHardwareGate()
-    )
+    temp_dir, _adapter, _supervisor, app = _build_test_app()
     try:
         response = asyncio.run(_post_json(app, "/api/hmi/servo/start", {}))
 
@@ -556,9 +546,7 @@ def test_state_changing_hmi_routes_allow_loopback_clients_by_default():
 
 
 def test_servo_http_dispatches_after_valid_hardware_gate_and_lease():
-    temp_dir, adapter, supervisor, app = _build_test_app(
-        hardware_gate_evaluator=AlwaysUnlockedHardwareGate()
-    )
+    temp_dir, adapter, supervisor, app = _build_test_app()
     try:
         lease_payload = supervisor.acquire_lease(
             session_id="api-servo-session",

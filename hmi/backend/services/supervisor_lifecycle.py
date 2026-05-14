@@ -469,7 +469,6 @@ class SupervisorLifecycleMixin:
         confirmation_reasons = [
             "HMI v2 requires explicit operator confirmation before a validated sequence may cross the execution boundary."
         ]
-        hardware_gate = self._hardware_gate_evaluator.evaluate()
         preflight = self._execution_preflight(requested_mode=requested_mode)
         if requested_mode not in {RuntimeMode.SIM, RuntimeMode.HARDWARE}:
             blocking_reasons.append(
@@ -563,7 +562,6 @@ class SupervisorLifecycleMixin:
             "eventDrivenSources": [
                 self._source_status_view(source) for source in event_driven_sources
             ],
-            "hardwareGate": hardware_gate.to_dict(),
             "preflight": preflight,
         }
 

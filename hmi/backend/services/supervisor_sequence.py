@@ -36,7 +36,9 @@ _SEQUENCE_SPLIT_PATTERN = re.compile(
 _DEFAULT_BLEND_RADIUS_M = 0.01
 
 # Primitives that can participate in a BLENDED_SEQUENCE.
-_BLENDED_SEQUENCE_ELIGIBLE = {"PTP", "LIN", "HOME"}
+# W7: Restrict to pose-based LIN/PTP only. Named/home/joint targets
+# must execute step-by-step through safety gate.
+_BLENDED_SEQUENCE_ELIGIBLE = {"PTP", "LIN"}
 
 _COMMA_SEQUENCE_PREFIXES = {
     "alarm",

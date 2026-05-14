@@ -1,12 +1,9 @@
 import type { BridgeCapabilities, LeaseView } from '../../../shared/contracts';
-import { reasonToVietnamese } from './derive';
 
 interface ControlLeasePanelProps {
   lease: LeaseView;
   capabilities: BridgeCapabilities;
   readOnlyBridge: boolean;
-  isController: boolean;
-  mode: 'sim' | 'hardware' | 'unknown';
   canAcquireLease: boolean;
   canReleaseLease: boolean;
   onAcquire: () => void;
@@ -17,25 +14,11 @@ export function ControlLeasePanel({
   lease,
   capabilities,
   readOnlyBridge,
-  isController,
-  mode,
   canAcquireLease,
   canReleaseLease,
   onAcquire,
   onRelease,
 }: ControlLeasePanelProps) {
-  const hardwareGate = capabilities.hardwareGate;
-  const reasons = hardwareGate.reasons ?? [];
-  const primaryReason =
-    reasons[0] ??
-    (hardwareGate.unlocked
-      ? 'ReviewIntent service/token gate is not satisfied.'
-      : 'Hardware evidence is advisory; runtime preflight controls execution.');
-  const primaryReasonVi = reasonToVietnamese(primaryReason);
-  const readOnlyHardwareText = hardwareGate.unlocked
-    ? `Command ingress locked: ${primaryReason}`
-    : `Command ingress locked: ${primaryReason}`;
-
   return (
     <section className="section">
       <div className="section-title">Control Lease</div>
@@ -52,14 +35,9 @@ export function ControlLeasePanel({
       </div>
       <div className="lease-caption">
         {readOnlyBridge
-          ? mode === 'hardware'
-            ? readOnlyHardwareText
-            : 'Telemetry is live, but command ingress stays read-only until command-capable mode and freshness gates are satisfied.'
+          ? 'Telemetry is live, but command ingress stays read-only until command-capable mode and freshness gates are satisfied.'
           : lease.statusText}
       </div>
-      {readOnlyBridge && mode === 'hardware' ? (
-        <div className="lease-caption">VI: {primaryReasonVi}</div>
-      ) : null}
       <div className="lease-caption">
         Execution allowed: {capabilities.executionAllowed ? 'yes' : 'no'} · Replay: {capabilities.replayAvailable ? 'yes' : 'no'}
       </div>

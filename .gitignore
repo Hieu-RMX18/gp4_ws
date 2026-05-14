@@ -10,7 +10,6 @@
 !motoros2_config.yaml
 !hmi/
 !hmi/**
-hmi/data/hardware_gate.local.json
 !docs/
 !docs/**
 !references/
@@ -58,4 +57,7 @@ hmi/backend/.venv/
 *.secret
 *.key
 secrets/
-.gitnexus
+*/__pycache__
+*.pyc
+# Thêm rule cho pytest cache
+.pytest_cache/

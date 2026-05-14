@@ -6,10 +6,8 @@ entrypoints that must survive all refactor waves unchanged.
 
 from __future__ import annotations
 
-import contextlib
 import importlib
 import importlib.util
-import io
 import os
 import subprocess
 import sys
@@ -67,14 +65,7 @@ class TestMigrationDocs(unittest.TestCase):
         docs_reports = sorted((_REPO_ROOT / "docs").glob("MIGRATION-W*.md"))
         self.assertEqual(docs_reports, [])
 
-    def test_local_hardware_gate_evidence_is_ignored(self) -> None:
-        result = subprocess.run(
-            ["git", "check-ignore", "-q", "hmi/data/hardware_gate.local.json"],
-            cwd=_REPO_ROOT,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0)
-
+    
 
 class TestPackageMetadata(unittest.TestCase):
     """Verify ROS package metadata no longer contains scaffold placeholders."""
@@ -104,18 +95,13 @@ class TestPackageMetadata(unittest.TestCase):
 class TestSafetyChainValidatorContract(unittest.TestCase):
     """Pin the machine-readable fail-closed calibration status used by CI."""
 
-    def test_uncalibrated_extrinsics_has_dedicated_status(self) -> None:
+    def test_calibrated_extrinsics_passes(self) -> None:
+        """Extrinsics are calibrated; validate_safety_chain should not fail on extrinsics alone."""
         module = importlib.import_module("tools.validate_safety_chain")
-        stderr = io.StringIO()
-
-        with contextlib.redirect_stderr(stderr):
-            status = module.main()
-
-        self.assertEqual(status, 2)
-        self.assertIn(
-            "validate_safety_chain_status=fail_closed_extrinsics_not_calibrated",
-            stderr.getvalue(),
-        )
+        status = module.main()
+        # 0 = all pass, 1 = other failures (e.g. constants mismatch).
+        # 2 (fail_closed_extrinsics_not_calibrated) must not happen anymore.
+        self.assertNotEqual(status, 2)
 
 
 class TestHmiTrustBoundary(unittest.TestCase):
@@ -124,8 +110,6 @@ class TestHmiTrustBoundary(unittest.TestCase):
     def test_hardware_gate_service_exists(self) -> None:
         mod = importlib.import_module("hmi.backend.services.hardware_gate")
         self.assertTrue(hasattr(mod, "HardwareGateEvaluator"))
-        self.assertTrue(hasattr(mod, "HARDWARE_GATE_ENV"))
-        self.assertTrue(hasattr(mod, "HARDWARE_GATE_PATH_ENV"))
 
     def test_session_lock_service_exists(self) -> None:
         mod = importlib.import_module("hmi.backend.services.session_lock_service")

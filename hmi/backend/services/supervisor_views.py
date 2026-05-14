@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from .env_file import lookup_env_or_dotenv
 from ..domain.models import (
     BridgeCapabilities,
     ChatMessage,
@@ -15,7 +14,6 @@ from ..domain.models import (
     LeaseRole,
     PlanMetrics,
     RuntimeMode,
-    TelemetryFreshnessState,
 )
 
 
@@ -24,30 +22,14 @@ def _utcnow() -> datetime:
 
 
 class SupervisorViewsMixin:
-    def _review_intent_ready(self, runtime_mode: RuntimeMode) -> bool:
-        _ = runtime_mode
-        _ = lookup_env_or_dotenv("GP4_REVIEW_INTENT_TOKEN")  # still read to keep interface
-        source_reader = getattr(self._ros, "read_source_statuses", None)
-        if not callable(source_reader):
-            return False
-        for source in source_reader():
-            if source.name != "review_intent_service":
-                continue
-            return (
-                source.active
-                and source.freshness_state == TelemetryFreshnessState.FRESH
-            )
-        return False
-
     def _deterministic_quick_commands_ready(self) -> bool:
         return True
 
     def _bridge_capabilities(self) -> BridgeCapabilities:
         runtime = self._current_runtime()
         hardware_gate = self._hardware_gate_evaluator.evaluate()
-        review_intent_ready = self._review_intent_ready(runtime.mode)
         deterministic_quick_ready = self._deterministic_quick_commands_ready()
-        command_ingress_ready = review_intent_ready or deterministic_quick_ready
+        command_ingress_ready = deterministic_quick_ready
         if runtime.mode == RuntimeMode.SIM:
             command_ingress_available = command_ingress_ready
             confirmation_available = True
@@ -72,7 +54,7 @@ class SupervisorViewsMixin:
             execution_allowed=command_ingress_available,
             replay_available=True,
             sim_only=sim_only,
-            hardware_gate=hardware_gate,
+            hardware_gate=hardware_gate.to_dict(),
         )
 
     def _serialize_lease_view(
@@ -460,9 +442,6 @@ class SupervisorViewsMixin:
                 if messages
                 else [],
                 "planMetrics": self._serialize_metrics(command.metrics),
-                "consoleEvents": self._console_events_for(
-                    command.session_id, command.operator_id
-                ),
             }
         )
         self._broadcast_replay_update()
@@ -481,9 +460,6 @@ class SupervisorViewsMixin:
                 "messages": [message.to_dict() for message in messages]
                 if messages
                 else [],
-                "consoleEvents": self._console_events_for(
-                    command.session_id, command.operator_id
-                ),
             }
         )
         self._broadcast_replay_update()

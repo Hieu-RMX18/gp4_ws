@@ -30,7 +30,6 @@ class SupervisorExecutionMixin:
             lease_token=lease_token,
             action_label="Servo START",
             adapter_method_name="start_traj_mode",
-            require_hardware_gate=True,
         )
 
     def hold_servo(
@@ -46,7 +45,6 @@ class SupervisorExecutionMixin:
             lease_token=lease_token,
             action_label="Servo HOLD",
             adapter_method_name="stop_motion",
-            require_hardware_gate=False,
         )
 
     def _run_servo_control(
@@ -57,7 +55,6 @@ class SupervisorExecutionMixin:
         lease_token: str | None,
         action_label: str,
         adapter_method_name: str,
-        require_hardware_gate: bool,
     ) -> dict[str, Any]:
         lease = self._assert_controller(session_id, operator_id, lease_token)
         runtime = self._current_runtime()
@@ -67,9 +64,8 @@ class SupervisorExecutionMixin:
                 "message": f"{action_label} is allowed only in hardware mode.",
             }
 
-        hardware_gate = self._hardware_gate_evaluator.evaluate()
         preflight = self._execution_preflight(requested_mode=RuntimeMode.HARDWARE)
-        if require_hardware_gate and not preflight["accepted"]:
+        if not preflight["accepted"]:
             return {
                 "accepted": False,
                 "message": "; ".join(preflight["reasons"])
@@ -88,12 +84,10 @@ class SupervisorExecutionMixin:
             session_id=session_id,
             operator_id=operator_id,
             command_id=None,
-            message=f"{action_label} requested through supervised hardware preflight",
+            message=f"{action_label} requested",
             payload={
                 "leaseId": lease.lease_id,
-                "hardwareGate": hardware_gate.to_dict(),
                 "preflight": preflight,
-                "requiresHardwareGate": require_hardware_gate,
             },
         )
         result = adapter_method()

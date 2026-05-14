@@ -188,7 +188,6 @@ class SupervisorService(
                 active_command.metrics if active_command else None
             ),
             "replayItems": [self._serialize_replay_item(item) for item in replay_items],
-            "consoleEvents": self._console_events_for(session_id, operator_id),
         }
 
     def acquire_lease(

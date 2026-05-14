@@ -1,7 +1,6 @@
 import type { KeyboardEvent } from 'react';
-import type { HardwareGateStatus } from '../../../shared/contracts';
 import type { ActionFeedbackView } from './types';
-import { formatTimestamp, hardwareGateLabel, reasonToVietnamese } from './derive';
+import { formatTimestamp } from './derive';
 import { INTENT_TEMPLATES } from './intentTemplates';
 
 interface CommandComposerProps {
@@ -10,7 +9,6 @@ interface CommandComposerProps {
   canSubmit: boolean;
   readOnlyBridge: boolean;
   mode: 'sim' | 'hardware' | 'unknown';
-  hardwareGate: HardwareGateStatus;
   submitError: string | null;
   actionFeedback: ActionFeedbackView | null;
   onSubmit: () => void;
@@ -23,17 +21,11 @@ export function CommandComposer({
   canSubmit,
   readOnlyBridge,
   mode,
-  hardwareGate,
   submitError,
   actionFeedback,
   onSubmit,
   onClearError,
 }: CommandComposerProps) {
-  const reasons = hardwareGate.reasons ?? [];
-  const primaryReason =
-    reasons[0] ?? 'Hardware evidence is advisory; runtime preflight controls execution.';
-  const primaryReasonVi = reasonToVietnamese(primaryReason);
-
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing || event.repeat) {
       return;
@@ -45,9 +37,7 @@ export function CommandComposer({
   };
 
   const placeholder = readOnlyBridge
-    ? mode === 'hardware' && !hardwareGate.unlocked
-      ? `Command ingress locked: ${primaryReason} | VI: ${primaryReasonVi}`
-      : 'Command ingress is read only until mode + telemetry + preflight gates are satisfied.'
+    ? 'Command ingress is read only until mode + telemetry + preflight gates are satisfied.'
     : 'Type intent in English or Vietnamese. Ctrl+Enter to submit · Shift+Enter for newline.';
 
   return (

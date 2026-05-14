@@ -8,7 +8,6 @@ import {
   durationSeconds,
   formatClock,
   formatTimestamp,
-  hardwareGateLabel,
   humanizeLabel,
   JOINT_ORDER,
   resolveDeclineReason,
@@ -29,14 +28,12 @@ import {
   JointMonitor,
   CommandPipelinePanel,
   QuickCommands,
-  HardwareGatePanel,
   ChatPanel,
   CommandComposer,
   SystemMetrics,
   TelemetrySources,
   ControlLeasePanel,
   SystemLog,
-  RuntimeConsole,
 } from './gp4-hmi';
 
 interface GP4HMIProps {
@@ -77,7 +74,6 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
   const canReleaseLease = isController && state.lease.leaseToken !== null;
   const canConfirmCommands = state.capabilities.canConfirmCommands && !blockingRuntime && isController;
   const canAbortCommands = (state.capabilities.canCancelCommands || state.capabilities.canAbortCommands) && isController;
-  const hardwareGate = state.capabilities.hardwareGate;
   const activeCommand = state.activeCommand;
   const activeSequence = state.activeSequence;
   const activeReviewJob = activeSequence ?? activeCommand;
@@ -250,7 +246,7 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
     !blockingRuntime &&
     isController &&
     state.lease.leaseToken !== null &&
-    hardwareGate.unlocked;
+    true;
   const canHoldServo =
     state.mode === 'hardware' &&
     isController &&
@@ -321,12 +317,11 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
           <div className="chat-header">
             <span className="chat-title">LLM Command Interface - Yaskawa GP4</span>
             <span className="chat-sub">
-              transport {state.transportState} · schema {state.schemaVersion} · {readOnlyBridge ? 'read only' : 'command ingress enabled'} · gate {hardwareGateLabel(hardwareGate.unlocked)}
+              transport {state.transportState} · schema {state.schemaVersion} · {readOnlyBridge ? 'read only' : 'command ingress enabled'}
             </span>
           </div>
 
           <div className="chat-messages">
-            <HardwareGatePanel hardwareGate={hardwareGate} />
             <RuntimeStateBanner runtime={state.runtime} />
             <ChatPanel
               messages={state.messages}
@@ -346,7 +341,6 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
             canSubmit={canSubmitCommands}
             readOnlyBridge={readOnlyBridge}
             mode={state.mode}
-            hardwareGate={hardwareGate}
             submitError={submitError}
             actionFeedback={actionFeedback}
             onSubmit={() => void handleSubmit()}
@@ -370,7 +364,6 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
             onRelease={() => void releaseLease()}
           />
           <SystemLog logEntries={logEntries} />
-          <RuntimeConsole events={state.consoleEvents} />
         </aside>
       </div>
     </div>

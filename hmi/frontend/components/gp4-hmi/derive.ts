@@ -235,30 +235,6 @@ export function resolveDeclineReason(
   return null;
 }
 
-export function reasonToVietnamese(reason: string): string {
-  const n = reason.toLowerCase();
-  if (n.includes('hmi_enable_hardware_commands')) return 'Biến môi trường bật lệnh phần cứng chưa được đặt true.';
-  if (n.includes('evidence file is missing')) return 'Thiếu file minh chứng cổng phần cứng.';
-  if (n.includes('approved=true')) return 'Biên bản chưa được phê duyệt chính thức.';
-  if (n.includes('approvedby')) return 'Thiếu thông tin người phê duyệt.';
-  if (n.includes('approvedat')) return 'Thiếu thời điểm phê duyệt theo ISO8601.';
-  if (n.includes('report sha256')) return 'Checksum báo cáo không khớp với tệp minh chứng.';
-  if (n.includes('timing/jitter')) return 'Checklist timing/jitter chưa đạt.';
-  if (n.includes('disconnect-reconnect')) return 'Checklist disconnect-reconnect chưa đạt.';
-  if (n.includes('robot_status semantics')) return 'Checklist semantics robot_status chưa đạt.';
-  if (n.includes('joint source precedence')) return 'Checklist ưu tiên nguồn joint chưa đạt.';
-  if (n.includes('audit visibility')) return 'Checklist hiển thị audit chưa đạt.';
-  if (n.includes('runtime state')) return 'Trạng thái runtime hiện tại đang chặn lệnh.';
-  if (n.includes('telemetry') && n.includes('stale')) return 'Telemetry nguồn bắt buộc đang stale hoặc unavailable.';
-  if (n.includes('preflight')) return 'Preflight phần cứng thất bại.';
-  if (n.includes('reviewintent') || n.includes('review intent')) return 'Cổng ReviewIntent hoặc token ký lệnh chưa sẵn sàng.';
-  return 'Điều kiện an toàn chưa đạt, hệ thống giữ fail-closed.';
-}
-
-export function hardwareGateLabel(unlocked: boolean): string {
-  return unlocked ? 'RECORDED · ĐÃ GHI' : 'ADVISORY · THAM KHẢO';
-}
-
 export function summarizeMutationResponse(response: CommandMutationResponse): string {
   const lifecycleState = response.sequence?.lifecycleState ?? response.command?.lifecycleState;
   const stateLabel = lifecycleState ? humanizeLabel(lifecycleState) : 'Idle';

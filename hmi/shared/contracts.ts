@@ -66,25 +66,10 @@ export interface BridgeCapabilities {
   hardwareGate: HardwareGateStatus;
 }
 
-export interface HardwareGateChecklist {
-  timingJitter: boolean;
-  disconnectReconnect: boolean;
-  robotStatusSemantics: boolean;
-  jointSourcePrecedence: boolean;
-  auditVisibility: boolean;
-}
-
 export interface HardwareGateStatus {
   unlocked: boolean;
   reasons: string[];
   flagEnabled: boolean;
-  evidencePath: string;
-  approvedBy: string | null;
-  approvedAt: string | null;
-  reportPath: string | null;
-  reportSha256: string | null;
-  reportSha256Match: boolean;
-  checklist: HardwareGateChecklist | null;
 }
 
 export interface TelemetrySourceStatus {
@@ -150,12 +135,6 @@ export interface ChatMessage {
   timestamp: string;
   text: string;
   tag?: string | null;
-}
-
-export interface ConsoleEvent {
-  stage: string;
-  timestamp: string;
-  fields?: string | null;
 }
 
 export interface CommandValidationResult {
@@ -314,7 +293,6 @@ export interface HmiStateSnapshot {
   jointPositions: JointPosition[];
   planMetrics: PlanMetrics | null;
   replayItems: ReplayListItem[];
-  consoleEvents: ConsoleEvent[];
 }
 
 export interface RuntimeStateResponse {
@@ -419,8 +397,8 @@ export type HmiStreamEvent =
   | { type: 'snapshot'; snapshot: HmiStateSnapshot }
   | { type: 'heartbeat'; schemaVersion: string; generatedAt: string; transportState: TransportState; telemetryState: TelemetryState }
   | { type: 'lease_state'; lease: LeaseView; capabilities: BridgeCapabilities }
-  | { type: 'command_lifecycle'; command: CommandView; messages?: ChatMessage[]; planMetrics?: PlanMetrics | null; consoleEvents?: ConsoleEvent[] }
-  | { type: 'sequence_lifecycle'; sequence: SequenceView; messages?: ChatMessage[]; consoleEvents?: ConsoleEvent[] }
+  | { type: 'command_lifecycle'; command: CommandView; messages?: ChatMessage[]; planMetrics?: PlanMetrics | null }
+  | { type: 'sequence_lifecycle'; sequence: SequenceView; messages?: ChatMessage[] }
   | { type: 'replay_updated'; replayItems: ReplayListItem[] }
   | { type: 'connection_state'; transportState: TransportState; connections?: BridgeConnection[] }
   | { type: 'jog_bridge_status'; jogBridgeStatus: JogBridgeStatusSnapshot };

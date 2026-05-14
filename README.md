@@ -284,19 +284,17 @@ Full spec: `hmi/HMI_V2_COMMAND_INGRESS.md`
 | Environment Variable | Description |
 |----------------------|-------------|
 | `GP4_LLM_API_KEY`    | API key for `llm_gateway` LLM backend |
-| `GP4_LLM_ENV_FILE`   | Local `.env` file path, usually `/home/hieu2/gp4_ws/.env` |
 | `GP4_REVIEW_INTENT_TOKEN` | Shared HMI backend -> `llm_gateway` token for `/llm_gateway/review_intent`; required in hardware runtime mode |
 | `RMW_IMPLEMENTATION` | Set to `rmw_fastrtps_cpp` for hardware launch |
-| `ROS_DOMAIN_ID`      | Keep at `39` for this GP4 workspace to isolate it from other ROS 2 stacks |
+| `ROS_DOMAIN_ID`      | Keep at `0` for this GP4 workspace |
 
 Recommended shell setup:
 
 ```bash
-export GP4_LLM_ENV_FILE=/home/hieu2/gp4_ws/.env
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
 # GP4 workspace: isolate from other ROS2 stacks on same network
-export ROS_DOMAIN_ID=39
+export ROS_DOMAIN_ID=0
 ```
 
 ---

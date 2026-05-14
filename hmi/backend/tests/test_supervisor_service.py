@@ -587,22 +587,15 @@ class SupervisorServiceTests(unittest.TestCase):
         supervisor.bind_telemetry_service(self.telemetry)
         self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
 
-        with TemporaryDirectory() as temp_dir:
-            env_path = Path(temp_dir) / ".env"
-            env_path.write_text(
-                "GP4_REVIEW_INTENT_TOKEN=review-token\n",
-                encoding="utf-8",
+        with patch.dict(
+            os.environ,
+            {"GP4_REVIEW_INTENT_TOKEN": "review-token"},
+            clear=True,
+        ):
+            overlay = supervisor.snapshot_overlay(
+                self.session_id,
+                self.operator_id,
             )
-
-            with patch.dict(
-                os.environ,
-                {"GP4_LLM_ENV_FILE": str(env_path)},
-                clear=True,
-            ):
-                overlay = supervisor.snapshot_overlay(
-                    self.session_id,
-                    self.operator_id,
-                )
 
         self.assertTrue(overlay["capabilities"]["canSubmitCommands"])
         self.assertTrue(overlay["capabilities"]["commandIngressAvailable"])
@@ -973,9 +966,10 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertTrue(response["accepted"], msg=response)
         self.assertEqual(response["jobType"], "sequence")
         self.assertEqual(self.adapter.confirm_calls, [])
+        # W5: motion-only sequences collapse into a single BLENDED_SEQUENCE step
         self.assertEqual(
             [step["parsedIntent"]["action"] for step in response["sequence"]["steps"]],
-            ["PTP", "PTP", "HOME"],
+            ["BLENDED_SEQUENCE"],
         )
 
         confirm_response = self.supervisor.confirm_sequence(
@@ -988,9 +982,78 @@ class SupervisorServiceTests(unittest.TestCase):
 
         self.assertTrue(confirm_response["accepted"])
         self.assertEqual(confirm_response["sequence"]["finalState"], "SUCCEEDED")
+        self.assertEqual(len(self.adapter.confirm_calls), 1)
         self.assertEqual(
             [call["parsed_intent"]["action"] for call in self.adapter.confirm_calls],
-            ["PTP", "PTP", "HOME"],
+            ["BLENDED_SEQUENCE"],
+        )
+
+    def test_gateway_review_motion_only_sequence_emits_blended_sequence(
+        self,
+    ) -> None:
+        """W6: Verify motion-only sequence collapses to BLENDED_SEQUENCE with correct step structure."""
+        self.adapter.set_review_result(
+            accepted=True,
+            adapter="fake-gateway-review",
+            semanticIr={
+                "intent": "sequence",
+                "steps": [
+                    {"intent": "move_named_pose", "pose_name": "poseA"},
+                    {"intent": "move_named_pose", "pose_name": "poseB"},
+                    {"intent": "go_home"},
+                ],
+            },
+        )
+        lease_token = self._acquire_lease()
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="move to poseA then poseB then home",
+            mode="sim",
+        )
+
+        self.assertTrue(response["accepted"], msg=response)
+        self.assertEqual(response["jobType"], "sequence")
+        self.assertEqual(response["sequence"]["stepCount"], 1)
+
+        step = response["sequence"]["steps"][0]
+        self.assertEqual(step["parsedIntent"]["action"], "BLENDED_SEQUENCE")
+        normalized = step["parsedIntent"]["normalizedCommand"]
+        self.assertEqual(normalized["primitive_type"], "BLENDED_SEQUENCE")
+
+        seq_steps = normalized["sequence_steps"]
+        self.assertEqual(len(seq_steps), 3)
+
+        # First two are PTP steps resolved from named poses (joint targets)
+        for idx in range(2):
+            self.assertEqual(seq_steps[idx]["primitive_type"], "PTP")
+            self.assertEqual(seq_steps[idx]["goal_type"], 1)  # GOAL_JOINTS
+            self.assertEqual(seq_steps[idx]["blend_radius_m"], 0.01)
+            self.assertIn("joint_target", seq_steps[idx])
+            self.assertEqual(len(seq_steps[idx]["joint_target"]), 6)
+
+        # Last step is HOME (named goal) with zero blend radius
+        self.assertEqual(seq_steps[2]["primitive_type"], "HOME")
+        self.assertEqual(seq_steps[2]["goal_type"], 2)  # GOAL_NAMED
+        self.assertEqual(seq_steps[2]["named_target"], "home")
+        self.assertEqual(seq_steps[2]["blend_radius_m"], 0.0)
+
+        # Confirm and verify single execution call
+        confirm_response = self.supervisor.confirm_sequence(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            sequence_id=response["sequenceId"],
+            plan_fingerprint=response["sequence"]["planFingerprint"],
+        )
+        self.assertTrue(confirm_response["accepted"])
+        self.assertEqual(confirm_response["sequence"]["finalState"], "SUCCEEDED")
+        self.assertEqual(len(self.adapter.confirm_calls), 1)
+        self.assertEqual(
+            self.adapter.confirm_calls[0]["parsed_intent"]["action"],
+            "BLENDED_SEQUENCE",
         )
 
     def test_sim_auto_confirm_executes_immediately_when_enabled(self) -> None:

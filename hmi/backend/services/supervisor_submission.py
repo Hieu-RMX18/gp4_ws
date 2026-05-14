@@ -39,6 +39,14 @@ _QUICK_COMMAND_STATIC_MAP: dict[str, dict[str, Any]] = {
         "reference_frame": "base_link",
     },
     "wait_2s": {"intent": "wait", "wait_duration_sec": 2.0},
+    "blended_sequence": {
+        "intent": "sequence",
+        "steps": [
+            {"intent": "move_named_pose", "pose_name": "poseA"},
+            {"intent": "move_named_pose", "pose_name": "poseB"},
+            {"intent": "go_home"},
+        ],
+    },
 }
 
 
@@ -744,6 +752,14 @@ class SupervisorSubmissionMixin:
             return self._sequence_response(
                 session_id, operator_id, sequence, accepted=False, reason=parse_error
             )
+
+        # W5: Collapse into BLENDED_SEQUENCE when every step is a motion primitive.
+        if self._should_emit_blended_sequence(parsed_steps, route_metadata):
+            blended_step = self._build_blended_sequence_step(
+                parsed_steps, raw_text, structured_intent
+            )
+            parsed_steps = [blended_step]
+            sequence_segments = [raw_text] if raw_text else []
 
         sequence.sequence_step_count = len(parsed_steps)
         sequence.current_step_index = 0

@@ -46,6 +46,7 @@ add_library(${PROJECT_NAME}_components SHARED
   src/execution/motion_primitive_executor.cpp
   src/planning/primitive_router_dispatch.cpp
   src/node/query_handler.cpp
+  src/planning/trajectory_assembler.cpp
 )
 
 target_include_directories(${PROJECT_NAME}_components PUBLIC
@@ -259,6 +260,18 @@ if(BUILD_TESTING)
       ${PROJECT_NAME}_components
     )
     target_include_directories(test_query_handler PRIVATE
+      include
+    )
+  endif()
+
+  ament_add_gtest(test_trajectory_assembler
+    test/test_trajectory_assembler.cpp
+  )
+  if(TARGET test_trajectory_assembler)
+    target_link_libraries(test_trajectory_assembler
+      ${PROJECT_NAME}_components
+    )
+    target_include_directories(test_trajectory_assembler PRIVATE
       include
     )
   endif()

@@ -32,6 +32,12 @@ _SEQUENCE_SPLIT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# W5: default blend radius for intermediate items in a blended sequence.
+_DEFAULT_BLEND_RADIUS_M = 0.01
+
+# Primitives that can participate in a BLENDED_SEQUENCE.
+_BLENDED_SEQUENCE_ELIGIBLE = {"PTP", "LIN", "HOME"}
+
 _COMMA_SEQUENCE_PREFIXES = {
     "alarm",
     "bật",
@@ -328,3 +334,106 @@ class SupervisorSequenceMixin:
         if (route_metadata or {}).get("execution_mode") is not None:
             summary["executionMode"] = (route_metadata or {}).get("execution_mode")
         return summary
+
+    # ── BLENDED_SEQUENCE emission (W5) ─────────────────────────────────
+
+    @staticmethod
+    def _should_emit_blended_sequence(
+        parsed_steps: list[dict[str, Any]], route_metadata: dict[str, Any] | None
+    ) -> bool:
+        """Return True when all steps are motion primitives eligible for blending."""
+        if not parsed_steps or len(parsed_steps) < 2:
+            return False
+        macro = str((route_metadata or {}).get("macro_name") or "").strip().lower()
+        if macro in {"draw_shape", "draw_text"}:
+            return False
+        for step in parsed_steps:
+            action = str(step.get("action") or "").strip().upper()
+            if action not in _BLENDED_SEQUENCE_ELIGIBLE:
+                return False
+        return True
+
+    @staticmethod
+    def _build_blended_sequence_step(
+        parsed_steps: list[dict[str, Any]],
+        raw_text: str,
+        structured_intent: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Collapse multiple motion-primitive parsed_steps into one BLENDED_SEQUENCE step."""
+        sequence_steps: list[dict[str, Any]] = []
+        for idx, step in enumerate(parsed_steps):
+            norm_cmd = step.get("normalizedCommand") or {}
+            action = str(step.get("action") or "").strip().upper()
+            primitive = norm_cmd.get("primitive_type", action)
+
+            # Determine goal type and payload
+            goal_type = 0  # GOAL_POSE default
+            step_payload: dict[str, Any] = {
+                "primitive_type": primitive,
+                "goal_type": goal_type,
+            }
+
+            # Target: pose, joints, or named
+            if primitive == "HOME":
+                goal_type = 2  # GOAL_NAMED
+                step_payload["goal_type"] = goal_type
+                step_payload["named_target"] = "home"
+            elif norm_cmd.get("joint_target"):
+                goal_type = 1  # GOAL_JOINTS
+                step_payload["goal_type"] = goal_type
+                step_payload["joint_target"] = list(norm_cmd["joint_target"])
+            elif norm_cmd.get("target_pose"):
+                step_payload["target_pose"] = dict(norm_cmd["target_pose"])
+            else:
+                # Fallback: extract from parameters
+                params = step.get("parameters") or {}
+                if params.get("target_pose"):
+                    step_payload["target_pose"] = dict(params["target_pose"])
+                elif params.get("joint_target"):
+                    goal_type = 1
+                    step_payload["goal_type"] = goal_type
+                    step_payload["joint_target"] = list(params["joint_target"])
+
+            # Blend radius: last must be 0.0; intermediates use default.
+            if idx == len(parsed_steps) - 1:
+                step_payload["blend_radius_m"] = 0.0
+            else:
+                step_payload["blend_radius_m"] = _DEFAULT_BLEND_RADIUS_M
+
+            # Planner / scales
+            step_payload["planner_id"] = norm_cmd.get("planner_id", "")
+            if norm_cmd.get("velocity_scale") is not None:
+                step_payload["velocity_scale"] = float(norm_cmd["velocity_scale"])
+            if norm_cmd.get("acceleration_scale") is not None:
+                step_payload["acceleration_scale"] = float(
+                    norm_cmd["acceleration_scale"]
+                )
+
+            sequence_steps.append(step_payload)
+
+        # Build the single collapsed parsed step
+        target_summary = " -> ".join(
+            step.get("targetSummary", "") for step in parsed_steps
+        )[:120]
+
+        normalized_command = {
+            "primitive_type": "BLENDED_SEQUENCE",
+            "sequence_steps": sequence_steps,
+        }
+
+        return {
+            "source": "blended",
+            "normalizedText": raw_text
+            or (
+                json.dumps(
+                    structured_intent, separators=(",", ":"), ensure_ascii=True
+                )
+                if structured_intent is not None
+                else ""
+            ),
+            "action": "BLENDED_SEQUENCE",
+            "parameters": {"sequence_steps": sequence_steps},
+            "targetSummary": target_summary,
+            "normalizedCommand": normalized_command,
+            "normalizationNotes": ["collapsed_into_blended_sequence"],
+        }

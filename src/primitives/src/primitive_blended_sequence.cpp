@@ -5,11 +5,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "motion_core/trajectory_assembler.hpp"
 
 #include <moveit/kinematic_constraints/utils.h>
 #include <rclcpp/executors/single_threaded_executor.hpp>
@@ -113,43 +116,6 @@ PrimitiveResult make_result_failure(PrimitiveFailReason reason,
   return failure;
 }
 
-std::string to_string(PrimitiveFailReason reason) {
-  switch (reason) {
-  case PrimitiveFailReason::UNKNOWN:
-    return "UNKNOWN";
-  case PrimitiveFailReason::NAMED_TARGET_NOT_FOUND:
-    return "NAMED_TARGET_NOT_FOUND";
-  case PrimitiveFailReason::IK_FAILED:
-    return "IK_FAILED";
-  case PrimitiveFailReason::CARTESIAN_FRACTION_LOW:
-    return "CARTESIAN_FRACTION_LOW";
-  case PrimitiveFailReason::JOINT_COUNT_MISMATCH:
-    return "JOINT_COUNT_MISMATCH";
-  case PrimitiveFailReason::INVALID_ORIENTATION:
-    return "INVALID_ORIENTATION";
-  case PrimitiveFailReason::WRIST_FLIP_DETECTED:
-    return "WRIST_FLIP_DETECTED";
-  case PrimitiveFailReason::TRAJECTORY_TOO_LONG:
-    return "TRAJECTORY_TOO_LONG";
-  case PrimitiveFailReason::DEGENERATE_GEOMETRY:
-    return "DEGENERATE_GEOMETRY";
-  case PrimitiveFailReason::QUALITY_GATE_REJECTED:
-    return "QUALITY_GATE_REJECTED";
-  case PrimitiveFailReason::SUB_PRIMITIVE_FAILED:
-    return "SUB_PRIMITIVE_FAILED";
-  case PrimitiveFailReason::PLANNING_TIMEOUT:
-    return "PLANNING_TIMEOUT";
-  case PrimitiveFailReason::WORKSPACE_VIOLATION:
-    return "WORKSPACE_VIOLATION";
-  case PrimitiveFailReason::INVALID_DISTANCE_PARAM:
-    return "INVALID_DISTANCE_PARAM";
-  case PrimitiveFailReason::TOTG_FAILED:
-    return "TOTG_FAILED";
-  default:
-    return "UNKNOWN";
-  }
-}
-
 PrimitiveFailReason map_moveit_error(const int32_t error_code) {
   if (error_code == moveit_msgs::msg::MoveItErrorCodes::SUCCESS) {
     return PrimitiveFailReason::UNKNOWN;
@@ -166,18 +132,6 @@ PrimitiveFailReason map_moveit_error(const int32_t error_code) {
   }
 
   return PrimitiveFailReason::UNKNOWN;
-}
-
-std::string step_failure_message(std::size_t step_index,
-                                 const PrimitiveResult &sub_result) {
-  std::ostringstream stream;
-  stream << "step[" << step_index
-         << "] failed: " << to_string(sub_result.reason);
-  if (!sub_result.message.empty()) {
-    stream << " (" << sub_result.message << ")";
-  }
-
-  return stream.str();
 }
 
 geometry_msgs::msg::Pose
@@ -280,9 +234,18 @@ public:
               std::to_string(response.error_code.val));
     }
 
-    std::size_t merged_points = 0;
-    for (const auto &trajectory : response.planned_trajectories) {
-      merged_points += trajectory.joint_trajectory.points.size();
+    // ── Extract and merge planned trajectories ──────────────────────────
+    std::vector<trajectory_msgs::msg::JointTrajectory> segments;
+    segments.reserve(response.planned_trajectories.size());
+    for (const auto &planned : response.planned_trajectories) {
+      segments.push_back(planned.joint_trajectory);
+    }
+
+    auto merge_result = motion_core::TrajectoryAssembler::merge(segments);
+    if (!merge_result.success) {
+      return make_result_failure(
+          PrimitiveFailReason::TRAJECTORY_TOO_LONG,
+          "TrajectoryAssembler failed: " + merge_result.error_message);
     }
 
     PrimitiveResult success;
@@ -290,7 +253,8 @@ public:
     success.reason = PrimitiveFailReason::UNKNOWN;
     success.message = "blended_sequence planned with MoveGroupSequenceAction";
     success.planning_time_sec = response.planning_time;
-    success.trajectory_points = merged_points;
+    success.trajectory_points = merge_result.total_points;
+    success.trajectory = std::move(merge_result.trajectory);
     return success;
   }
 
@@ -686,39 +650,15 @@ PrimitiveBlendedSequence::execute(const std::vector<SequenceStep> &steps,
     }
   }
 
-  if (backend.sequence_action_available()) {
-    return backend.execute_sequence_action(steps);
+  if (!backend.sequence_action_available()) {
+    return make_failure(
+        PrimitiveFailReason::PLANNING_TIMEOUT,
+        "MoveGroupSequence action server unavailable; BLENDED_SEQUENCE "
+        "requires sequence action support. No stepwise fallback on real "
+        "hardware.");
   }
 
-  std::size_t merged_points = 0;
-  double total_planning_time = 0.0;
-
-  for (std::size_t index = 0; index < steps.size(); ++index) {
-    const PrimitiveResult sub_result = backend.execute_substep(steps[index]);
-    if (!sub_result.success) {
-      return make_failure(PrimitiveFailReason::SUB_PRIMITIVE_FAILED,
-                          step_failure_message(index, sub_result));
-    }
-
-    total_planning_time += sub_result.planning_time_sec;
-    merged_points += sub_result.trajectory_points;
-
-    if (merged_points >
-        motion_core::TrajectoryPostProcessor::kMaxTrajectoryPoints) {
-      return make_failure(PrimitiveFailReason::TRAJECTORY_TOO_LONG,
-                          "merged staged trajectory has " +
-                              std::to_string(merged_points) +
-                              " points (> 200)");
-    }
-  }
-
-  PrimitiveResult success;
-  success.success = true;
-  success.reason = PrimitiveFailReason::UNKNOWN;
-  success.message = "blended_sequence executed in degraded mode (staged)";
-  success.planning_time_sec = total_planning_time;
-  success.trajectory_points = merged_points;
-  return success;
+  return backend.execute_sequence_action(steps);
 }
 
 PrimitiveResult PrimitiveBlendedSequence::execute(const ExecuteMotionGoal &goal,
@@ -733,11 +673,6 @@ PrimitiveResult PrimitiveBlendedSequence::execute(const ExecuteMotionGoal &goal,
         PrimitiveFailReason::UNKNOWN,
         "BLENDED_SEQUENCE: sequence_steps must contain at least 2 items");
   }
-  if (goal.sequence_steps.front().blend_radius_m != 0.0) {
-    return make_failure(
-        PrimitiveFailReason::UNKNOWN,
-        "BLENDED_SEQUENCE: first step blend_radius_m must be 0.0");
-  }
   if (goal.sequence_steps.back().blend_radius_m != 0.0) {
     return make_failure(
         PrimitiveFailReason::UNKNOWN,
@@ -749,7 +684,12 @@ PrimitiveResult PrimitiveBlendedSequence::execute(const ExecuteMotionGoal &goal,
   for (const auto &msg_step : goal.sequence_steps) {
     SequenceStep step;
     step.type = from_string(msg_step.primitive_type);
+    step.goal_type = static_cast<GoalType>(msg_step.goal_type);
     step.target_pose = msg_step.target_pose;
+    step.joint_target.assign(msg_step.joint_target.begin(),
+                             msg_step.joint_target.end());
+    step.named_target = msg_step.named_target;
+    step.auxiliary_pose = msg_step.auxiliary_pose;
     step.velocity_scale = msg_step.velocity_scale;
     step.acceleration_scale = msg_step.acceleration_scale;
     step.blend_radius = msg_step.blend_radius_m;

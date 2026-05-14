@@ -10,9 +10,11 @@
 #include <moveit/move_group_interface/move_group_interface.h>
 #include <moveit/robot_model/joint_model.h>
 #include <moveit/robot_state/robot_state.h>
+#include <moveit_msgs/action/move_group_sequence.hpp>
 #include <moveit_msgs/msg/robot_state.hpp>
 #include <moveit_msgs/msg/robot_trajectory.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 #include <trajectory_msgs/msg/joint_trajectory.hpp>
 
 #include "interfaces/action/execute_motion.hpp"
@@ -129,6 +131,17 @@ private:
       double velocity_scale, double acceleration_scale,
       const std::string &start_state_failure_message,
       const std::string &time_parameterization_failure_prefix) const;
+
+  PlanningResult plan_blended_sequence(
+      const PlanningRequest &request,
+      std::shared_ptr<moveit::planning_interface::MoveGroupInterface>
+          move_group) const;
+
+  static moveit_msgs::msg::MotionSequenceItem
+  build_sequence_item(const interfaces::msg::SequenceStep &step,
+                      const std::string &pipeline_id,
+                      const std::string &planner_id, double velocity_scale,
+                      double acceleration_scale);
 
   rclcpp::Logger logger_;
   std::function<

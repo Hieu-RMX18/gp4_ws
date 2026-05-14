@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <string>
 
+#include <trajectory_msgs/msg/joint_trajectory.hpp>
+
 namespace primitives {
 enum class PrimitiveType {
   HOME,
@@ -50,6 +52,7 @@ struct PrimitiveResult {
   std::string message; // human-readable detail
   double planning_time_sec = 0.0;
   std::size_t trajectory_points = 0;
+  trajectory_msgs::msg::JointTrajectory trajectory; // populated by BLENDED_SEQUENCE plan
 };
 
 inline PrimitiveType from_string(const std::string &s) {

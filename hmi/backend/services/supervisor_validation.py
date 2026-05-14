@@ -142,6 +142,7 @@ class SupervisorValidationMixin:
             "LIN",
             "CIRC",
             "CARTESIAN_PATH",
+            "BLENDED_SEQUENCE",
         }:
             confirmation_reasons.append(
                 "Motion primitives always require explicit confirmation in v2."

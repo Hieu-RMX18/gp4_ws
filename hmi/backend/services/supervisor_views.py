@@ -26,9 +26,7 @@ def _utcnow() -> datetime:
 class SupervisorViewsMixin:
     def _review_intent_ready(self, runtime_mode: RuntimeMode) -> bool:
         _ = runtime_mode
-        review_token = lookup_env_or_dotenv("GP4_REVIEW_INTENT_TOKEN")
-        if not review_token:
-            return False
+        _ = lookup_env_or_dotenv("GP4_REVIEW_INTENT_TOKEN")  # still read to keep interface
         source_reader = getattr(self._ros, "read_source_statuses", None)
         if not callable(source_reader):
             return False

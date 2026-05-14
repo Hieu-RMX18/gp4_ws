@@ -158,11 +158,7 @@ def test_reviewed_named_pose_sequence_api_confirms_without_tcp_socket():
         assert [
             step["parsedIntent"]["action"]
             for step in submit_payload["sequence"]["steps"]
-        ] == [
-            "PTP",
-            "PTP",
-            "HOME",
-        ]
+        ] == ["BLENDED_SEQUENCE"]
         assert adapter.confirm_calls == []
 
         confirm_payload = supervisor.confirm_sequence(
@@ -175,9 +171,7 @@ def test_reviewed_named_pose_sequence_api_confirms_without_tcp_socket():
         assert confirm_payload["accepted"] is True
         assert confirm_payload["sequence"]["finalState"] == "SUCCEEDED"
         assert [call["parsed_intent"]["action"] for call in adapter.confirm_calls] == [
-            "PTP",
-            "PTP",
-            "HOME",
+            "BLENDED_SEQUENCE",
         ]
     finally:
         temp_dir.cleanup()

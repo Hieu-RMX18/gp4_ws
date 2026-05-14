@@ -10,11 +10,15 @@
 #include "primitives/primitive_types.hpp"
 
 namespace primitives {
+enum class GoalType { POSE = 0, JOINTS = 1, NAMED = 2 };
+
 struct SequenceStep {
   PrimitiveType type = PrimitiveType::UNKNOWN;
+  GoalType goal_type = GoalType::POSE;
   geometry_msgs::msg::Pose target_pose;    // for LIN, APPROACH, CIRC goal
   geometry_msgs::msg::Pose auxiliary_pose; // for CIRC interim point
   std::vector<double> joint_target;        // for PTP joint-space
+  std::string named_target;                // e.g. "home", "start"
   double approach_distance = 0.0;          // for APPROACH
   double retract_distance = 0.0;           // for RETRACT
   double velocity_scale = 0.0;

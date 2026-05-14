@@ -61,7 +61,6 @@ from llm_gateway.react_planner import (
     ToolRegistry,
     WaitForStateTool,
     load_llm_backend_config,
-    lookup_env_or_dotenv,
 )
 from llm_gateway.semantic_ir_contract import validate_semantic_ir_contract
 
@@ -179,10 +178,7 @@ class LLMGatewayNode(Node):
         )
         runtime_mode = self._resolve_runtime_mode()
         self._runtime_mode = runtime_mode
-        self._review_intent_token = lookup_env_or_dotenv(
-            "GP4_REVIEW_INTENT_TOKEN",
-            llm_config_path,
-        ).strip()
+        self._review_intent_token = os.getenv("GP4_REVIEW_INTENT_TOKEN", "").strip()
         self._review_intent_requires_token = True
         self._intent_router = intent_router or IntentRouter(runtime_mode=runtime_mode)
         self._sequence_validator = sequence_validator or SequenceValidator(

@@ -201,5 +201,129 @@ class SequenceSummaryLabelTests(unittest.TestCase):
         self.assertEqual(len(label), 120)
 
 
+class ShouldEmitBlendedSequenceTests(unittest.TestCase):
+    def test_two_lin_steps_eligible(self) -> None:
+        steps = [
+            {"action": "LIN", "targetSummary": "A"},
+            {"action": "LIN", "targetSummary": "B"},
+        ]
+        self.assertTrue(
+            SupervisorSequenceMixin._should_emit_blended_sequence(steps, None)
+        )
+
+    def test_mixed_ptp_lin_home_eligible(self) -> None:
+        steps = [
+            {"action": "PTP", "targetSummary": "A"},
+            {"action": "LIN", "targetSummary": "B"},
+            {"action": "HOME", "targetSummary": "C"},
+        ]
+        self.assertTrue(
+            SupervisorSequenceMixin._should_emit_blended_sequence(steps, None)
+        )
+
+    def test_single_step_not_eligible(self) -> None:
+        steps = [
+            {"action": "LIN", "targetSummary": "A"},
+        ]
+        self.assertFalse(
+            SupervisorSequenceMixin._should_emit_blended_sequence(steps, None)
+        )
+
+    def test_wait_step_makes_ineligible(self) -> None:
+        steps = [
+            {"action": "LIN", "targetSummary": "A"},
+            {"action": "WAIT", "targetSummary": "B"},
+        ]
+        self.assertFalse(
+            SupervisorSequenceMixin._should_emit_blended_sequence(steps, None)
+        )
+
+    def test_draw_shape_macro_ineligible(self) -> None:
+        steps = [
+            {"action": "LIN", "targetSummary": "A"},
+            {"action": "LIN", "targetSummary": "B"},
+        ]
+        self.assertFalse(
+            SupervisorSequenceMixin._should_emit_blended_sequence(
+                steps, {"macro_name": "draw_shape"}
+            )
+        )
+
+
+class BuildBlendedSequenceStepTests(unittest.TestCase):
+    def test_two_pose_steps_collapsed(self) -> None:
+        steps = [
+            {
+                "action": "LIN",
+                "targetSummary": "A",
+                "normalizedCommand": {
+                    "primitive_type": "LIN",
+                    "target_pose": {
+                        "position": {"x": 0.1, "y": 0.2, "z": 0.3},
+                        "orientation": {"x": 0, "y": 0, "z": 0, "w": 1},
+                    },
+                },
+            },
+            {
+                "action": "LIN",
+                "targetSummary": "B",
+                "normalizedCommand": {
+                    "primitive_type": "LIN",
+                    "target_pose": {
+                        "position": {"x": 0.2, "y": 0.3, "z": 0.4},
+                        "orientation": {"x": 0, "y": 0, "z": 0, "w": 1},
+                    },
+                },
+            },
+        ]
+        blended = SupervisorSequenceMixin._build_blended_sequence_step(
+            steps, raw_text="go to A then B", structured_intent=None
+        )
+        self.assertEqual(blended["action"], "BLENDED_SEQUENCE")
+        seq_steps = blended["parameters"]["sequence_steps"]
+        self.assertEqual(len(seq_steps), 2)
+        self.assertEqual(seq_steps[0]["blend_radius_m"], 0.01)
+        self.assertEqual(seq_steps[1]["blend_radius_m"], 0.0)
+        self.assertEqual(seq_steps[0]["goal_type"], 0)
+        self.assertEqual(seq_steps[1]["goal_type"], 0)
+
+    def test_home_step_becomes_named_goal(self) -> None:
+        steps = [
+            {
+                "action": "LIN",
+                "targetSummary": "A",
+                "normalizedCommand": {
+                    "primitive_type": "LIN",
+                    "target_pose": {
+                        "position": {"x": 0.1, "y": 0.2, "z": 0.3},
+                        "orientation": {"x": 0, "y": 0, "z": 0, "w": 1},
+                    },
+                },
+            },
+            {
+                "action": "HOME",
+                "targetSummary": "HOME",
+                "normalizedCommand": {"primitive_type": "HOME"},
+            },
+        ]
+        blended = SupervisorSequenceMixin._build_blended_sequence_step(
+            steps, raw_text="go to A then home", structured_intent=None
+        )
+        seq_steps = blended["parameters"]["sequence_steps"]
+        self.assertEqual(seq_steps[1]["goal_type"], 2)
+        self.assertEqual(seq_steps[1]["named_target"], "home")
+        self.assertEqual(seq_steps[1]["blend_radius_m"], 0.0)
+
+    def test_target_summary_joins_with_arrow(self) -> None:
+        steps = [
+            {"action": "LIN", "targetSummary": "A"},
+            {"action": "LIN", "targetSummary": "B"},
+        ]
+        blended = SupervisorSequenceMixin._build_blended_sequence_step(
+            steps, raw_text="", structured_intent=None
+        )
+        self.assertEqual(blended["targetSummary"], "A -> B")
+
+
 if __name__ == "__main__":
     unittest.main()

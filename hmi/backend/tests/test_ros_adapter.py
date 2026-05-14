@@ -358,22 +358,16 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         adapter._node = object()  # pylint: disable=protected-access
         adapter._review_intent_client = client  # pylint: disable=protected-access
 
-        with TemporaryDirectory() as temp_dir:
-            env_path = Path(temp_dir) / ".env"
-            env_path.write_text(
-                "GP4_REVIEW_INTENT_TOKEN=review-token\n",
-                encoding="utf-8",
-            )
-            with (
-                patch.object(
-                    adapter_module, "ReviewIntent", _FakeReviewIntent, create=True
-                ),
-                patch.dict(
-                    os.environ,
-                    {"GP4_LLM_ENV_FILE": str(env_path)},
-                    clear=True,
-                ),
-            ):
+        with (
+            patch.object(
+                adapter_module, "ReviewIntent", _FakeReviewIntent, create=True
+            ),
+            patch.dict(
+                os.environ,
+                {"GP4_REVIEW_INTENT_TOKEN": "review-token"},
+                clear=True,
+            ),
+        ):
                 result = adapter.submit_text_for_review(
                     raw_text="go home",
                     runtime_mode="sim",

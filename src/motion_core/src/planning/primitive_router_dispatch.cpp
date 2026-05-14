@@ -16,6 +16,12 @@
 
 #include "motion_core/execute_motion_action_support.hpp"
 #include "motion_core/move_rel_validator.hpp"
+#include "motion_core/trajectory_assembler.hpp"
+
+#include <moveit_msgs/action/move_group_sequence.hpp>
+#include <moveit_msgs/msg/motion_sequence_item.hpp>
+#include <rclcpp/executors/single_threaded_executor.hpp>
+#include <rclcpp_action/rclcpp_action.hpp>
 
 namespace motion_core {
 PrimitiveRouterDispatch::PrimitiveRouterDispatch(
@@ -331,179 +337,7 @@ PrimitiveRouterDispatch::plan_for_primitive(const PlanningRequest &request) {
   }
 
   if (primitive == "BLENDED_SEQUENCE") {
-    if (goal->sequence_steps.size() < 2U) {
-      result.reason =
-          "BLENDED_SEQUENCE requires at least 2 typed sequence_steps";
-      return result;
-    }
-    if (goal->sequence_steps.front().blend_radius_m != 0.0 ||
-        goal->sequence_steps.back().blend_radius_m != 0.0) {
-      result.reason = "BLENDED_SEQUENCE requires first and last blend_radius_m "
-                      "to be 0.0";
-      return result;
-    }
-
-    moveit::core::RobotState staged_state(request.current_robot_state);
-    moveit_msgs::msg::RobotTrajectory stitched_trajectory_msg;
-    moveit_msgs::msg::RobotState stitched_start_state_msg;
-    bool has_stitched_start_state = false;
-
-    for (std::size_t step_index = 0U; step_index < goal->sequence_steps.size();
-         ++step_index) {
-      const auto &step = goal->sequence_steps[step_index];
-      const std::string step_primitive =
-          ExecuteMotionActionSupport::normalize_primitive(step.primitive_type);
-      if (step_primitive != "LIN" && step_primitive != "PTP") {
-        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
-                        "] unsupported primitive_type '" + step.primitive_type +
-                        "'; only LIN/PTP are supported in motion_core";
-        return result;
-      }
-      if (step.blend_radius_m < 0.0) {
-        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
-                        "] blend_radius_m must be >= 0.0";
-        return result;
-      }
-
-      geometry_msgs::msg::Pose step_pose = step.target_pose;
-      std::string orientation_reason;
-      if (!orientation_filter_.normalize_and_validate(step_pose,
-                                                      orientation_reason)) {
-        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
-                        "] orientation rejected: " + orientation_reason;
-        return result;
-      }
-
-      std::string step_planner_id = step.planner_id;
-      if (step_planner_id.empty()) {
-        step_planner_id = planner_router_.route_planner(step_primitive, false);
-      }
-      if (step_planner_id.empty()) {
-        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
-                        "] has no planner_id";
-        return result;
-      }
-      const PlannerSelection step_selection =
-          resolve_planner_selection(step_planner_id);
-      if (step_primitive == "LIN" &&
-          (step_selection.pipeline_id != "pilz_industrial_motion_planner" ||
-           step_selection.planner_id != "LIN")) {
-        result.reason = "BLENDED_SEQUENCE LIN step[" +
-                        std::to_string(step_index) +
-                        "] requires Pilz LIN planner";
-        return result;
-      }
-
-      move_group->setPlanningTime(kPlanningTimeSec);
-      if (!step_selection.pipeline_id.empty()) {
-        move_group->setPlanningPipelineId(step_selection.pipeline_id);
-      }
-      move_group->setPlannerId(step_selection.planner_id);
-      move_group->setMaxVelocityScalingFactor(step.velocity_scale > 0.0
-                                                  ? step.velocity_scale
-                                                  : request.velocity_scale);
-      move_group->setMaxAccelerationScalingFactor(
-          step.acceleration_scale > 0.0 ? step.acceleration_scale
-                                        : request.acceleration_scale);
-      move_group->setStartState(staged_state);
-      move_group->clearPoseTargets();
-      if (!move_group->setPoseTarget(step_pose)) {
-        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
-                        "] MoveGroupInterface rejected target pose";
-        return result;
-      }
-
-      const std::string step_interrupt = request.interrupt_reason(
-          "blended_sequence_step_" + std::to_string(step_index));
-      if (!step_interrupt.empty()) {
-        result.status = PlanningStatus::kCanceled;
-        result.reason = step_interrupt;
-        return result;
-      }
-
-      moveit::planning_interface::MoveGroupInterface::Plan step_plan;
-      const auto step_plan_result = request.plan_with_interruption(
-          step_plan,
-          "BLENDED_SEQUENCE step[" + std::to_string(step_index) + "] planning");
-      if (step_plan_result.status == PlanningStatus::kCanceled) {
-        result.status = PlanningStatus::kCanceled;
-        result.reason = step_plan_result.reason;
-        return result;
-      }
-      if (step_plan_result.status != PlanningStatus::kSuccess) {
-        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
-                        "] planning failed: " + step_plan_result.reason;
-        return result;
-      }
-
-      const auto &segment = step_plan.trajectory_.joint_trajectory;
-      if (segment.points.empty()) {
-        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
-                        "] returned empty joint trajectory";
-        return result;
-      }
-      if (stitched_trajectory_msg.joint_trajectory.joint_names.empty()) {
-        stitched_trajectory_msg.joint_trajectory.joint_names =
-            segment.joint_names;
-        stitched_trajectory_msg.joint_trajectory.header = segment.header;
-        stitched_start_state_msg = step_plan.start_state_;
-        has_stitched_start_state = true;
-      } else if (stitched_trajectory_msg.joint_trajectory.joint_names !=
-                 segment.joint_names) {
-        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
-                        "] joint_names changed between planned segments";
-        return result;
-      }
-
-      const std::size_t first_point =
-          stitched_trajectory_msg.joint_trajectory.points.empty() ? 0U : 1U;
-      for (std::size_t point_index = first_point;
-           point_index < segment.points.size(); ++point_index) {
-        stitched_trajectory_msg.joint_trajectory.points.push_back(
-            segment.points[point_index]);
-      }
-
-      const auto &last_point = segment.points.back();
-      if (last_point.positions.size() != request.active_joint_names.size()) {
-        result.reason = "BLENDED_SEQUENCE step[" + std::to_string(step_index) +
-                        "] final point joint count does not match planning "
-                        "group";
-        return result;
-      }
-      staged_state.setVariablePositions(segment.joint_names,
-                                        last_point.positions);
-      staged_state.update();
-    }
-
-    if (stitched_trajectory_msg.joint_trajectory.points.empty()) {
-      result.reason = "BLENDED_SEQUENCE produced an empty stitched trajectory";
-      return result;
-    }
-
-    std::string guard_reason;
-    if (!joint_position_guard_.check_trajectory(
-            stitched_trajectory_msg.joint_trajectory, guard_reason,
-            request.joint_position_guard_mode)) {
-      result.reason = "pre-downsample " + guard_reason;
-      return result;
-    }
-
-    result = post_process_trajectory(
-        stitched_trajectory_msg, stitched_start_state_msg,
-        has_stitched_start_state, request.current_robot_state,
-        request.velocity_scale, request.acceleration_scale,
-        "BLENDED_SEQUENCE: failed to convert stitched start_state",
-        "BLENDED_SEQUENCE time parameterization failed; ");
-    if (result.status != PlanningStatus::kSuccess) {
-      return result;
-    }
-
-    result.dispatch_primitive = primitive;
-    result.planner_id = "PILZ_LIN_STAGED";
-    result.cartesian_fraction = 1.0;
-    result.time_parameterization_note =
-        "BLENDED_SEQUENCE planned as staged LIN/PTP segments";
-    return result;
+    return plan_blended_sequence(request, move_group);
   }
 
   std::string planner_id = goal->planner_id;
@@ -988,6 +822,249 @@ PrimitiveRouterDispatch::plan_for_primitive(const PlanningRequest &request) {
   result.dispatch_primitive = effective_primitive;
   result.planner_id = planner_selection.planner_id;
   result.cartesian_fraction = cartesian_fraction;
+  return result;
+}
+
+// ── BLENDED_SEQUENCE: MoveGroupSequence action + TrajectoryAssembler ──
+
+moveit_msgs::msg::MotionSequenceItem
+PrimitiveRouterDispatch::build_sequence_item(
+    const interfaces::msg::SequenceStep &step,
+    const std::string &pipeline_id, const std::string &planner_id,
+    double velocity_scale, double acceleration_scale) {
+  moveit_msgs::msg::MotionSequenceItem item;
+
+  // Request
+  item.req.group_name = kPlanningGroup;
+  item.req.planner_id = planner_id;
+  item.req.pipeline_id = pipeline_id;
+  item.req.max_velocity_scaling_factor = velocity_scale;
+  item.req.max_acceleration_scaling_factor = acceleration_scale;
+  item.req.num_planning_attempts = 1;
+  item.req.allowed_planning_time = kPlanningTimeSec;
+
+  // Goal constraints: pose target
+  moveit_msgs::msg::PositionConstraint pc;
+  pc.link_name = "tool0";
+  pc.constraint_region.primitives.emplace_back();
+  pc.constraint_region.primitives.back().type =
+      shape_msgs::msg::SolidPrimitive::SPHERE;
+  pc.constraint_region.primitives.back().dimensions = {0.01};
+  pc.constraint_region.primitive_poses.push_back(step.target_pose);
+
+  moveit_msgs::msg::OrientationConstraint oc;
+  oc.link_name = "tool0";
+  oc.orientation = step.target_pose.orientation;
+  oc.absolute_x_axis_tolerance = 0.01;
+  oc.absolute_y_axis_tolerance = 0.01;
+  oc.absolute_z_axis_tolerance = 0.01;
+
+  moveit_msgs::msg::Constraints goal_constraints;
+  goal_constraints.position_constraints.push_back(std::move(pc));
+  goal_constraints.orientation_constraints.push_back(std::move(oc));
+  item.req.goal_constraints.push_back(std::move(goal_constraints));
+
+  // Blend radius (link_blend for MoveIt sequence)
+  item.blend_radius = step.blend_radius_m;
+
+  return item;
+}
+
+PrimitiveRouterDispatch::PlanningResult
+PrimitiveRouterDispatch::plan_blended_sequence(
+    const PlanningRequest &request,
+    std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group)
+    const {
+  (void)move_group; // node created locally; MoveGroup not needed directly
+  PlanningResult result;
+  const auto &goal = request.goal;
+
+  if (!goal || goal->sequence_steps.size() < 2U) {
+    result.reason = "BLENDED_SEQUENCE requires at least 2 typed sequence_steps";
+    return result;
+  }
+  if (goal->sequence_steps.back().blend_radius_m != 0.0) {
+    result.reason =
+        "BLENDED_SEQUENCE requires last blend_radius_m to be 0.0";
+    return result;
+  }
+
+  for (std::size_t i = 0; i < goal->sequence_steps.size(); ++i) {
+    const auto &step = goal->sequence_steps[i];
+    const std::string step_primitive =
+        ExecuteMotionActionSupport::normalize_primitive(step.primitive_type);
+    if (step_primitive != "LIN" && step_primitive != "PTP") {
+      result.reason = "BLENDED_SEQUENCE step[" + std::to_string(i) +
+                      "] unsupported primitive_type '" + step.primitive_type +
+                      "'; only LIN/PTP are supported";
+      return result;
+    }
+    if (step.blend_radius_m < 0.0) {
+      result.reason = "BLENDED_SEQUENCE step[" + std::to_string(i) +
+                      "] blend_radius_m must be >= 0.0";
+      return result;
+    }
+    geometry_msgs::msg::Pose step_pose = step.target_pose;
+    std::string orientation_reason;
+    if (!orientation_filter_.normalize_and_validate(step_pose,
+                                                    orientation_reason)) {
+      result.reason = "BLENDED_SEQUENCE step[" + std::to_string(i) +
+                      "] orientation rejected: " + orientation_reason;
+      return result;
+    }
+  }
+
+  // Build goal
+  using MoveGroupSequence = moveit_msgs::action::MoveGroupSequence;
+  MoveGroupSequence::Goal sequence_goal;
+  sequence_goal.request.items.reserve(goal->sequence_steps.size());
+
+  for (std::size_t i = 0; i < goal->sequence_steps.size(); ++i) {
+    const auto &step = goal->sequence_steps[i];
+    const std::string step_primitive =
+        ExecuteMotionActionSupport::normalize_primitive(step.primitive_type);
+    std::string step_planner_id = step.planner_id;
+    if (step_planner_id.empty()) {
+      step_planner_id = planner_router_.route_planner(step_primitive, false);
+    }
+    const PlannerSelection selection = resolve_planner_selection(step_planner_id);
+    if (step_primitive == "LIN" &&
+        (selection.pipeline_id != "pilz_industrial_motion_planner" ||
+         selection.planner_id != "LIN")) {
+      result.reason = "BLENDED_SEQUENCE LIN step[" + std::to_string(i) +
+                      "] requires Pilz LIN planner";
+      return result;
+    }
+
+    const double v_scale =
+        step.velocity_scale > 0.0 ? step.velocity_scale : request.velocity_scale;
+    const double a_scale = step.acceleration_scale > 0.0
+                               ? step.acceleration_scale
+                               : request.acceleration_scale;
+    sequence_goal.request.items.push_back(
+        build_sequence_item(step, selection.pipeline_id, selection.planner_id,
+                            v_scale, a_scale));
+  }
+
+  // Create action client (getNodeHandle is not exported in some MoveIt
+  // builds; create a local node instead).
+  auto node = std::make_shared<rclcpp::Node>(
+      "primitive_router_blended_sequence",
+      rclcpp::NodeOptions()
+          .automatically_declare_parameters_from_overrides(true));
+  auto client = rclcpp_action::create_client<MoveGroupSequence>(
+      node, "move_group_sequence");
+
+  constexpr double kActionWaitSec = 10.0;
+  if (!client->wait_for_action_server(
+          std::chrono::duration<double>(kActionWaitSec))) {
+    result.reason = "MoveGroupSequence action server unavailable after " +
+                    std::to_string(static_cast<int>(kActionWaitSec)) + "s";
+    return result;
+  }
+
+  // Interrupt check before sending
+  const std::string pre_send_interrupt =
+      request.interrupt_reason("blended_sequence_plan");
+  if (!pre_send_interrupt.empty()) {
+    result.status = PlanningStatus::kCanceled;
+    result.reason = pre_send_interrupt;
+    return result;
+  }
+
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(node);
+
+  auto goal_future = client->async_send_goal(sequence_goal);
+  if (executor.spin_until_future_complete(
+          goal_future,
+          std::chrono::duration<double>(kActionWaitSec)) !=
+      rclcpp::FutureReturnCode::SUCCESS) {
+    executor.remove_node(node);
+    result.reason = "MoveGroupSequence goal submission timed out";
+    return result;
+  }
+
+  auto goal_handle = goal_future.get();
+  if (!goal_handle) {
+    executor.remove_node(node);
+    result.reason = "MoveGroupSequence goal rejected by server";
+    return result;
+  }
+
+  auto result_future = client->async_get_result(goal_handle);
+  if (executor.spin_until_future_complete(
+          result_future,
+          std::chrono::duration<double>(kActionWaitSec)) !=
+      rclcpp::FutureReturnCode::SUCCESS) {
+    executor.remove_node(node);
+    result.reason = "MoveGroupSequence result timed out";
+    return result;
+  }
+
+  executor.remove_node(node);
+
+  auto wrapped_result = result_future.get();
+  if (wrapped_result.code != rclcpp_action::ResultCode::SUCCEEDED ||
+      !wrapped_result.result) {
+    result.reason = "MoveGroupSequence action did not finish successfully";
+    return result;
+  }
+
+  const auto &response = wrapped_result.result->response;
+  if (response.error_code.val !=
+      moveit_msgs::msg::MoveItErrorCodes::SUCCESS) {
+    result.reason = "MoveGroupSequence planning failed with MoveIt error code: " +
+                    std::to_string(response.error_code.val);
+    return result;
+  }
+
+  // Extract and merge trajectories
+  std::vector<trajectory_msgs::msg::JointTrajectory> segments;
+  segments.reserve(response.planned_trajectories.size());
+  for (const auto &planned : response.planned_trajectories) {
+    segments.push_back(planned.joint_trajectory);
+  }
+
+  auto merge_result = TrajectoryAssembler::merge(segments);
+  if (!merge_result.success) {
+    result.reason =
+        "TrajectoryAssembler failed: " + merge_result.error_message;
+    return result;
+  }
+
+  if (merge_result.trajectory.points.empty()) {
+    result.reason = "BLENDED_SEQUENCE produced an empty merged trajectory";
+    return result;
+  }
+
+  std::string guard_reason;
+  if (!joint_position_guard_.check_trajectory(
+          merge_result.trajectory, guard_reason,
+          request.joint_position_guard_mode)) {
+    result.reason = "pre-downsample " + guard_reason;
+    return result;
+  }
+
+  moveit_msgs::msg::RobotTrajectory merged_robot_trajectory;
+  merged_robot_trajectory.joint_trajectory = merge_result.trajectory;
+
+  result = post_process_trajectory(
+      merged_robot_trajectory,
+      moveit_msgs::msg::RobotState{}, // no explicit start state for merged
+      false, request.current_robot_state, request.velocity_scale,
+      request.acceleration_scale,
+      "BLENDED_SEQUENCE: failed to convert merged start_state",
+      "BLENDED_SEQUENCE time parameterization failed; ");
+  if (result.status != PlanningStatus::kSuccess) {
+    return result;
+  }
+
+  result.dispatch_primitive = "BLENDED_SEQUENCE";
+  result.planner_id = "PILZ_SEQUENCE";
+  result.cartesian_fraction = 1.0;
+  result.time_parameterization_note =
+      "BLENDED_SEQUENCE planned via MoveGroupSequenceAction";
   return result;
 }
 } // namespace motion_core

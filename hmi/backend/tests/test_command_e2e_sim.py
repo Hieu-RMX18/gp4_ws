@@ -126,6 +126,25 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
             ["SUCCEEDED", "SUCCEEDED", "SUCCEEDED"],
         )
 
+    async def test_quick_blended_sequence_executes_to_success_in_sim(self) -> None:
+        self._start_sim_stack()
+        self._start_api_server()
+        await self._wait_until_sim_ready()
+
+        result = await self._run_sequence_case(
+            session_id="e2e-session-blended-seq",
+            operator_id="e2e-operator-blended-seq",
+            quick_command_id="blended_sequence",
+            expected_actions=["BLENDED_SEQUENCE"],
+        )
+
+        self.assertEqual(result["sequence"]["lifecycleState"], "SUCCEEDED")
+        self.assertEqual(result["sequence"]["finalState"], "SUCCEEDED")
+        self.assertEqual(
+            [step["finalState"] for step in result["sequence"]["steps"]],
+            ["SUCCEEDED"],
+        )
+
     async def test_structured_draw_shape_executes_to_success_in_sim(self) -> None:
         self._start_sim_stack()
         self._start_api_server()
@@ -323,6 +342,7 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
         session_id: str,
         operator_id: str,
         intent_text: str | None = None,
+        quick_command_id: str | None = None,
         structured_intent: dict[str, Any] | None = None,
         expected_actions: list[str] | None = None,
         expected_macro_name: str | None = None,
@@ -340,21 +360,22 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
         lease_token = lease_response["lease"]["leaseToken"]
         self.assertIsNotNone(lease_token)
 
+        payload: dict[str, Any] = {
+            "sessionId": session_id,
+            "operatorId": operator_id,
+            "leaseToken": lease_token,
+            "mode": "sim",
+        }
+        if intent_text is not None:
+            payload["intentText"] = intent_text
+        if quick_command_id is not None:
+            payload["quickCommandId"] = quick_command_id
+        if structured_intent is not None:
+            payload["structuredIntent"] = structured_intent
         sequence_response = await asyncio.to_thread(
             self._post_json,
             "/api/hmi/commands/intent",
-            {
-                "sessionId": session_id,
-                "operatorId": operator_id,
-                "leaseToken": lease_token,
-                "mode": "sim",
-                **({"intentText": intent_text} if intent_text is not None else {}),
-                **(
-                    {"structuredIntent": structured_intent}
-                    if structured_intent is not None
-                    else {}
-                ),
-            },
+            payload,
         )
         self.assertTrue(
             sequence_response["accepted"], msg=json.dumps(sequence_response, indent=2)

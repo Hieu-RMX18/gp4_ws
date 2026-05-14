@@ -12,6 +12,12 @@ from .workspace_guard import WorkspaceGuard
 _MOVE_REL_MAX_DELTA_NORM = 0.05
 _MOVE_REL_ALLOWED_FRAMES = {"", "base_link"}
 
+# BLENDED_SEQUENCE named-target allowlist (must exist in SRDF / MoveIt scene).
+_BLENDED_SEQUENCE_NAMED_TARGETS = {"home", "start", "ready"}
+
+# BLENDED_SEQUENCE step primitive allowlist.
+_BLENDED_SEQUENCE_STEP_PRIMITIVES = {"LIN", "PTP", "HOME"}
+
 
 class ExecutionGate:
     """V4 H2: Fail-closed execution gate.
@@ -223,45 +229,19 @@ class ExecutionGate:
                 response.sanitized_json = ""
                 return response
 
-        # 3e. BLENDED_SEQUENCE: validate every step's target_pose (W2)
+        # 3e. BLENDED_SEQUENCE: comprehensive per-step validation (W4)
         if prim_type == "BLENDED_SEQUENCE":
-            steps = cmd_data.get("sequence_steps")
-            if not isinstance(steps, list) or len(steps) < 2:
+            blended_ok, blended_reason = self._validate_blended_sequence(
+                cmd_data, request
+            )
+            if not blended_ok:
+                self.node.get_logger().warn(
+                    f"BLENDED_SEQUENCE validation failed: {blended_reason}"
+                )
                 response.valid = False
-                response.reason = "BLENDED_SEQUENCE requires at least 2 sequence_steps"
+                response.reason = blended_reason
                 response.sanitized_json = ""
                 return response
-            for idx, step in enumerate(steps):
-                step_pose = step.get("target_pose") if isinstance(step, dict) else None
-                if not isinstance(step_pose, dict) or "position" not in step_pose:
-                    response.valid = False
-                    response.reason = (
-                        f"BLENDED_SEQUENCE step[{idx}] missing target_pose.position"
-                    )
-                    response.sanitized_json = ""
-                    return response
-                pos = step_pose["position"]
-                try:
-                    wp_pose = request.target_pose.__class__()
-                    wp_pose.position.x = float(pos["x"])
-                    wp_pose.position.y = float(pos["y"])
-                    wp_pose.position.z = float(pos["z"])
-                except (TypeError, ValueError, KeyError) as exc:
-                    response.valid = False
-                    response.reason = (
-                        f"BLENDED_SEQUENCE step[{idx}] position invalid: {exc}"
-                    )
-                    response.sanitized_json = ""
-                    return response
-                is_valid, reason = self.guard.check_pose(wp_pose)
-                if not is_valid:
-                    self.node.get_logger().warn(
-                        f"BLENDED_SEQUENCE step[{idx}] workspace check failed: {reason}"
-                    )
-                    response.valid = False
-                    response.reason = f"BLENDED_SEQUENCE step[{idx}]: {reason}"
-                    response.sanitized_json = ""
-                    return response
 
         # 4. Valid command
         response.valid = True
@@ -271,6 +251,189 @@ class ExecutionGate:
 
         self.node.get_logger().info(f"Command validated successfully: {prim_type}")
         return response
+
+    def _validate_blended_sequence(
+        self, cmd_data: dict, request
+    ) -> tuple[bool, str]:
+        """Fail-closed validation for BLENDED_SEQUENCE before planning.
+
+        Checks:
+        - At least 2 sequence_steps.
+        - Every step blend_radius >= 0; last step blend_radius == 0.0.
+        - Step primitive_type in {LIN, PTP, HOME}.
+        - Per-step velocity/acceleration scale within policy caps.
+        - POSE steps: workspace bounds via WorkspaceGuard.
+        - JOINTS steps: joint count == 6 and within operational_joint_limits.
+        - NAMED steps: named_target in allowlist.
+        """
+        steps = cmd_data.get("sequence_steps")
+        if not isinstance(steps, list) or len(steps) < 2:
+            return False, "BLENDED_SEQUENCE requires at least 2 sequence_steps"
+
+        # Top-level velocity / acceleration caps (same as CommandValidator)
+        max_velocity = self.validator.max_velocity
+        max_acceleration = self.validator.max_acceleration
+
+        # Operational joint limits from safety_rules
+        op_limits = self.validator.safety_rules.get("operational_joint_limits", {})
+        joint_names = [
+            "joint_1_s",
+            "joint_2_l",
+            "joint_3_u",
+            "joint_4_r",
+            "joint_5_b",
+            "joint_6_t",
+        ]
+
+        for idx, step in enumerate(steps):
+            if not isinstance(step, dict):
+                return False, f"BLENDED_SEQUENCE step[{idx}] must be a dict"
+
+            step_prim = str(step.get("primitive_type", "")).strip().upper()
+            if step_prim and step_prim not in _BLENDED_SEQUENCE_STEP_PRIMITIVES:
+                return (
+                    False,
+                    f"BLENDED_SEQUENCE step[{idx}] unsupported primitive_type "
+                    f"'{step_prim}'; allowed: {_BLENDED_SEQUENCE_STEP_PRIMITIVES}",
+                )
+
+            # blend_radius checks
+            blend_radius = step.get("blend_radius_m")
+            if blend_radius is None:
+                blend_radius = step.get("blend_radius")
+            try:
+                blend_radius = float(blend_radius) if blend_radius is not None else 0.0
+            except (TypeError, ValueError):
+                return (
+                    False,
+                    f"BLENDED_SEQUENCE step[{idx}] blend_radius must be numeric",
+                )
+            if blend_radius < 0.0:
+                return (
+                    False,
+                    f"BLENDED_SEQUENCE step[{idx}] blend_radius must be >= 0.0",
+                )
+            if idx == len(steps) - 1 and blend_radius != 0.0:
+                return (
+                    False,
+                    f"BLENDED_SEQUENCE last step blend_radius must be 0.0, "
+                    f"got {blend_radius}",
+                )
+
+            # Per-step velocity / acceleration scale caps
+            for scale_key, max_val, label in (
+                ("velocity_scale", max_velocity, "velocity_scale"),
+                ("acceleration_scale", max_acceleration, "acceleration_scale"),
+            ):
+                scale = step.get(scale_key)
+                if scale is not None:
+                    try:
+                        scale = float(scale)
+                    except (TypeError, ValueError):
+                        return (
+                            False,
+                            f"BLENDED_SEQUENCE step[{idx}] {label} invalid",
+                        )
+                    if scale > max_val:
+                        return (
+                            False,
+                            f"BLENDED_SEQUENCE step[{idx}] {label}={scale} "
+                            f"exceeds max allowed {max_val}",
+                        )
+                    if scale <= 0.0:
+                        return (
+                            False,
+                            f"BLENDED_SEQUENCE step[{idx}] {label} must be positive",
+                        )
+
+            # goal_type dispatch
+            goal_type = int(step.get("goal_type", 0))
+
+            if goal_type == 1:  # GOAL_JOINTS
+                joint_target = step.get("joint_target")
+                if not isinstance(joint_target, list) or len(joint_target) != 6:
+                    return (
+                        False,
+                        f"BLENDED_SEQUENCE step[{idx}] GOAL_JOINTS requires "
+                        f"exactly 6 joint_target values",
+                    )
+                for j_idx, value in enumerate(joint_target):
+                    try:
+                        value = float(value)
+                    except (TypeError, ValueError):
+                        return (
+                            False,
+                            f"BLENDED_SEQUENCE step[{idx}] joint_target[{j_idx}] "
+                            f"not numeric",
+                        )
+                    if not math.isfinite(value):
+                        return (
+                            False,
+                            f"BLENDED_SEQUENCE step[{idx}] joint_target[{j_idx}] "
+                            f"must be finite",
+                        )
+                    j_name = joint_names[j_idx]
+                    j_cfg = op_limits.get(j_name)
+                    if isinstance(j_cfg, dict):
+                        j_min = j_cfg.get("min")
+                        j_max = j_cfg.get("max")
+                        if j_min is not None and value < float(j_min):
+                            return (
+                                False,
+                                f"BLENDED_SEQUENCE step[{idx}] {j_name}={value:.4f} "
+                                f"rad below limit {j_min}",
+                            )
+                        if j_max is not None and value > float(j_max):
+                            return (
+                                False,
+                                f"BLENDED_SEQUENCE step[{idx}] {j_name}={value:.4f} "
+                                f"rad above limit {j_max}",
+                            )
+                continue  # skip pose check for joint goals
+
+            if goal_type == 2:  # GOAL_NAMED
+                named_target = str(step.get("named_target", "")).strip().lower()
+                if not named_target:
+                    return (
+                        False,
+                        f"BLENDED_SEQUENCE step[{idx}] GOAL_NAMED requires "
+                        f"named_target",
+                    )
+                if named_target not in _BLENDED_SEQUENCE_NAMED_TARGETS:
+                    return (
+                        False,
+                        f"BLENDED_SEQUENCE step[{idx}] named_target="
+                        f"'{named_target}' not in allowed set "
+                        f"{_BLENDED_SEQUENCE_NAMED_TARGETS}",
+                    )
+                continue  # skip pose check for named goals
+
+            # Default / GOAL_POSE (0): workspace bounds check
+            step_pose = step.get("target_pose")
+            if not isinstance(step_pose, dict) or "position" not in step_pose:
+                return (
+                    False,
+                    f"BLENDED_SEQUENCE step[{idx}] missing target_pose.position",
+                )
+            pos = step_pose["position"]
+            try:
+                wp_pose = request.target_pose.__class__()
+                wp_pose.position.x = float(pos["x"])
+                wp_pose.position.y = float(pos["y"])
+                wp_pose.position.z = float(pos["z"])
+            except (TypeError, ValueError, KeyError) as exc:
+                return (
+                    False,
+                    f"BLENDED_SEQUENCE step[{idx}] position invalid: {exc}",
+                )
+            is_valid, reason = self.guard.check_pose(wp_pose)
+            if not is_valid:
+                return (
+                    False,
+                    f"BLENDED_SEQUENCE step[{idx}]: {reason}",
+                )
+
+        return True, ""
 
     def _validate_move_rel_deltas(self, cmd_data: dict) -> tuple:
         """Defense-in-depth: validate MOVE_REL deltas and frame at the safety gate.

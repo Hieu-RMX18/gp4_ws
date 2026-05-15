@@ -6,6 +6,10 @@ interface CommandPipelinePanelProps {
   traceSteps: TraceStepView[];
 }
 
+function traceKey(trace: PipelineTrace): string {
+  return `${trace.cmd_id}:${trace.ts}:${trace.layer}:${trace.phase}:${trace.event}`;
+}
+
 function TraceMicroRow({ trace }: { trace: PipelineTrace }) {
   const levelClass = trace.level === 'error' || trace.level === 'warn' ? 'trace-micro-warn' : 'trace-micro-info';
   return (
@@ -15,9 +19,7 @@ function TraceMicroRow({ trace }: { trace: PipelineTrace }) {
         <span className="trace-micro-event">{trace.event}</span>
         <span className="trace-micro-summary">{trace.summary}</span>
       </summary>
-      {trace.details != null ? (
-        <pre className="trace-micro-detail">{prettyJson(trace.details as Record<string, unknown>)}</pre>
-      ) : null}
+      {trace.details != null ? <pre className="trace-micro-detail">{prettyJson(trace.details)}</pre> : null}
     </details>
   );
 }
@@ -40,8 +42,8 @@ export function CommandPipelinePanel({ traceSteps }: CommandPipelinePanelProps) 
             <div className="trace-summary">{step.summary}</div>
             {step.traces.length > 0 && (
               <div className="trace-micro-list">
-                {step.traces.map((t, i) => (
-                  <TraceMicroRow key={i} trace={t} />
+                {step.traces.map((trace) => (
+                  <TraceMicroRow key={traceKey(trace)} trace={trace} />
                 ))}
               </div>
             )}

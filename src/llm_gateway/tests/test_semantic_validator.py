@@ -108,12 +108,12 @@ def test_semantic_validator_rejects_move_rel_zero_delta(normalizer, semantic_val
 def test_semantic_validator_rejects_move_rel_oversized_delta(
     normalizer, semantic_validator
 ):
-    """MOVE_REL with delta norm > 0.05 m is rejected."""
-    # norm = sqrt(0.04^2 + 0.04^2) ≈ 0.0566 > 0.05
+    """MOVE_REL with delta norm above configured safety limit is rejected."""
+    # norm = sqrt(0.16^2 + 0.16^2) ≈ 0.2263 > 0.21
     cmd = {
         "primitive_type": "MOVE_REL",
-        "delta_x": 0.04,
-        "delta_y": 0.04,
+        "delta_x": 0.16,
+        "delta_y": 0.16,
         "delta_z": 0.0,
         "velocity_scale": 0.06,
     }

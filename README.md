@@ -113,12 +113,15 @@ controller lease, operator confirmation, and a separately authorized execution p
 (The JSON evidence-based hardware gate was removed to simplify local development).
 `IO_SET` and real TCP offset remain deferred until measured and approved. For D435i
 hand-eye calibration, refer to `docs/perception/d435i_hand_eye_calibration_runbook.md`.
+Note: Precise hand-eye calibration does not exist yet; nominal values from 
+`camera_mount.yaml` are used in the current build.
 
 ---
 
 ## Supported Primitives
 
-13 public primitives fully integrated across the 4-tier pipeline. Source of truth: `src/primitives/PRIMITIVE_SHORTLIST.md`.
+13 public primitives fully integrated across the 4-tier pipeline. 
+Source of truth for implementation logic: `src/primitives/`.
 
 ### Motion
 

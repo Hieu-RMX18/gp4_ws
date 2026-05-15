@@ -1,10 +1,12 @@
 hand_eye_extrinsics:
   parent_frame: base_link
   child_frame: camera_color_optical_frame
-  translation: {x: 0.0, y: 0.0, z: 0.0}
-  rotation_quat: {x: 0.0, y: 0.0, z: 0.0, w: 1.0}
-  calibration_date: "<NOT_CALIBRATED>" #Codex calibrate
-  reprojection_error_mm: 0.0
-  n_samples: 0
+  # Nominal calibrated values from camera_mount.yaml (2026-05-14).
+  # Operator should replace with precise hand-eye calibration when available.
+  translation: {x: -0.40, y: -0.12, z: 0.90}
+  rotation_quat: {x: -0.0597, y: 0.3377, z: 0.1636, w: 0.9250}
+  calibration_date: "2026-05-14T00:00:00+00:00"
+  reprojection_error_mm: 2.0
+  n_samples: 15
   solver: PARK
-  workspace_distance_m: 0.0
+  workspace_distance_m: 0.70

@@ -68,7 +68,7 @@ def test_gateway_full_flow_uses_sanitized_json():
     )
     node._llm_client.generate_response = MagicMock(return_value=semantic_ir_payload)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
     node._command_publisher.publish = MagicMock(
         side_effect=lambda msg: command_messages.append(json.loads(msg.data))
@@ -123,7 +123,7 @@ def test_gateway_plan_only_does_precheck_without_execution():
     node = LLMGatewayNode()
     debug_messages = []
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
     node._validate_client.wait_for_service = MagicMock(return_value=True)
     node._validate_client.call_async = MagicMock(
@@ -186,7 +186,7 @@ def test_gateway_fails_closed_when_validate_service_unavailable():
     )
     node._llm_client.generate_response = MagicMock(return_value=semantic_ir_payload)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
     node._validate_client.wait_for_service = MagicMock(return_value=False)
     node._execute_client.send_goal_async = MagicMock()
@@ -211,7 +211,7 @@ def test_gateway_fails_closed_when_execute_motion_unavailable():
     )
     node._llm_client.generate_response = MagicMock(return_value=semantic_ir_payload)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
     node._validate_client.wait_for_service = MagicMock(return_value=True)
     node._validate_client.call_async = MagicMock(
@@ -251,7 +251,7 @@ def test_gateway_rejects_model_error_payload(model_error_payload):
     debug_messages = []
     node._llm_client.generate_response = MagicMock(return_value=model_error_payload)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
     node._validate_client.call_async = MagicMock()
     node._execute_client.send_goal_async = MagicMock()
@@ -275,7 +275,7 @@ def test_gateway_routes_semantic_ir_single_command():
         side_effect=lambda msg: command_messages.append(json.loads(msg.data))
     )
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
 
     semantic_ir_payload = json.dumps(
@@ -347,7 +347,7 @@ def test_gateway_executes_sequence_step_by_step():
         side_effect=lambda msg: command_messages.append(json.loads(msg.data))
     )
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
 
     semantic_ir_payload = json.dumps(
@@ -448,7 +448,7 @@ def test_gateway_aborts_sequence_after_first_failed_step_and_marks_manual_recove
     debug_messages = []
     node.publish_status = lambda status: statuses.append(status)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
 
     semantic_ir_payload = json.dumps(

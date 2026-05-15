@@ -199,6 +199,7 @@ class CommandViewModel(StrictModel):
     parentSequenceId: str | None = None
     sequenceStepIndex: int | None = None
     sequenceStepCount: int | None = None
+    pipelineTraces: list[dict[str, Any]] = []
 
 
 class SequenceViewModel(StrictModel):
@@ -304,6 +305,7 @@ class HmiStateSnapshotModel(StrictModel):
     jointPositions: list[JointPositionModel]
     planMetrics: PlanMetricsModel | None
     replayItems: list[ReplayListItemModel]
+    toolPose: dict[str, Any] | None = None
 
 
 class RuntimeStateResponseModel(StrictModel):

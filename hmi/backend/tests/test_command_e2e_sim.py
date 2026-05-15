@@ -28,7 +28,7 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
     _domain_counter = 0
 
     def setUp(self) -> None:
-        self._temp_dir = TemporaryDirectory()
+        self._temp_dir = TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self._temp_dir.cleanup)
         self._log_root = Path(self._temp_dir.name)
         self._domain_id = self._reserve_ros_domain_id()
@@ -135,14 +135,14 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
             session_id="e2e-session-blended-seq",
             operator_id="e2e-operator-blended-seq",
             quick_command_id="blended_sequence",
-            expected_actions=["BLENDED_SEQUENCE"],
+            expected_actions=["PTP", "PTP", "HOME"],
         )
 
         self.assertEqual(result["sequence"]["lifecycleState"], "SUCCEEDED")
         self.assertEqual(result["sequence"]["finalState"], "SUCCEEDED")
         self.assertEqual(
             [step["finalState"] for step in result["sequence"]["steps"]],
-            ["SUCCEEDED"],
+            ["SUCCEEDED", "SUCCEEDED", "SUCCEEDED"],
         )
 
     async def test_structured_draw_shape_executes_to_success_in_sim(self) -> None:
@@ -606,10 +606,19 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
                     startup_started_at = time.monotonic()
                 time.sleep(0.5)
                 continue
+
+            # Ensure execute_motion_action is fresh
+            execute_motion_ready = False
+            for source in payload.get("telemetrySources", []):
+                if source.get("name") == "execute_motion_action" and source.get("freshnessState") == "fresh":
+                    execute_motion_ready = True
+                    break
+
             if (
                 payload.get("transportState") == expected_transport
                 and payload.get("telemetryState") == expected_telemetry
                 and payload.get("runtime", {}).get("systemState") == expected_runtime
+                and execute_motion_ready
             ):
                 return payload
             time.sleep(0.5)

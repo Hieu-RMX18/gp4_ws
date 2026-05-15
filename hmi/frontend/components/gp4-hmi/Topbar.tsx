@@ -35,14 +35,14 @@ export function Topbar({
     setPendingServoAction(action);
     try {
       const res = action === 'start' ? await onStartServo() : await onHoldServo();
-      const label = action === 'start' ? 'Servo START' : 'Servo HOLD';
+      const label = action === 'start' ? 'Servo ON' : 'Servo HOLD';
       if (res === null) {
         onActionFeedback('err', `${label} blocked · controller lease required`);
         return;
       }
       onActionFeedback(res.accepted ? 'ok' : 'err', `${label} · ${res.message}`);
     } catch (e: unknown) {
-      const label = action === 'start' ? 'Servo START' : 'Servo HOLD';
+      const label = action === 'start' ? 'Servo ON' : 'Servo HOLD';
       onActionFeedback('err', `${label} failed · ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setPendingServoAction(null);
@@ -67,7 +67,7 @@ export function Topbar({
             gray: '○',
           };
           return (
-            <span key={pill.key} className={`pill ${pill.tone}`}>
+            <span key={pill.key} className={`pill ${pill.tone} pill-${pill.key}`}>
               <span className={`dot ${pill.tone}`}></span>
               <span className="pill-icon">{toneIcon[pill.tone]}</span>
               {pill.label}
@@ -83,15 +83,15 @@ export function Topbar({
             className="servo-btn servo-start"
             disabled={!canStartServo || pendingServoAction !== null}
             onClick={() => { void runServoAction('start'); }}
-            title={canStartServo ? 'Servo START' : 'Hardware mode, preflight, and controller lease required'}
+            title={canStartServo ? 'Servo ON via MotoROS2 start_traj_mode' : 'Hardware AUTO mode, clear e-stop/alarm, live transport, and controller lease required'}
           >
-            {pendingServoAction === 'start' ? 'STARTING' : 'START'}
+            {pendingServoAction === 'start' ? 'STARTING' : 'SERVO ON'}
           </button>
           <button
             className="servo-btn servo-stop"
             disabled={!canHoldServo || pendingServoAction !== null}
             onClick={() => { void runServoAction('hold'); }}
-            title={canHoldServo ? 'Servo HOLD' : 'Hardware mode and controller lease required'}
+            title={canHoldServo ? 'Servo HOLD via MotoROS2 stop_traj_mode' : 'Hardware mode, clear e-stop/alarm, live transport, and controller lease required'}
           >
             {pendingServoAction === 'hold' ? 'HOLDING' : 'HOLD'}
           </button>

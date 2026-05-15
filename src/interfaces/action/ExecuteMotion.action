@@ -27,6 +27,9 @@ SequenceStep[] sequence_steps
 bool extended_mode           # opt-in extended ±455° joint_6_t envelope
 string[] mode_tokens         # [cable_inspection_signed_off_token, operator_confirm_token]
 float64 estimated_duration_s # estimated command duration for max_continuous_extended_time_s check
+# --- Runtime trace correlation (W7) ---
+string command_id            # optional correlation ID for command trace events
+string correlation_id        # optional higher-level correlation ID for multi-step workflows
 ---
 # Result
 bool success

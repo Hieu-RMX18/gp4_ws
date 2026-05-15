@@ -301,7 +301,9 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertFalse(source_statuses["llm_debug"].active)
         self.assertFalse(source_statuses["llm_command"].active)
 
-    def test_submit_text_for_review_calls_review_intent_service(self) -> None:
+    def test_submit_text_for_review_calls_review_intent_service_without_token(
+        self,
+    ) -> None:
         response = SimpleNamespace(
             accepted=True,
             error="",
@@ -315,8 +317,7 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         with (
             patch.object(
                 adapter_module, "ReviewIntent", _FakeReviewIntent, create=True
-            ),
-            patch.dict(os.environ, {"GP4_REVIEW_INTENT_TOKEN": "review-token"}),
+            )
         ):
             result = adapter.submit_text_for_review(
                 raw_text="go home",
@@ -334,20 +335,9 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         self.assertEqual(client.requests[0].session_id, "session-a")
         self.assertEqual(client.requests[0].operator_id, "operator-a")
         self.assertEqual(client.requests[0].command_id, "command-a")
-        self.assertNotEqual(client.requests[0].review_token, "review-token")
-        self.assertEqual(
-            client.requests[0].review_token,
-            adapter_module.build_review_intent_token(
-                shared_secret="review-token",  # pragma: allowlist secret
-                raw_text="go home",
-                runtime_mode="sim",
-                session_id="session-a",
-                operator_id="operator-a",
-                command_id="command-a",
-            ),
-        )
+        self.assertEqual(client.requests[0].review_token, "")
 
-    def test_submit_text_for_review_reads_review_token_from_env_file(self) -> None:
+    def test_submit_text_for_review_leaves_review_token_empty(self) -> None:
         response = SimpleNamespace(
             accepted=True,
             error="",
@@ -358,36 +348,19 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         adapter._node = object()  # pylint: disable=protected-access
         adapter._review_intent_client = client  # pylint: disable=protected-access
 
-        with (
-            patch.object(
-                adapter_module, "ReviewIntent", _FakeReviewIntent, create=True
-            ),
-            patch.dict(
-                os.environ,
-                {"GP4_REVIEW_INTENT_TOKEN": "review-token"},
-                clear=True,
-            ),
+        with patch.object(
+            adapter_module, "ReviewIntent", _FakeReviewIntent, create=True
         ):
-                result = adapter.submit_text_for_review(
-                    raw_text="go home",
-                    runtime_mode="sim",
-                    session_id="session-a",
-                    operator_id="operator-a",
-                    command_id="command-a",
-                )
-
-        self.assertTrue(result["accepted"])
-        self.assertEqual(
-            client.requests[0].review_token,
-            adapter_module.build_review_intent_token(
-                shared_secret="review-token",  # pragma: allowlist secret
+            result = adapter.submit_text_for_review(
                 raw_text="go home",
                 runtime_mode="sim",
                 session_id="session-a",
                 operator_id="operator-a",
                 command_id="command-a",
-            ),
-        )
+            )
+
+        self.assertTrue(result["accepted"])
+        self.assertEqual(client.requests[0].review_token, "")
 
     def test_submit_text_for_review_uses_short_ready_timeout_and_review_sla_timeout(
         self,

@@ -97,18 +97,13 @@ public:
 
   PlanningResult plan_for_primitive(const PlanningRequest &request);
 
-private:
+  // POD type returned by public static helpers.
   struct PlannerSelection {
     std::string pipeline_id;
     std::string planner_id;
   };
 
-  static constexpr double kPlanningTimeSec = 5.0;
-  static constexpr double kCartesianEefStep = 0.005;
-  static constexpr double kCartesianEefStepRelaxed = 0.010;
-  static constexpr double kCartesianJumpThreshold = 1.5;
-  static constexpr const char *kPlanningGroup = "gp4_arm";
-
+  // Pure helper functions exposed for unit-testability (no state dependency).
   static PlannerSelection
   resolve_planner_selection(const std::string &planner_id);
   static bool is_pose_goal_required(const std::string &primitive,
@@ -116,6 +111,17 @@ private:
   static double quaternion_norm_sq(const geometry_msgs::msg::Quaternion &q);
   static double max_abs_value(const std::vector<double> &values);
   static std::string format_joint_vector(const std::vector<double> &joints);
+  static constexpr const char *move_group_sequence_action_name() {
+    return "sequence_move_group";
+  }
+
+private:
+
+  static constexpr double kPlanningTimeSec = 5.0;
+  static constexpr double kCartesianEefStep = 0.005;
+  static constexpr double kCartesianEefStepRelaxed = 0.010;
+  static constexpr double kCartesianJumpThreshold = 1.5;
+  static constexpr const char *kPlanningGroup = "gp4_arm";
 
   void log_joint_branch_selection(
       const std::string &primitive, std::uint64_t sequence,

@@ -96,6 +96,17 @@ class SupervisorService(
         self._messages: deque[ChatMessage] = deque(maxlen=200)
         self._console_events: deque[dict[str, Any]] = deque(maxlen=100)
         self._lock = Lock()
+        if hasattr(self._ros, "on_llm_debug_callback"):
+            self._ros.on_llm_debug_callback = self._on_llm_debug_trace
+
+    def _on_llm_debug_trace(self, payload: dict[str, Any]) -> None:
+        cmd_id = str(payload.get("cmd_id", ""))
+        if not cmd_id:
+            return
+        with self._lock:
+            command = self._commands.get(cmd_id)
+            if command is not None:
+                command.pipeline_traces.append(payload)
 
     @property
     def ros_adapter(self) -> Any:
@@ -178,6 +189,12 @@ class SupervisorService(
             else None
         )
         replay_items = self._audit.list_commands(limit=25, top_level_only=True)
+        tool_pose = None
+        try:
+            if hasattr(self._ros, "read_tool_pose"):
+                tool_pose = self._ros.read_tool_pose()
+        except Exception:
+            pass
         return {
             "capabilities": self._bridge_capabilities().to_dict(),
             "lease": self._serialize_lease_view(session_id, operator_id),
@@ -188,6 +205,7 @@ class SupervisorService(
                 active_command.metrics if active_command else None
             ),
             "replayItems": [self._serialize_replay_item(item) for item in replay_items],
+            "toolPose": tool_pose,
         }
 
     def acquire_lease(

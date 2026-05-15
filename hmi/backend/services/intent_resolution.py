@@ -323,6 +323,14 @@ class IntentResolutionService(IntentNormalizationMixin):
             )
             normalized_text = " ".join(raw_text.strip().split()).lower()
             source = "text"
+            # If local text parser produced semantic IR (intent), route it like structured_intent
+            if "intent" in initial_command:
+                initial_command = self._structured_to_command(
+                    structured_intent=initial_command,
+                    runtime_mode=mode,
+                    current_joints=current_joints,
+                    allow_primitive_structured=allow_primitive_structured,
+                )
 
         normalized_command, normalization_notes = self._normalize_command(
             command=initial_command,
@@ -579,13 +587,13 @@ class IntentResolutionService(IntentNormalizationMixin):
             "return home",
             "move to home",
         }:
-            return {"primitive_type": "HOME"}
+            return {"intent": "go_home"}
 
         if normalized in {"stop", "stop motion", "cancel motion", "halt"}:
-            return {"primitive_type": "STOP"}
+            return {"intent": "stop"}
 
         if normalized in {"get pose", "current pose", "where is robot", "where is tcp"}:
-            return {"primitive_type": "GET_POSE", "reference_frame": "base_link"}
+            return {"intent": "get_pose", "reference_frame": "base_link"}
 
         wait_match = re.fullmatch(
             r"(?:wait|pause)\s+([+-]?\d+(?:\.\d+)?)\s*(?:s|sec|second|seconds)?",
@@ -593,12 +601,126 @@ class IntentResolutionService(IntentNormalizationMixin):
         )
         if wait_match:
             return {
-                "primitive_type": "WAIT",
+                "intent": "wait",
                 "wait_duration_sec": float(wait_match.group(1)),
             }
 
+        # Directional relative moves (local fallback)
+        rel_match = re.fullmatch(
+            r"(forward|back|backward|left|right|up|down)\s+([+-]?\d+(?:\.\d+)?)\s*(m|cm|mm)?",
+            normalized,
+        )
+        if rel_match:
+            direction = rel_match.group(1)
+            magnitude = float(rel_match.group(2))
+            unit = rel_match.group(3) or "cm"
+            scale = {"m": 1.0, "cm": 0.01, "mm": 0.001}[unit]
+            distance = magnitude * scale
+            axis_delta = {
+                "forward": (distance, 0.0, 0.0),
+                "back": (-distance, 0.0, 0.0),
+                "backward": (-distance, 0.0, 0.0),
+                "right": (0.0, -distance, 0.0),
+                "left": (0.0, distance, 0.0),
+                "up": (0.0, 0.0, distance),
+                "down": (0.0, 0.0, -distance),
+            }
+            dx, dy, dz = axis_delta[direction]
+            return {
+                "intent": "move_relative",
+                "delta": {"x": dx, "y": dy, "z": dz},
+                "reference_frame": "base_link",
+            }
+
+        # Single-joint move (local fallback)
+        joint_match = re.fullmatch(
+            r"(rotate|move)\s+joint\s+(\d)\s+by\s+([+-]?\d+(?:\.\d+)?)\s*(deg|degree|degrees|rad|radian|radians)?",
+            normalized,
+        )
+        if joint_match:
+            joint_index = int(joint_match.group(2)) - 1
+            angle = float(joint_match.group(3))
+            unit = (joint_match.group(4) or "deg").lower()
+            if unit in {"deg", "degree", "degrees"}:
+                angle = math.radians(angle)
+            elif unit not in {"rad", "radian", "radians"}:
+                raise IntentResolutionError("joint angle unit must be deg or rad")
+            return {
+                "primitive_type": "MOVE_JOINT",
+                "joint_index": joint_index,
+                "joint_angle": angle,
+            }
+
+        # Multi-joint move (local fallback) - e.g., "rotate joints 1 2 by 10 deg"
+        multi_joint_match = re.fullmatch(
+            r"(rotate|move)\s+joints?\s+([\d\s]+)\s+by\s+([+-]?\d+(?:\.\d+)?)\s*(deg|degree|degrees|rad|radian|radians)?",
+            normalized,
+        )
+        if multi_joint_match:
+            joint_indices = [int(j.strip()) - 1 for j in multi_joint_match.group(2).split()]
+            angle = float(multi_joint_match.group(3))
+            unit = (multi_joint_match.group(4) or "deg").lower()
+            if unit in {"deg", "degree", "degrees"}:
+                angle = math.radians(angle)
+            elif unit not in {"rad", "radian", "radians"}:
+                raise IntentResolutionError("joint angle unit must be deg or rad")
+            # Return semantic IR for sequence of joint moves
+            steps = []
+            for idx in joint_indices:
+                steps.append({
+                    "intent": "move_joint",
+                    "joint_index": idx,
+                    "joint_angle": angle,
+                })
+            return {"intent": "sequence", "steps": steps}
+
+        # Named pose shorthand (local fallback) — returns semantic IR so it routes through IntentRouter
+        pose_match = re.fullmatch(
+            r"(?:move\s+to\s+pose|go\s+to|move\s+to)\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+            normalized,
+        )
+        if pose_match:
+            pose_name = pose_match.group(1)
+            if pose_name:
+                return {"intent": "move_named_pose", "pose_name": pose_name}
+
+        # Move to XYZ coordinates (local fallback) — returns semantic IR for PTP
+        xyz_match = re.fullmatch(
+            r"move\s+to\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)?",
+            normalized,
+        )
+        if xyz_match:
+            unit = xyz_match.group(4) or "mm"
+            scale = {"m": 1.0, "cm": 0.01, "mm": 0.001}[unit]
+            x = float(xyz_match.group(1)) * scale
+            y = float(xyz_match.group(2)) * scale
+            z = float(xyz_match.group(3)) * scale
+            return {
+                "intent": "absolute_move_lin",
+                "target_pose": {"x": x, "y": y, "z": z},
+                "reference_frame": "base_link",
+            }
+
+        # Draw circle (local fallback) — returns semantic IR for draw_shape
+        circle_match = re.fullmatch(
+            r"draw\s+(?:a\s+)?circle(?:\s+(?:with\s+)?radius)?\s+([+-]?\d+(?:\.\d+)?)\s*(mm|cm|m)?",
+            normalized,
+        )
+        if circle_match:
+            unit = circle_match.group(2) or "mm"
+            scale = {"m": 1.0, "cm": 0.01, "mm": 0.001}[unit]
+            radius = float(circle_match.group(1)) * scale
+            return {
+                "intent": "draw_shape",
+                "shape_type": "circle",
+                "params": {"radius": radius},
+                "frame_id": "base_link",
+                "units": unit,
+            }
+
         raise IntentResolutionError(
-            "intent is ambiguous or unsupported. HMI local text fallback only supports "
-            "home, stop, wait <seconds>, and get pose; motion, draw, and sequence "
-            "commands must come from llm_gateway semantic review.",
+            "intent is ambiguous or unsupported. HMI local text fallback supports "
+            "home, stop, wait <seconds>, get pose, forward/back/left/right/up/down <distance>, "
+            "rotate joint <n> by <angle>, and move to pose <name>; complex commands "
+            "must come from llm_gateway semantic review.",
         )

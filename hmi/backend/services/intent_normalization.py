@@ -316,17 +316,24 @@ class IntentNormalizationMixin:
                         rejected_fields=["sequence_steps"],
                     )
                 step_command = dict(step)
-                if "target_pose" not in step_command:
+                has_target_pose = "target_pose" in step_command
+                has_joint_target = "joint_target" in step_command
+                if not has_target_pose and not has_joint_target:
                     raise IntentResolutionError(
-                        f"BLENDED_SEQUENCE step[{index}] requires target_pose.",
-                        missing_slots=[f"sequence_steps[{index}].target_pose"],
+                        f"BLENDED_SEQUENCE step[{index}] requires target_pose or joint_target.",
+                        missing_slots=[f"sequence_steps[{index}].target_pose|joint_target"],
                     )
-                step_command["target_pose"] = self._normalize_pose(
-                    step_command["target_pose"],
-                    field_name=f"sequence_steps[{index}].target_pose",
-                    linear_unit=linear_unit,
-                    angular_unit=angular_unit,
-                )
+                if has_target_pose:
+                    step_command["target_pose"] = self._normalize_pose(
+                        step_command["target_pose"],
+                        field_name=f"sequence_steps[{index}].target_pose",
+                        linear_unit=linear_unit,
+                        angular_unit=angular_unit,
+                    )
+                if has_joint_target:
+                    step_command["joint_target"] = self._normalize_joint_target(
+                        step_command["joint_target"], angular_unit=angular_unit
+                    )
                 step_primitive = str(step_command.get("primitive_type") or "LIN")
                 step_command["primitive_type"] = step_primitive
                 step_command["blend_radius_m"] = _to_float(

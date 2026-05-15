@@ -21,6 +21,56 @@
   cursor: not-allowed;
 }
 
+.lease-state-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 0.5px solid var(--color-border-tertiary);
+  border-radius: var(--border-radius-sm);
+  background: var(--color-background-primary);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lease-state-card.owned {
+  border-color: var(--color-border-success);
+  background: var(--color-background-success);
+  color: var(--color-text-success);
+}
+
+.lease-state-card.pending,
+.lease-state-card.available {
+  border-color: var(--color-border-warning);
+  background: var(--color-background-warning);
+  color: var(--color-text-warning);
+}
+
+.lease-led {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-text-tertiary);
+  flex-shrink: 0;
+}
+
+.lease-state-card.owned .lease-led {
+  background: #1d9e75;
+  animation: lease-owned-glow 1.6s ease-in-out infinite;
+}
+
+.lease-state-card.pending .lease-led {
+  background: #ef9f27;
+  animation: lease-pending-pulse 0.8s ease-in-out infinite;
+}
+
+.lease-state-card.available .lease-led {
+  background: #ef9f27;
+}
+
 .lease-actions {
   margin-bottom: 8px;
 }
@@ -36,3 +86,33 @@
   color: var(--color-text-danger);
 }
 
+@keyframes lease-owned-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px rgba(29, 158, 117, 0.18);
+  }
+
+  50% {
+    box-shadow: 0 0 0 6px rgba(29, 158, 117, 0.08);
+  }
+}
+
+@keyframes lease-pending-pulse {
+  0%,
+  100% {
+    transform: scale(0.86);
+    opacity: 0.72;
+  }
+
+  50% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lease-state-card.owned .lease-led,
+  .lease-state-card.pending .lease-led {
+    animation: none;
+  }
+}

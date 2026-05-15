@@ -5,7 +5,6 @@ import type { ActionFeedbackView, LogEntryView, StatusPillView, TopicView } from
 import {
   buildReviewLogEntries,
   buildTraceSteps,
-  durationSeconds,
   formatClock,
   formatTimestamp,
   humanizeLabel,
@@ -30,7 +29,7 @@ import {
   QuickCommands,
   ChatPanel,
   CommandComposer,
-  SystemMetrics,
+  TcpPosePanel,
   TelemetrySources,
   ControlLeasePanel,
   SystemLog,
@@ -46,6 +45,7 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [actionFeedback, setActionFeedback] = useState<ActionFeedbackView | null>(null);
   const [latestMutationReason, setLatestMutationReason] = useState<string | null>(null);
+  const [leasePendingAction, setLeasePendingAction] = useState<'acquire' | 'release' | null>(null);
   const submitPendingRef = useRef(false);
   const confirmPendingRef = useRef(false);
 
@@ -109,14 +109,6 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
     );
   }, [state.jointPositions]);
 
-  const commandCount = useMemo(() => {
-    return state.replayItems.length > 0
-      ? state.replayItems.length
-      : state.messages.filter((m) => m.origin === 'operator').length;
-  }, [state.messages, state.replayItems.length]);
-
-  const cycleSeconds = useMemo(() => durationSeconds(activeCommand), [activeCommand]);
-
   const connectionMap = useMemo(
     () => new Map(state.connections.map((c) => [c.name, c])),
     [state.connections],
@@ -125,14 +117,24 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
   const statusPills = useMemo<StatusPillView[]>(() => {
     const ros2 = connectionMap.get('ros2');
     const moveit2 = connectionMap.get('moveit2');
+    const llm = connectionMap.get('llm');
+    const controlLabel = leasePendingAction
+      ? 'Control Pending'
+      : isController
+        ? 'Control Lease'
+        : canAcquireLease
+          ? 'Control Available'
+          : 'Control Read-only';
     return [
       { key: 'ros2', label: `ROS2 ${ros2?.health === 'healthy' ? 'Connected' : ros2?.health === 'degraded' ? 'Degraded' : 'Down'}`, tone: toneFromConnectionHealth(ros2?.health) },
+      { key: 'llm', label: `LLM ${llm?.health === 'healthy' ? 'OK' : llm?.health === 'degraded' ? 'Degraded' : 'Down'}`, tone: toneFromConnectionHealth(llm?.health) },
       { key: 'servo', label: `Servo ${state.runtime.robotStatus.servoState}`, tone: toneFromServoState(state.runtime.robotStatus.servoState) },
+      { key: 'control', label: controlLabel, tone: leasePendingAction ? 'amber' : isController ? 'green' : canAcquireLease ? 'amber' : 'gray' },
       { key: 'mode', label: `${state.mode === 'sim' ? 'Simulation' : state.mode === 'hardware' ? 'Hardware' : 'Mode Unknown'}`, tone: toneFromMode(state.mode) },
       { key: 'moveit2', label: `MoveIt2 ${moveit2?.health === 'healthy' ? 'Ready' : moveit2?.health === 'degraded' ? 'Degraded' : 'Down'}`, tone: toneFromConnectionHealth(moveit2?.health) },
       { key: 'command', label: `${activeSequence ? 'Sequence' : 'Command'} ${activeReviewJob?.lifecycleState ? humanizeLabel(activeReviewJob.lifecycleState) : 'Idle'}`, tone: toneFromLifecycle(activeReviewJob?.lifecycleState) },
     ];
-  }, [activeReviewJob?.lifecycleState, activeSequence, connectionMap, state.mode, state.runtime.robotStatus.servoState]);
+  }, [activeReviewJob?.lifecycleState, activeSequence, canAcquireLease, connectionMap, isController, leasePendingAction, state.mode, state.runtime.robotStatus.servoState]);
 
   const topicRows = useMemo<TopicView[]>(() => {
     if (state.telemetrySources.length > 0) {
@@ -240,17 +242,65 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
     }
   };
 
+  const handleAcquireLease = async () => {
+    if (!canAcquireLease || leasePendingAction !== null) return;
+    setLeasePendingAction('acquire');
+    try {
+      const response = await acquireControllerLease();
+      if (!response.accepted) {
+        const reason = response.reason ?? 'controller lease was not granted';
+        pushActionFeedback('err', `Lease request declined · ${reason}`, reason);
+        return;
+      }
+      pushActionFeedback('ok', 'Control lease acquired · servo controls are now lease-authorized');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'unknown';
+      pushActionFeedback('err', `Lease request failed · ${msg}`, msg);
+    } finally {
+      setLeasePendingAction(null);
+    }
+  };
+
+  const handleReleaseLease = async () => {
+    if (!canReleaseLease || leasePendingAction !== null) return;
+    setLeasePendingAction('release');
+    try {
+      const response = await releaseLease();
+      if (!response) {
+        pushActionFeedback('warn', 'Lease release skipped · no active lease token');
+        return;
+      }
+      if (!response.accepted) {
+        const reason = response.reason ?? 'controller lease was not released';
+        pushActionFeedback('err', `Lease release declined · ${reason}`, reason);
+        return;
+      }
+      pushActionFeedback('ok', 'Control lease released');
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'unknown';
+      pushActionFeedback('err', `Lease release failed · ${msg}`, msg);
+    } finally {
+      setLeasePendingAction(null);
+    }
+  };
+
   const canAbortTopbar = canAbortCommands && (activeSequence !== null || activeCommand !== null);
+  const hasControllerLease = isController && state.lease.leaseToken !== null;
+  const robotAllowsServoControl =
+    state.runtime.robotStatus.eStop === 'CLEAR' &&
+    state.runtime.robotStatus.alarmState === 'NONE';
   const canStartServo =
     state.mode === 'hardware' &&
-    !blockingRuntime &&
-    isController &&
-    state.lease.leaseToken !== null &&
-    true;
+    state.transportState === 'connected' &&
+    hasControllerLease &&
+    robotAllowsServoControl &&
+    state.runtime.robotStatus.motionMode === 'AUTO' &&
+    state.runtime.robotStatus.servoState !== 'ON';
   const canHoldServo =
     state.mode === 'hardware' &&
-    isController &&
-    state.lease.leaseToken !== null;
+    state.transportState === 'connected' &&
+    hasControllerLease &&
+    robotAllowsServoControl;
 
   // ── Render ──────────────────────────────────────────────────────────────
 
@@ -271,7 +321,6 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
 
         <aside className="left-panel">
           <div className="panel-header">Robot Monitor</div>
-          <JointMonitor orderedJoints={orderedJoints} runtime={state.runtime} activeCommand={activeCommand} />
           <CommandPipelinePanel traceSteps={traceSteps} />
           <QuickCommands canSubmit={canSubmitCommands} onSelect={(quickCommandId) => {
             if (!canSubmitCommands) return;
@@ -311,6 +360,7 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
               }
             })();
           }} />
+          <JointMonitor orderedJoints={orderedJoints} />
         </aside>
 
         <main className="center-panel">
@@ -349,8 +399,8 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
         </main>
 
         <aside className="right-panel">
-          <div className="panel-header">System Metrics</div>
-          <SystemMetrics cycleSeconds={cycleSeconds} commandCount={commandCount} planMetrics={state.planMetrics} />
+          <div className="panel-header">TCP Pose</div>
+          <TcpPosePanel toolPose={state.toolPose} />
           <TelemetrySources topicRows={topicRows} />
           <ControlLeasePanel
             lease={state.lease}
@@ -360,8 +410,9 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
             mode={state.mode}
             canAcquireLease={canAcquireLease}
             canReleaseLease={canReleaseLease}
-            onAcquire={() => void acquireControllerLease()}
-            onRelease={() => void releaseLease()}
+            leasePendingAction={leasePendingAction}
+            onAcquire={() => void handleAcquireLease()}
+            onRelease={() => void handleReleaseLease()}
           />
           <SystemLog logEntries={logEntries} />
         </aside>

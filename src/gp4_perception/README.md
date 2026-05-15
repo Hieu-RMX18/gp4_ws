@@ -2,6 +2,9 @@
 
 RealSense D435i eye-to-hand perception stack for the GP4 workcell.
 
+For the complete operator procedure, see
+[`docs/perception/d435i_hand_eye_calibration_runbook.md`](../../docs/perception/d435i_hand_eye_calibration_runbook.md).
+
 ## Dependencies
 
 ### apt
@@ -37,6 +40,9 @@ ros2 topic info /camera/depth/color/points -v
 ```
 
 ## Calibration
+
+The short path is below. Use the full runbook for preflight, TF checks, safety
+boundaries, and troubleshooting.
 
 1. Attach ArUco/Charuco board to the gripper (eye-to-hand setup).
 2. Launch calibration collection:

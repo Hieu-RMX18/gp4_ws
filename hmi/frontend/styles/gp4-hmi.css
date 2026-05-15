@@ -2,6 +2,7 @@
 @import './topbar.css';
 @import './joint-monitor.css';
 @import './system-metrics.css';
+@import './tcp-pose-panel.css';
 @import './quick-commands.css';
 @import './chat.css';
 @import './telemetry-sources.css';

@@ -8,7 +8,10 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import patch
 
-from hmi.backend.api.contracts import CommandExecutionResultModel
+from hmi.backend.api.contracts import (
+    CommandExecutionResultModel,
+    CommandMutationResponseModel,
+)
 from hmi.backend.domain.models import (
     BridgeConnection,
     ConnectionHealth,
@@ -306,6 +309,15 @@ class FakeSupervisorAdapter:
     def set_runtime(
         self, system_state: SystemRuntimeState, *, mode: RuntimeMode = RuntimeMode.SIM
     ) -> None:
+        robot_status = RobotStatusSnapshot(
+            servo_state="OFF"
+            if mode == RuntimeMode.HARDWARE and system_state == SystemRuntimeState.SAFETY_BLOCKED
+            else "ON",
+            e_stop="CLEAR",
+            alarm_state="NONE",
+            motion_mode="AUTO" if mode == RuntimeMode.HARDWARE else None,
+            readiness_message="fixture",
+        )
         self._runtime = RuntimeSnapshot(
             system_state=system_state,
             blocking=system_state
@@ -317,8 +329,11 @@ class FakeSupervisorAdapter:
             },
             status_text=f"Runtime set to {system_state.value}.",
             mode=mode,
-            robot_status=RobotStatusSnapshot(readiness_message="fixture"),
+            robot_status=robot_status,
         )
+
+    def set_runtime_snapshot(self, runtime: RuntimeSnapshot) -> None:
+        self._runtime = deepcopy(runtime)
 
     def set_source_freshness(self, *, stale_names: set[str]) -> None:
         next_statuses: list[TelemetrySourceSnapshot] = []
@@ -393,13 +408,6 @@ class FakeSupervisorAdapter:
 
 class SupervisorServiceTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._review_token_patch = patch.dict(
-            os.environ,
-            {"GP4_REVIEW_INTENT_TOKEN": "test-review-secret"},
-            clear=True,
-        )
-        self._review_token_patch.start()
-        self.addCleanup(self._review_token_patch.stop)
         self.temp_dir = TemporaryDirectory()
         self.addCleanup(self.temp_dir.cleanup)
         self.audit = AuditService(Path(self.temp_dir.name) / "audit.sqlite3")
@@ -481,7 +489,7 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertTrue(overlay["capabilities"]["canSubmitCommands"])
         self.assertTrue(overlay["capabilities"]["commandIngressAvailable"])
 
-    def test_hardware_capabilities_allow_review_when_token_configured(self) -> None:
+    def test_hardware_capabilities_allow_review_without_review_token(self) -> None:
         supervisor = SupervisorService(
             audit_service=self.audit,
             session_lock_service=self.session_lock,
@@ -491,7 +499,7 @@ class SupervisorServiceTests(unittest.TestCase):
         supervisor.bind_telemetry_service(self.telemetry)
         self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
 
-        with patch.dict(os.environ, {"GP4_REVIEW_INTENT_TOKEN": "review-token"}):
+        with patch.dict(os.environ, {}, clear=True):
             overlay = supervisor.snapshot_overlay(self.session_id, self.operator_id)
 
         self.assertTrue(overlay["capabilities"]["canSubmitCommands"])
@@ -499,7 +507,7 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertIn("request", overlay["lease"]["statusText"])
         self.assertNotIn("locked", overlay["lease"]["statusText"])
 
-    def test_hardware_capabilities_read_review_token_from_env_file(self) -> None:
+    def test_hardware_capabilities_allow_review_with_empty_environment(self) -> None:
         supervisor = SupervisorService(
             audit_service=self.audit,
             session_lock_service=self.session_lock,
@@ -511,7 +519,7 @@ class SupervisorServiceTests(unittest.TestCase):
 
         with patch.dict(
             os.environ,
-            {"GP4_REVIEW_INTENT_TOKEN": "review-token"},
+            {},
             clear=True,
         ):
             overlay = supervisor.snapshot_overlay(
@@ -1032,6 +1040,76 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertEqual(response["command"]["lifecycleState"], "NEEDS_CONFIRMATION")
         self.assertEqual(response["command"]["mode"], "hardware")
 
+    def test_hardware_submit_ignores_gateway_and_execution_boundary_staleness(
+        self,
+    ) -> None:
+        lease_token = self._acquire_lease()
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+        self.adapter.set_source_freshness(
+            stale_names={"gateway_status", "supervisor_alerts"}
+        )
+        self.adapter.set_preflight(
+            accepted=False,
+            reasons=[
+                "required telemetry source gateway_status is stale.",
+                "required telemetry source supervisor_alerts is stale.",
+                "required telemetry source validate_command_service is inactive.",
+                "required telemetry source validate_command_service is stale.",
+            ],
+        )
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="home",
+            mode="hardware",
+        )
+
+        self.assertTrue(response["accepted"], response.get("reason"))
+        self.assertEqual(response["command"]["lifecycleState"], "NEEDS_CONFIRMATION")
+        self.assertIsNotNone(response["command"]["planFingerprint"])
+
+    def test_hardware_confirmation_still_blocks_when_validate_service_is_unavailable(
+        self,
+    ) -> None:
+        lease_token = self._acquire_lease()
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+        self.adapter.set_source_freshness(
+            stale_names={"gateway_status", "supervisor_alerts"}
+        )
+        self.adapter.set_preflight(
+            accepted=False,
+            reasons=[
+                "required telemetry source gateway_status is stale.",
+                "required telemetry source supervisor_alerts is stale.",
+                "required telemetry source validate_command_service is inactive.",
+                "required telemetry source validate_command_service is stale.",
+            ],
+        )
+
+        submit_response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="home",
+            mode="hardware",
+        )
+
+        self.assertTrue(submit_response["accepted"], submit_response.get("reason"))
+
+        confirm_response = self.supervisor.confirm_command(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            command_id=submit_response["commandId"],
+            plan_fingerprint=submit_response["command"]["planFingerprint"],
+        )
+
+        self.assertFalse(confirm_response["accepted"])
+        self.assertIn("validate_command_service", confirm_response["reason"])
+        self.assertEqual(self.adapter.confirm_calls, [])
+
     def test_servo_start_requires_hardware_mode_before_adapter_call(self) -> None:
         supervisor = SupervisorService(
             audit_service=self.audit,
@@ -1070,6 +1148,114 @@ class SupervisorServiceTests(unittest.TestCase):
             )
         self.assertEqual(self.adapter.start_traj_mode_calls, 0)
 
+    def test_servo_start_requires_controller_lease_when_runtime_unknown(self) -> None:
+        supervisor = SupervisorService(
+            audit_service=self.audit,
+            session_lock_service=self.session_lock,
+            ros_adapter=self.adapter,
+            confirmation_window_sec=5.0,
+        )
+        supervisor.bind_telemetry_service(self.telemetry)
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.UNKNOWN)
+        self.adapter.set_preflight(accepted=True, reasons=[])
+
+        with self.assertRaises(ForbiddenActionError):
+            supervisor.start_servo(
+                session_id=self.session_id,
+                operator_id=self.operator_id,
+                lease_token=None,
+            )
+        self.assertEqual(self.adapter.start_traj_mode_calls, 0)
+
+    def test_servo_start_can_power_drives_when_runtime_blocked_by_servo_off(
+        self,
+    ) -> None:
+        lease_token = self._acquire_lease()
+        self.adapter.set_runtime_snapshot(
+            RuntimeSnapshot(
+                system_state=SystemRuntimeState.SAFETY_BLOCKED,
+                blocking=True,
+                status_text="not ready. drives_powered=FALSE",
+                mode=RuntimeMode.HARDWARE,
+                robot_status=RobotStatusSnapshot(
+                    servo_state="OFF",
+                    e_stop="CLEAR",
+                    alarm_state="NONE",
+                    motion_mode="AUTO",
+                    readiness_message="Servo is off.",
+                ),
+            )
+        )
+        self.adapter.set_preflight(
+            accepted=False,
+            reasons=["required telemetry source validate_command_service is stale."],
+        )
+
+        response = self.supervisor.start_servo(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+        )
+
+        self.assertTrue(response["accepted"], response["message"])
+        self.assertEqual(self.adapter.start_traj_mode_calls, 1)
+
+    def test_servo_start_rejects_active_estop_before_adapter_call(self) -> None:
+        lease_token = self._acquire_lease()
+        self.adapter.set_runtime_snapshot(
+            RuntimeSnapshot(
+                system_state=SystemRuntimeState.ESTOP,
+                blocking=True,
+                status_text="Emergency stop active.",
+                mode=RuntimeMode.HARDWARE,
+                robot_status=RobotStatusSnapshot(
+                    servo_state="OFF",
+                    e_stop="ACTIVE",
+                    alarm_state="NONE",
+                    motion_mode="AUTO",
+                    readiness_message="E-stop active.",
+                ),
+            )
+        )
+
+        response = self.supervisor.start_servo(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+        )
+
+        self.assertFalse(response["accepted"])
+        self.assertIn("e-stop", response["message"].lower())
+        self.assertEqual(self.adapter.start_traj_mode_calls, 0)
+
+    def test_servo_start_requires_auto_mode_before_adapter_call(self) -> None:
+        lease_token = self._acquire_lease()
+        self.adapter.set_runtime_snapshot(
+            RuntimeSnapshot(
+                system_state=SystemRuntimeState.NORMAL,
+                blocking=False,
+                status_text="Manual mode.",
+                mode=RuntimeMode.HARDWARE,
+                robot_status=RobotStatusSnapshot(
+                    servo_state="OFF",
+                    e_stop="CLEAR",
+                    alarm_state="NONE",
+                    motion_mode="MANUAL",
+                    readiness_message="Manual mode.",
+                ),
+            )
+        )
+
+        response = self.supervisor.start_servo(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+        )
+
+        self.assertFalse(response["accepted"])
+        self.assertIn("auto", response["message"].lower())
+        self.assertEqual(self.adapter.start_traj_mode_calls, 0)
+
     def test_servo_hold_calls_adapter_even_when_hardware_gate_is_locked(
         self,
     ) -> None:
@@ -1085,29 +1271,24 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertTrue(response["accepted"])
         self.assertEqual(self.adapter.stop_motion_calls, 1)
 
-    def test_servo_hold_rejected_when_hardware_preflight_fails(
+    def test_servo_hold_ignores_command_execution_preflight_when_stopping(
         self,
     ) -> None:
-        supervisor = SupervisorService(
-            audit_service=self.audit,
-            session_lock_service=self.session_lock,
-            ros_adapter=self.adapter,
-            confirmation_window_sec=5.0,
-        )
-        supervisor.bind_telemetry_service(self.telemetry)
         lease_token = self._acquire_lease()
         self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
-        self.adapter.set_preflight(accepted=False, reasons=["stale joint state"])
+        self.adapter.set_preflight(
+            accepted=False,
+            reasons=["required telemetry source validate_command_service is stale."],
+        )
 
-        response = supervisor.hold_servo(
+        response = self.supervisor.hold_servo(
             session_id=self.session_id,
             operator_id=self.operator_id,
             lease_token=lease_token,
         )
 
-        self.assertFalse(response["accepted"])
-        self.assertIn("stale", response["message"].lower())
-        self.assertEqual(self.adapter.stop_motion_calls, 0)
+        self.assertTrue(response["accepted"], response["message"])
+        self.assertEqual(self.adapter.stop_motion_calls, 1)
 
     
     def test_reviewed_sequence_ignores_stale_review_intent_event_source(
@@ -1351,6 +1532,37 @@ class SupervisorServiceTests(unittest.TestCase):
         )
         self.assertTrue(response["command"]["executionResult"]["queryOnly"])
         self.assertEqual(response["command"]["executionResult"]["status"], "succeeded")
+
+    def test_get_pose_ignores_gateway_and_validate_service_staleness(self) -> None:
+        lease_token = self._acquire_lease()
+        self.adapter.set_runtime(SystemRuntimeState.NORMAL, mode=RuntimeMode.HARDWARE)
+        self.adapter.set_source_freshness(
+            stale_names={"gateway_status", "supervisor_alerts"}
+        )
+        self.adapter.set_preflight(
+            accepted=False,
+            reasons=[
+                "required telemetry source gateway_status is stale.",
+                "required telemetry source supervisor_alerts is stale.",
+                "required telemetry source validate_command_service is inactive.",
+                "required telemetry source validate_command_service is stale.",
+            ],
+        )
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="get pose",
+            mode="hardware",
+        )
+
+        self.assertTrue(response["accepted"], response.get("reason"))
+        self.assertEqual(response["command"]["lifecycleState"], "SUCCEEDED")
+        self.assertEqual(response["command"]["finalState"], "SUCCEEDED")
+        self.assertEqual(
+            self.adapter.get_pose_calls[-1], {"reference_frame": "base_link"}
+        )
 
     def test_pose_query_execution_result_matches_api_contract(self) -> None:
         CommandExecutionResultModel.model_validate(
@@ -1711,6 +1923,28 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertIsNotNone(response["snapshot"]["activeSequence"])
         self.assertEqual(
             response["snapshot"]["activeSequence"]["sequenceId"], response["sequenceId"]
+        )
+
+    def test_text_sequence_response_matches_api_contract(self) -> None:
+        lease_token = self._acquire_lease()
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="home, wait 1 s, then move up 1 cm",
+            mode="sim",
+        )
+
+        parsed = CommandMutationResponseModel.model_validate(response)
+
+        self.assertIsNotNone(parsed.sequence)
+        self.assertIsNotNone(parsed.sequence.validationResult)
+        self.assertTrue(parsed.sequence.validationResult.hardwareGate.unlocked)
+        self.assertIsNotNone(parsed.snapshot)
+        self.assertIsNotNone(parsed.snapshot.activeSequence)
+        self.assertIsNotNone(parsed.snapshot.activeSequence.validationResult)
+        self.assertTrue(
+            parsed.snapshot.activeSequence.validationResult.hardwareGate.unlocked
         )
 
     def test_sequence_confirm_executes_child_steps_in_order(self) -> None:

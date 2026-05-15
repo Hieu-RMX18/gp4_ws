@@ -1731,6 +1731,42 @@ from llm_gateway.intent_engine import LLMParser
 
 _LOGGER = logging.getLogger(__name__)
 
+_REACT_SYSTEM_PROMPT_PREFIX = (
+    "You are a robot task planner for a Yaskawa GP4 6-axis industrial robot arm.",
+    "You DO NOT control the robot directly.",
+    "You produce Semantic IR JSON that the safety system reviews before any motion is executed.",
+    "",
+    "## Reasoning Rules",
+    "1. Think step by step. For multi-step tasks, break them into individual motion steps.",
+    "2. Use tools to gather information BEFORE producing a plan.",
+    "   - Use get_current_pose to know where the robot is now.",
+    "   - Use query_perception to find objects in the workspace.",
+    "   - Use compute_arc_points for circular motions.",
+    "   - Use plan_motion to validate a target BEFORE submitting.",
+    "3. If a user mentions an object by color or shape (e.g. 'red sphere', 'blue box'),",
+    "   FIRST call query_perception to locate it, then plan motion to its position.",
+    "4. For 'draw circle' or 'arc' commands, use compute_arc_points to calculate waypoints.",
+    "5. Never guess coordinates. Always query the current state first.",
+    "",
+    "## Safety Rules",
+    "- NEVER exceed velocity_scale 0.10 unless explicitly instructed.",
+    "- NEVER produce raw joint trajectories — only Semantic IR with intent.",
+    "- If a command is ambiguous or unsafe, respond with an error intent explaining why.",
+    "- Joints 4, 5, 6 are prone to singularity near zero; avoid planning through those configs.",
+    "",
+    "## Available Tools",
+)
+
+_REACT_SYSTEM_PROMPT_SUFFIX = (
+    "",
+    "## Output Format",
+    "When you have enough information, respond WITHOUT a tool call, with one Semantic IR JSON object.",
+    'The final JSON must include an "intent" field and must not include "primitive_type".',
+    'Multi-step requests: {"intent":"sequence","steps":[<semantic_ir_step>, ...]}.',
+    "Each sequence step is also Semantic IR with its own intent.",
+    'Error responses: {"intent":"error","error":"<reason>"}.',
+)
+
 
 @dataclass
 class ToolCall:
@@ -1849,58 +1885,28 @@ class ReActAgent:
         history: List[Tuple[str, Any]],
     ) -> List[Dict[str, str]]:
         system_lines = [
-            "You are a robot task planner for a Yaskawa GP4 6-axis industrial robot arm.",
-            "You DO NOT control the robot directly.",
-            "You produce Semantic IR JSON that the safety system reviews before any motion is executed.",
-            "",
-            "## Reasoning Rules",
-            "1. Think step by step. For multi-step tasks, break them into individual motion steps.",
-            "2. Use tools to gather information BEFORE producing a plan.",
-            "   - Use get_current_pose to know where the robot is now.",
-            "   - Use query_perception to find objects in the workspace.",
-            "   - Use compute_arc_points for circular motions.",
-            "   - Use plan_motion to validate a target BEFORE submitting.",
-            "3. If a user mentions an object by color or shape (e.g. 'red sphere', 'blue box'),",
-            "   FIRST call query_perception to locate it, then plan motion to its position.",
-            "4. For 'draw circle' or 'arc' commands, use compute_arc_points to calculate waypoints.",
-            "5. Never guess coordinates. Always query the current state first.",
-            "",
-            "## Safety Rules",
-            "- NEVER exceed velocity_scale 0.10 unless explicitly instructed.",
-            "- NEVER produce raw joint trajectories — only Semantic IR with intent.",
-            "- If a command is ambiguous or unsafe, respond with an error intent explaining why.",
-            "- Joints 4, 5, 6 are prone to singularity near zero; avoid planning through those configs.",
-            "",
-            "## Available Tools",
+            *_REACT_SYSTEM_PROMPT_PREFIX,
             self._tool_registry.available_tools_description(),
             "",
             "## Current Robot State",
             json.dumps(state, indent=2),
-            "",
-            "## Output Format",
-            "When you have enough information, respond WITHOUT a tool call, with one Semantic IR JSON object.",
-            'The final JSON must include an "intent" field and must not include "primitive_type".',
-            'Multi-step requests: {"intent":"sequence","steps":[<semantic_ir_step>, ...]}.',
-            "Each sequence step is also Semantic IR with its own intent.",
-            'Error responses: {"intent":"error","error":"<reason>"}.',
+            *_REACT_SYSTEM_PROMPT_SUFFIX,
         ]
         messages: List[Dict[str, str]] = [
             {"role": "system", "content": "\n".join(system_lines)},
             {"role": "user", "content": user_text.strip()},
         ]
         for role, content in history:
-            if isinstance(content, ToolCall):
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": json.dumps(
-                            {"tool_call": content.name, "args": content.args}
-                        ),
-                    }
-                )
-            else:
-                messages.append({"role": "user", "content": str(content)})
+            messages.append(self._history_message(role, content))
         return messages
+
+    def _history_message(self, role: str, content: Any) -> Dict[str, str]:
+        if isinstance(content, ToolCall):
+            return {
+                "role": "assistant",
+                "content": json.dumps({"tool_call": content.name, "args": content.args}),
+            }
+        return {"role": "user", "content": str(content)}
 
     def _decode_llm_response(self, llm_response: str) -> Any:
         """Decode direct model JSON or provider-wrapped JSON into a payload."""

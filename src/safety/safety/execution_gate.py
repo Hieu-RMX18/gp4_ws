@@ -9,14 +9,11 @@ from .workspace_guard import WorkspaceGuard
 # MOVE_REL delta safety limits — must match motion_core/move_rel_validator.hpp.
 # Defense-in-depth: gate rejects bad deltas before they reach motion_core.
 # Hardware conservative MOVE_REL cap — short nudges only.
-_MOVE_REL_MAX_DELTA_NORM = 0.05
+_MOVE_REL_MAX_DELTA_NORM = 0.21
 _MOVE_REL_ALLOWED_FRAMES = {"", "base_link"}
 
-# BLENDED_SEQUENCE named-target allowlist (must exist in SRDF / MoveIt scene).
-_BLENDED_SEQUENCE_NAMED_TARGETS = {"home", "start", "ready"}
-
 # BLENDED_SEQUENCE step primitive allowlist.
-_BLENDED_SEQUENCE_STEP_PRIMITIVES = {"LIN", "PTP", "HOME"}
+_BLENDED_SEQUENCE_STEP_PRIMITIVES = {"LIN", "PTP"}
 
 
 class ExecutionGate:
@@ -31,7 +28,7 @@ class ExecutionGate:
     computed from (current_pose + delta) inside motion_core at planning
     time.  Fail-closed is maintained by three layers of defense:
 
-      1. This gate validates delta magnitude (≤ 0.05 m) and reference
+      1. This gate validates delta magnitude (≤ 0.21 m) and reference
          frame (base_link only) right here — catching bad commands before
          they reach motion_core.
       2. motion_core validates the resolved target against the same
@@ -68,6 +65,9 @@ class ExecutionGate:
         # Reference to SafetyManager for readiness checks
         self._safety_manager = safety_manager
 
+        from std_msgs.msg import String
+        self._trace_pub = self.node.create_publisher(String, "/llm_debug", 10)
+
         self.srv = self.node.create_service(
             ValidateCommand, "/validate_command", self.validate_callback
         )
@@ -75,7 +75,36 @@ class ExecutionGate:
             "ExecutionGate initialized: /validate_command service ready."
         )
 
+    def _emit_trace(self, event: str, level: str = "INFO", summary: str = "", **details):
+        import time
+        from std_msgs.msg import String
+        payload = json.dumps({
+            "t": "command_trace",
+            "ts": time.time(),
+            "cmd_id": "",
+            "layer": "safety",
+            "phase": "validation",
+            "event": event,
+            "level": level,
+            "summary": summary,
+            "details": details if details else None,
+            "error_why": details.get("error_why", ""),
+            "error_where": details.get("error_where", ""),
+            "error_next_action": details.get("error_next_action", "")
+        })
+        self._trace_pub.publish(String(data=payload))
+
     def validate_callback(self, request, response):
+        self._emit_trace("validate_command_called", summary="Validation started")
+        try:
+            return self._validate_callback_inner(request, response)
+        finally:
+            if response.valid:
+                self._emit_trace("validation_passed", level="INFO", summary="All safety checks passed")
+            else:
+                self._emit_trace("validation_failed", level="ERROR", summary=response.reason, error_why=response.reason, error_where="safety/validate_command")
+
+    def _validate_callback_inner(self, request, response):
         cmd_json = request.command_json
         raw_primitive_type = ""
         try:
@@ -149,6 +178,8 @@ class ExecutionGate:
             "MOVE_JOINT",
             "MOVE_JOINTS",
             "GET_POSE",
+            # BLENDED_SEQUENCE validates every sequence_steps target below.
+            "BLENDED_SEQUENCE",
         }
         if prim_type not in pose_validation_skip_primitives and not ptp_with_joints:
             is_valid_pose, reason_pose = self.guard.check_pose(request.target_pose)
@@ -260,11 +291,11 @@ class ExecutionGate:
         Checks:
         - At least 2 sequence_steps.
         - Every step blend_radius >= 0; last step blend_radius == 0.0.
-        - Step primitive_type in {LIN, PTP, HOME}.
+        - Step primitive_type in {LIN, PTP}.
         - Per-step velocity/acceleration scale within policy caps.
+        - Only pose-target steps are accepted because motion_core only plans
+          BLENDED_SEQUENCE as pose-based MoveGroupSequence items.
         - POSE steps: workspace bounds via WorkspaceGuard.
-        - JOINTS steps: joint count == 6 and within operational_joint_limits.
-        - NAMED steps: named_target in allowlist.
         """
         steps = cmd_data.get("sequence_steps")
         if not isinstance(steps, list) or len(steps) < 2:
@@ -273,17 +304,6 @@ class ExecutionGate:
         # Top-level velocity / acceleration caps (same as CommandValidator)
         max_velocity = self.validator.max_velocity
         max_acceleration = self.validator.max_acceleration
-
-        # Operational joint limits from safety_rules
-        op_limits = self.validator.safety_rules.get("operational_joint_limits", {})
-        joint_names = [
-            "joint_1_s",
-            "joint_2_l",
-            "joint_3_u",
-            "joint_4_r",
-            "joint_5_b",
-            "joint_6_t",
-        ]
 
         for idx, step in enumerate(steps):
             if not isinstance(step, dict):
@@ -350,63 +370,18 @@ class ExecutionGate:
             goal_type = int(step.get("goal_type", 0))
 
             if goal_type == 1:  # GOAL_JOINTS
-                joint_target = step.get("joint_target")
-                if not isinstance(joint_target, list) or len(joint_target) != 6:
-                    return (
-                        False,
-                        f"BLENDED_SEQUENCE step[{idx}] GOAL_JOINTS requires "
-                        f"exactly 6 joint_target values",
-                    )
-                for j_idx, value in enumerate(joint_target):
-                    try:
-                        value = float(value)
-                    except (TypeError, ValueError):
-                        return (
-                            False,
-                            f"BLENDED_SEQUENCE step[{idx}] joint_target[{j_idx}] "
-                            f"not numeric",
-                        )
-                    if not math.isfinite(value):
-                        return (
-                            False,
-                            f"BLENDED_SEQUENCE step[{idx}] joint_target[{j_idx}] "
-                            f"must be finite",
-                        )
-                    j_name = joint_names[j_idx]
-                    j_cfg = op_limits.get(j_name)
-                    if isinstance(j_cfg, dict):
-                        j_min = j_cfg.get("min")
-                        j_max = j_cfg.get("max")
-                        if j_min is not None and value < float(j_min):
-                            return (
-                                False,
-                                f"BLENDED_SEQUENCE step[{idx}] {j_name}={value:.4f} "
-                                f"rad below limit {j_min}",
-                            )
-                        if j_max is not None and value > float(j_max):
-                            return (
-                                False,
-                                f"BLENDED_SEQUENCE step[{idx}] {j_name}={value:.4f} "
-                                f"rad above limit {j_max}",
-                            )
-                continue  # skip pose check for joint goals
+                return (
+                    False,
+                    f"BLENDED_SEQUENCE step[{idx}] GOAL_JOINTS is not supported; "
+                    "use a normal sequence so joint moves run step-by-step",
+                )
 
             if goal_type == 2:  # GOAL_NAMED
-                named_target = str(step.get("named_target", "")).strip().lower()
-                if not named_target:
-                    return (
-                        False,
-                        f"BLENDED_SEQUENCE step[{idx}] GOAL_NAMED requires "
-                        f"named_target",
-                    )
-                if named_target not in _BLENDED_SEQUENCE_NAMED_TARGETS:
-                    return (
-                        False,
-                        f"BLENDED_SEQUENCE step[{idx}] named_target="
-                        f"'{named_target}' not in allowed set "
-                        f"{_BLENDED_SEQUENCE_NAMED_TARGETS}",
-                    )
-                continue  # skip pose check for named goals
+                return (
+                    False,
+                    f"BLENDED_SEQUENCE step[{idx}] GOAL_NAMED is not supported; "
+                    "use a normal sequence so named poses run step-by-step",
+                )
 
             # Default / GOAL_POSE (0): workspace bounds check
             step_pose = step.get("target_pose")

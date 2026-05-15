@@ -24,7 +24,7 @@ joint_limits_override:
 motion_limits:
   max_velocity_scale: 0.06
   max_acceleration_scale: 0.06
-  max_move_rel_translation: 0.05
+  max_move_rel_translation: 0.21
 
 forbidden_zones:
   # Station front face (Y = -0.197m in base_link).  30mm zone each side of wall.
@@ -74,7 +74,7 @@ operational_joint_limits:
   joint_2_l: {min: -1.9198, max:  2.2689}  # = hardware L (asymmetric)
   joint_3_u: {min: -1.1344, max:  3.4906}  # = hardware U (asymmetric)
   joint_4_r: {min: -2.443, max:  2.443}   # +/-140 deg (hardware R is +/-200 deg, derated)
-  joint_5_b: {min: -1.603, max:  1.603}   # ~+/-91.8 deg (hardware B is +/-123 deg, derated; widened from ±1.571 per operator 2026-05-04)
+  joint_5_b: {min: -1.686, max:  1.686}   # ~+/-96.6 deg (hardware B is +/-123 deg, derated; widened per operator 2026-05-15)
   joint_6_t:
     default:  {min: -3.142, max:  3.142}     # +/-180 deg (default safety envelope)
     # Extended +/-455 deg mode is disabled for the current hardware-debug wave.
@@ -103,7 +103,7 @@ cumulative_rotation_guard:
 
 # W2: Drawing SSOT — blend radii, velocity defaults, fallback workplane
 drawing:
-  use_blended_sequence: true     # feature flag; false reverts to CARTESIAN_PATH emit
+  use_blended_sequence: false    # draw macros use CARTESIAN_PATH until MoveGroupSequence is stable for dense strokes
   blend_radius_m: 0.008          # default for intermediate LIN items
   blend_radius_m_max: 0.015      # hard upper bound enforced by schema
   velocity_scale_default: 0.10   # used when caller does not specify

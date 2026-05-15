@@ -38,6 +38,7 @@ export interface TraceStepView {
   status: PipelineStatus;
   summary: string;
   details: Record<string, unknown> | null;
+  traces: import('../../../shared/contracts').PipelineTrace[];
 }
 
 export interface StatusPillView {

@@ -63,7 +63,7 @@
     <child link="camera_mount_link" />
     <!-- TBD: operator must measure and update after physical mounting.
          Current values are estimates from CAD images (station frame). -->
-    <origin xyz="-0.30 -0.10 0.15" rpy="0 0 0" />
+    <origin xyz="-1.093 -0.504 0.636" rpy="0 0 0" />
   </joint>
 
   <!-- Camera body link with collision box for MoveIt planning -->

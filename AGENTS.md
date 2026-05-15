@@ -1,6 +1,8 @@
 # GUIDES
 Check /home/hieu2/gp4_ws/references/karpathy-guidelines before coding.
-Find essential skills ros2 in /home/hieu2/gp4_ws/ros2_references_coding ,for references not be formal.Quick finding,checking and smart select suitbale one.
+ROS2 coding references are non-runtime material; keep the `ros2_references_coding`
+bundle outside this workspace when possible, for example under
+`/home/hieu2/Documents/github_repo_skills_cc_cx/ros2_references_coding`.
 # AI Agent System Prompt: ROS2 + LLM Robot Control
 You are a Super PRO high-quality  Senior Automation & Robotics Engineer in ROS2, MoveIt2, industrial robot integration,AI+LLMs, and safe robot control systems with several years,thinking deeply and analyzing thoroughly like one. Your task is to assist with designing, coding, debugging, and deploying a ROS2-based system that uses a Large Language Model (LLM) to interpret operator intent and control an industrial robot arm safely and predictably.
 
@@ -69,8 +71,8 @@ Hard safety rules:
 - Every task plan must pass gp4_safety/SafeGate before reaching gp4_control.
 - RealSense is not safety-rated. It can support perception and supervisory checks only.
 - Gripper IO must remain mock/TBD until real IO mapping is verified.
-- TCP must remain TBD until measured.
-- Camera extrinsics must remain TBD until calibrated.
+- TCP must remain TBD until measured (real tool not mounted yet).
+- Camera extrinsics calibrated 2026-05-14 (nominal values from camera_mount.yaml; operator should replace with precise hand-eye calibration when available).
 - Hardware execution requires explicit runtime mode hardware_execute plus human approval plus safety pass.
 
 ## 4. Safety Rules (Highest Priority)
@@ -136,7 +138,6 @@ The `.codex/` folder is reserved for Codex-specific workspace guidance and reusa
 - When a `.codex` skill or rule references repo behavior, verify the package path, topic, service, launch file, and command against the actual workspace first.
 - If a change introduces a new repo-wide expectation, update both this root `AGENTS.md` and the relevant `.codex` file so instructions do not drift.
 - `.codex` content must stay concise, auditable, and aligned with the real workspace structure.
-- ` gitnexus skills `for context codebase.
 ## 11. Adding requires
 Required harness for every code wave:
 
@@ -178,7 +179,9 @@ After modifying files:
 
 5. Return report in this exact format:
 ## 12. NOTES
-- If need for recommended references,could/should check "ros2_references_coding" folder.The plan for each waves included in docs/gp4_llm_vision_rebuild_plan_en/ (if stale or deprecated ,asking for modify for suitable).
+- If recommended references are needed, check the external
+  `ros2_references_coding` bundle after it has been moved out of this workspace.
+  Keep wave plans current before using them as implementation instructions.
 ## Wave Report
 
 #Wave ID
@@ -192,47 +195,3 @@ After modifying files:
 
 #Commands Run
 ```bash
-
-<!-- gitnexus:start -->
-# GitNexus — Code Intelligence
-
-This project is indexed by GitNexus as **gp4_ws** (10769 symbols, 20777 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
-
-> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
-
-## Always Do
-
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
-- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
-
-## Never Do
-
-- NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
-- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
-
-## Resources
-
-| Resource | Use for |
-|----------|---------|
-| `gitnexus://repo/gp4_ws/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/gp4_ws/clusters` | All functional areas |
-| `gitnexus://repo/gp4_ws/processes` | All execution flows |
-| `gitnexus://repo/gp4_ws/process/{name}` | Step-by-step execution trace |
-
-## CLI
-
-| Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
-
-<!-- gitnexus:end -->

@@ -21,6 +21,9 @@ from moveit_configs_utils import MoveItConfigsBuilder
 
 MOVE_GROUP_SIGTERM_TIMEOUT_SEC = "20.0"
 MOVE_GROUP_SIGKILL_TIMEOUT_SEC = "5.0"
+PILZ_SEQUENCE_ACTION_CAPABILITY = (
+    "pilz_industrial_motion_planner/MoveGroupSequenceAction"
+)
 
 
 def _strip_trajectory_execution_parameters(parameters, moveit_config):
@@ -58,6 +61,7 @@ def _normalized_move_group_parameters(moveit_config):
             "move_group/MoveGroupExecuteService",
         ]
     )
+    parameters["capabilities"] = PILZ_SEQUENCE_ACTION_CAPABILITY
     parameters["planning_plugin"] = "pilz_industrial_motion_planner/CommandPlanner"
     parameters["default_planning_pipeline"] = "pilz_industrial_motion_planner"
     parameters.setdefault("ompl", {})["planning_plugin"] = "ompl_interface/OMPLPlanner"

@@ -130,6 +130,12 @@
   margin-right: 2px;
 }
 
+.pill-control.green .dot,
+.pill-control.amber .dot {
+  box-shadow: 0 0 0 3px currentColor;
+  animation: control-led-pulse 1.4s ease-in-out infinite;
+}
+
 .top-right {
   margin-left: auto;
   display: flex;
@@ -172,6 +178,7 @@
 
 .servo-btn {
   min-height: 32px;
+  min-width: 72px;
   padding: 0 10px;
   border-radius: var(--border-radius-sm);
   letter-spacing: 0.03em;
@@ -196,3 +203,20 @@
   cursor: not-allowed;
 }
 
+@keyframes control-led-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 22%, transparent);
+  }
+
+  50% {
+    box-shadow: 0 0 0 5px color-mix(in srgb, currentColor 8%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pill-control.green .dot,
+  .pill-control.amber .dot {
+    animation: none;
+  }
+}

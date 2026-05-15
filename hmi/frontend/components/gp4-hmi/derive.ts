@@ -9,6 +9,7 @@ import type {
   CommandView,
   JointPosition,
   MessageOrigin,
+  PipelineTrace,
   SequenceView,
   TelemetrySourceStatus,
 } from '../../../shared/contracts';
@@ -129,7 +130,8 @@ export function formatClock(value: Date): string {
 // ── Message / chat helpers ──────────────────────────────────────────────────
 
 export function shouldShowMessageInSystemLog(message: ChatMessage): boolean {
-  return !/^Step \d+\/6\b/.test(message.text);
+  // Include all system/assistant messages so the full pipeline is visible
+  return message.origin !== 'operator';
 }
 
 export function toMessageRole(origin: MessageOrigin): MessageRole {
@@ -285,6 +287,13 @@ export function buildReviewLogEntries(
 
 // ── Pipeline trace steps ────────────────────────────────────────────────────
 
+function groupTraces(
+  traces: PipelineTrace[],
+  phases: string[],
+): PipelineTrace[] {
+  return traces.filter(t => phases.includes(t.phase));
+}
+
 export function buildTraceSteps(command: CommandView | null): TraceStepView[] {
   if (!command) return [];
 
@@ -294,6 +303,7 @@ export function buildTraceSteps(command: CommandView | null): TraceStepView[] {
   const blockingReasons = validation?.blockingReasons ?? [];
   const confirmationReasons = validation?.confirmationReasons ?? [];
   const parsedAction = command.parsedIntent ? command.parsedIntent['action'] : undefined;
+  const allTraces: PipelineTrace[] = command.pipelineTraces ?? [];
 
   const parseStatus: PipelineStatus =
     lifecycle === 'PARSING' ? 'active' : lifecycle !== 'RECEIVED' ? 'done' : 'pending';
@@ -336,16 +346,22 @@ export function buildTraceSteps(command: CommandView | null): TraceStepView[] {
 
   return [
     { key: 'parse', label: 'Step 1 · Parse intent', status: parseStatus, summary: parseSummary,
-      details: { rawText: command.rawText, intentSource: command.intentSource, parsedIntent: command.parsedIntent ?? null } },
+      details: { rawText: command.rawText, intentSource: command.intentSource, parsedIntent: command.parsedIntent ?? null },
+      traces: groupTraces(allTraces, ['ingress', 'reasoning', 'parsing']) },
     { key: 'validate', label: 'Step 2 · Validate command', status: validateStatus, summary: validationSummary,
-      details: validation ? { validationResult: validation } : null },
+      details: validation ? { validationResult: validation } : null,
+      traces: groupTraces(allTraces, ['validation']) },
     { key: 'confirm', label: 'Step 3 · Confirmation gate', status: confirmationStatus, summary: confirmationSummary,
-      details: { planFingerprint: command.planFingerprint, confirmationExpiresAt: command.confirmationExpiresAt, confirmationReasons } },
+      details: { planFingerprint: command.planFingerprint, confirmationExpiresAt: command.confirmationExpiresAt, confirmationReasons },
+      traces: groupTraces(allTraces, ['confirmation']) },
     { key: 'dispatch', label: 'Step 4 · Dispatch request', status: dispatchStatus, summary: dispatchSummary,
-      details: { dispatchedToRos: execution?.dispatchedToRos ?? false, executionStatus: execution?.status ?? null } },
+      details: { dispatchedToRos: execution?.dispatchedToRos ?? false, executionStatus: execution?.status ?? null },
+      traces: groupTraces(allTraces, ['routing']) },
     { key: 'executing', label: 'Step 5 · Executing', status: executingStatus, summary: executingSummary,
-      details: execution ? { executionResult: execution } : null },
+      details: execution ? { executionResult: execution } : null,
+      traces: groupTraces(allTraces, ['execution']) },
     { key: 'result', label: 'Step 6 · Terminal result', status: terminalStatus, summary: resultSummary,
-      details: { finalState: command.finalState, rejectReason: command.rejectReason, executionResult: command.executionResult ?? null } },
+      details: { finalState: command.finalState, rejectReason: command.rejectReason, executionResult: command.executionResult ?? null },
+      traces: groupTraces(allTraces, ['terminal', 'complete']) },
   ];
 }

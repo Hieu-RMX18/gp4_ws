@@ -187,6 +187,7 @@ class SupervisorViewsMixin:
             "parentSequenceId": command.parent_sequence_id,
             "sequenceStepIndex": command.sequence_step_index,
             "sequenceStepCount": command.sequence_step_count,
+            "pipelineTraces": command.pipeline_traces,
         }
 
     def _serialize_sequence(

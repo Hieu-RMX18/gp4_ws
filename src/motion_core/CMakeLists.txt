@@ -275,6 +275,24 @@ if(BUILD_TESTING)
       include
     )
   endif()
+
+  ament_add_gtest(test_primitive_router_dispatch
+    test/test_primitive_router_dispatch.cpp
+  )
+  if(TARGET test_primitive_router_dispatch)
+    target_link_libraries(test_primitive_router_dispatch
+      ${PROJECT_NAME}_components
+    )
+    target_include_directories(test_primitive_router_dispatch PRIVATE
+      include
+    )
+    ament_target_dependencies(test_primitive_router_dispatch
+      rclcpp
+      sensor_msgs
+      builtin_interfaces
+      moveit_core
+    )
+  endif()
 endif()
 
 install(DIRECTORY include/

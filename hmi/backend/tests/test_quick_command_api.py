@@ -81,8 +81,7 @@ def test_quick_command_home_maps_to_go_home_and_requires_lease():
         )
 
 
-def test_quick_commands_can_acquire_lease_without_review_intent_token(monkeypatch):
-    monkeypatch.delenv("GP4_REVIEW_INTENT_TOKEN", raising=False)
+def test_quick_commands_can_acquire_lease_without_review_secret():
     _temp_dir, svc = _build_service()
 
     lease = svc.acquire_lease(session_id="s1", operator_id="o1", force_takeover=False)

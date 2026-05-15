@@ -54,13 +54,6 @@ function createDisconnectedSnapshot(): HmiStateSnapshot {
         unlocked: false,
         reasons: ['hardware gate status unavailable while bridge is disconnected'],
         flagEnabled: false,
-        evidencePath: 'hmi/data/hardware_gate.json',
-        approvedBy: null,
-        approvedAt: null,
-        reportPath: null,
-        reportSha256: null,
-        reportSha256Match: false,
-        checklist: null,
       },
     },
     lease: {
@@ -96,7 +89,7 @@ function createDisconnectedSnapshot(): HmiStateSnapshot {
     jointPositions: DEFAULT_JOINTS,
     planMetrics: null,
     replayItems: [],
-    consoleEvents: [],
+    toolPose: null,
   };
 }
 
@@ -135,7 +128,6 @@ function applyEvent(snapshot: HmiStateSnapshot, event: HmiStreamEvent): HmiState
           activeSequence: mergeSequenceStep(snapshot.activeSequence, event.command),
           planMetrics: event.planMetrics ?? event.command.metrics ?? snapshot.planMetrics,
           messages: event.messages ? [...snapshot.messages, ...event.messages] : snapshot.messages,
-          consoleEvents: event.consoleEvents ?? snapshot.consoleEvents,
         };
       }
       return {
@@ -144,7 +136,6 @@ function applyEvent(snapshot: HmiStateSnapshot, event: HmiStreamEvent): HmiState
         activeCommand: event.command,
         planMetrics: event.planMetrics ?? event.command.metrics ?? snapshot.planMetrics,
         messages: event.messages ? [...snapshot.messages, ...event.messages] : snapshot.messages,
-        consoleEvents: event.consoleEvents ?? snapshot.consoleEvents,
       };
     case 'sequence_lifecycle':
       return {
@@ -156,7 +147,6 @@ function applyEvent(snapshot: HmiStateSnapshot, event: HmiStreamEvent): HmiState
             ? snapshot.activeCommand
             : event.sequence.steps[event.sequence.currentStepIndex ?? 0] ?? snapshot.activeCommand,
         messages: event.messages ? [...snapshot.messages, ...event.messages] : snapshot.messages,
-        consoleEvents: event.consoleEvents ?? snapshot.consoleEvents,
       };
     case 'replay_updated':
       return {

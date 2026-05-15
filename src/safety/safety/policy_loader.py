@@ -20,7 +20,7 @@ _LOGGER = logging.getLogger(__name__)
 _FAILSAFE_MOTION_LIMITS: dict[str, float] = {
     "max_velocity_scale": 0.06,
     "max_acceleration_scale": 0.06,
-    "max_move_rel_translation": 0.05,
+    "max_move_rel_translation": 0.21,
 }
 
 

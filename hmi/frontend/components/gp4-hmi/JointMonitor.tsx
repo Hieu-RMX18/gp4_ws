@@ -1,13 +1,11 @@
-import type { CommandView, JointPosition, RuntimeSnapshot } from '../../../shared/contracts';
+import type { JointPosition } from '../../../shared/contracts';
 import { formatAngle, isNearLimit, toPercent } from './derive';
 
 interface JointMonitorProps {
   orderedJoints: JointPosition[];
-  runtime: RuntimeSnapshot;
-  activeCommand: CommandView | null;
 }
 
-export function JointMonitor({ orderedJoints, runtime, activeCommand }: JointMonitorProps) {
+export function JointMonitor({ orderedJoints }: JointMonitorProps) {
   return (
     <>
       <section className="section">
@@ -33,35 +31,6 @@ export function JointMonitor({ orderedJoints, runtime, activeCommand }: JointMon
         })}
       </section>
 
-      <section className="section">
-        <div className="section-title">Runtime Snapshot</div>
-        <div className="pose-grid">
-          <div className="pose-cell">
-            <div className="pose-label">Mode</div>
-            <div className="pose-value">{runtime.mode}</div>
-          </div>
-          <div className="pose-cell">
-            <div className="pose-label">Frame</div>
-            <div className="pose-value">{activeCommand?.frameUsed ?? '--'}</div>
-          </div>
-          <div className="pose-cell">
-            <div className="pose-label">Planner</div>
-            <div className="pose-value">{activeCommand?.plannerUsed ?? '--'}</div>
-          </div>
-          <div className="pose-cell">
-            <div className="pose-label">Risk</div>
-            <div className="pose-value">{activeCommand?.riskLevel ?? '--'}</div>
-          </div>
-          <div className="pose-cell">
-            <div className="pose-label">Servo</div>
-            <div className="pose-value">{runtime.robotStatus.servoState}</div>
-          </div>
-          <div className="pose-cell">
-            <div className="pose-label">Alarm</div>
-            <div className="pose-value">{runtime.robotStatus.alarmState}</div>
-          </div>
-        </div>
-      </section>
     </>
   );
 }

@@ -53,22 +53,22 @@ TEST(MoveRelValidatorTest, AcceptsNegativeDelta) {
 }
 
 TEST(MoveRelValidatorTest, AcceptsDeltaExactlyAtLimit) {
-  // norm = 0.05 exactly — should pass.
+  // norm = 0.21 exactly — should pass.
   std::string reason;
-  EXPECT_TRUE(validate_move_rel_deltas(0.05, 0.0, 0.0, reason));
+  EXPECT_TRUE(validate_move_rel_deltas(0.21, 0.0, 0.0, reason));
 }
 
 TEST(MoveRelValidatorTest, RejectsDeltaNormExceedsLimit) {
-  // norm = sqrt(0.04^2 + 0.04^2) ≈ 0.0566 > 0.05 (reject)
+  // norm = sqrt(0.15^2 + 0.15^2) ≈ 0.212 > 0.21 (reject)
   std::string reason;
-  EXPECT_FALSE(validate_move_rel_deltas(0.04, 0.04, 0.0, reason));
+  EXPECT_FALSE(validate_move_rel_deltas(0.15, 0.15, 0.0, reason));
   EXPECT_NE(reason.find("exceeds safety limit"), std::string::npos);
 }
 
 TEST(MoveRelValidatorTest, RejectsLargeSingleAxisDelta) {
-  // 0.06 > 0.05 limit
+  // 0.22 > 0.21 limit
   std::string reason;
-  EXPECT_FALSE(validate_move_rel_deltas(0.0, 0.0, 0.06, reason));
+  EXPECT_FALSE(validate_move_rel_deltas(0.0, 0.0, 0.22, reason));
   EXPECT_NE(reason.find("exceeds safety limit"), std::string::npos);
 }
 

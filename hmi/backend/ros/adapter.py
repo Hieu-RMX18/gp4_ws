@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import hashlib
-import hmac
 import importlib.util
 import json
 import logging
+import math
 from pathlib import Path
 import sys
 from threading import Lock, Thread
@@ -19,9 +18,8 @@ from .telemetry_snapshot import (
     _TelemetryState,
 )
 from ..domain.constants import GP4_JOINT_NAMES as DEFAULT_JOINT_NAMES
-from ..services.env_file import lookup_env_or_dotenv
 
-__all__ = ["DEFAULT_JOINT_NAMES", "WorkspaceRosAdapter", "build_review_intent_token"]
+__all__ = ["DEFAULT_JOINT_NAMES", "WorkspaceRosAdapter"]
 
 
 def _load_joint_state_type() -> Any:
@@ -104,33 +102,6 @@ DEFAULT_REVIEW_INTENT_TIMEOUT_SEC = 35.0
 DEFAULT_ACTION_WAIT_TIMEOUT_SEC = 5.0
 DEFAULT_EXECUTION_TIMEOUT_SEC = 120.0
 LOGGER = logging.getLogger("uvicorn.error")
-_REVIEW_INTENT_HMAC_VERSION = "v1"
-
-
-def build_review_intent_token(
-    *,
-    shared_secret: str,
-    raw_text: str,
-    runtime_mode: str,
-    session_id: str,
-    operator_id: str,
-    command_id: str,
-) -> str:
-    """Build a per-command ReviewIntent proof without sending the shared secret."""
-    normalized_fields = [
-        str(raw_text or "").strip(),
-        str(runtime_mode or "").strip(),
-        str(session_id or "").strip(),
-        str(operator_id or "").strip(),
-        str(command_id or "").strip(),
-    ]
-    message = "\0".join(normalized_fields).encode("utf-8")
-    digest = hmac.new(
-        str(shared_secret or "").encode("utf-8"),
-        message,
-        hashlib.sha256,
-    ).hexdigest()
-    return f"{_REVIEW_INTENT_HMAC_VERSION}:{digest}"
 
 
 KNOWN_WORKSPACE_ENDPOINTS = {
@@ -227,6 +198,7 @@ class WorkspaceRosAdapter(
         self._goal_lock = Lock()
         self._stop_requested = False
         self._command_interface_poll_period_sec = 0.5
+        self.on_llm_debug_callback: Callable[[dict[str, Any]], None] | None = None
 
     def start(self) -> None:
         if rclpy is None:
@@ -333,19 +305,7 @@ class WorkspaceRosAdapter(
         request.session_id = session_id
         request.operator_id = operator_id
         request.command_id = command_id
-        shared_secret = lookup_env_or_dotenv("GP4_REVIEW_INTENT_TOKEN")
-        request.review_token = (
-            build_review_intent_token(
-                shared_secret=shared_secret,
-                raw_text=raw_text,
-                runtime_mode=runtime_mode,
-                session_id=session_id,
-                operator_id=operator_id,
-                command_id=command_id,
-            )
-            if shared_secret
-            else ""
-        )
+        request.review_token = ""
         try:
             response = self._wait_for_future(
                 self._review_intent_client.call_async(request),
@@ -462,6 +422,37 @@ class WorkspaceRosAdapter(
                 "z": float(pose.orientation.z),
                 "w": float(pose.orientation.w),
             },
+        }
+
+    def read_tool_pose(self) -> dict[str, Any] | None:
+        """Return tool0 XYZ-RPY in base_link frame, or None if unavailable."""
+        pose = self.get_current_pose(reference_frame="base_link")
+        if pose is None:
+            return None
+        ori = pose.get("orientation", {})
+        x = float(ori.get("x", 0.0))
+        y = float(ori.get("y", 0.0))
+        z = float(ori.get("z", 0.0))
+        w = float(ori.get("w", 1.0))
+        # Quaternion to RPY (roll-pitch-yaw / XYZ convention)
+        sinr_cosp = 2.0 * (w * x + y * z)
+        cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+        roll = math.atan2(sinr_cosp, cosr_cosp)
+        sinp = 2.0 * (w * y - z * x)
+        sinp = max(-1.0, min(1.0, sinp))
+        pitch = math.asin(sinp)
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+        pos = pose.get("position", {})
+        return {
+            "x": round(float(pos.get("x", 0.0)), 4),
+            "y": round(float(pos.get("y", 0.0)), 4),
+            "z": round(float(pos.get("z", 0.0)), 4),
+            "roll": round(roll, 4),
+            "pitch": round(pitch, 4),
+            "yaw": round(yaw, 4),
+            "frameId": "base_link",
         }
 
     # ── W5.T4 new service clients ─────────────────────────────────────────
@@ -588,11 +579,15 @@ class WorkspaceRosAdapter(
         }
 
     def start_traj_mode(self) -> dict[str, Any]:
-        if (
-            self._node is None
-            or StartTrajModeSrv is None
-            or self._start_traj_client is None
-        ):
+        if StartTrajModeSrv is None:
+            return {
+                "accepted": False,
+                "message": (
+                    "motoros2_interfaces package is not installed in the HMI Python environment. "
+                    "Install it (e.g. rosdep install or pip install) so the HMI can call /yaskawa/start_traj_mode."
+                ),
+            }
+        if self._node is None or self._start_traj_client is None:
             return {"accepted": False, "message": "start_traj_mode service unavailable"}
         if not self._start_traj_client.wait_for_service(timeout_sec=2.0):
             return {"accepted": False, "message": "start_traj_mode service not ready"}
@@ -837,9 +832,15 @@ class WorkspaceRosAdapter(
             self._state.llm.gateway_status_text = str(msg.data)
 
     def _on_llm_debug(self, msg: Any) -> None:
-        _ = msg
         with self._lock:
             self._state.llm.debug_at = self._now()
+        if self.on_llm_debug_callback:
+            try:
+                import json
+                payload = json.loads(msg.data)
+                self.on_llm_debug_callback(payload)
+            except Exception:
+                pass
 
     def _on_llm_command(self, msg: Any) -> None:
         _ = msg

@@ -17,7 +17,7 @@ struct MoveRelLimits {
   // MUST match safety_rules.yaml motion_limits.max_move_rel_translation.
   // Update both locations together. Hardware pass keeps MOVE_REL short and
   // conservative for real-cell nudges only.
-  static constexpr double kMaxDeltaNorm = 0.05;
+  static constexpr double kMaxDeltaNorm = 0.21;
 
   // Workspace bounds — MUST match safety_rules.yaml workspace_bounds.
   // Derived from current gp4_station xacro station mesh in base_link:

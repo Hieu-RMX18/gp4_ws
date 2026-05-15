@@ -1,0 +1,33 @@
+.tcp-pose-panel {
+  padding: 0.5rem 0.75rem;
+  background: var(--color-background-primary);
+  border: 1px solid var(--color-border-tertiary);
+  border-radius: var(--border-radius-md);
+  margin-bottom: 0.75rem;
+}
+
+.tcp-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--color-text-primary);
+}
+
+.tcp-label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  min-width: 5rem;
+}
+
+.tcp-value {
+  font-family: var(--font-mono);
+  color: var(--color-text-info);
+}
+
+.tcp-frame {
+  margin-top: 0.25rem;
+  font-size: 0.7rem;
+  color: var(--color-text-tertiary);
+}

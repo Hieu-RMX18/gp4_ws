@@ -182,6 +182,7 @@ def test_move_group_launch_disables_moveit_owned_trajectory_execution(tmp_path):
         in parameters["disable_capabilities"]
     )
     assert "move_group/MoveGroupExecuteService" in parameters["disable_capabilities"]
+    assert parameters["capabilities"] == module.PILZ_SEQUENCE_ACTION_CAPABILITY
     assert "trajectory_execution" not in parameters
     assert "moveit_controller_manager" not in parameters
     assert "moveit_simple_controller_manager" not in parameters

@@ -917,6 +917,7 @@ PrimitiveRouterDispatch::plan_blended_sequence(
   // Build goal
   using MoveGroupSequence = moveit_msgs::action::MoveGroupSequence;
   MoveGroupSequence::Goal sequence_goal;
+  sequence_goal.planning_options.plan_only = true;
   sequence_goal.request.items.reserve(goal->sequence_steps.size());
 
   for (std::size_t i = 0; i < goal->sequence_steps.size(); ++i) {
@@ -953,7 +954,7 @@ PrimitiveRouterDispatch::plan_blended_sequence(
       rclcpp::NodeOptions()
           .automatically_declare_parameters_from_overrides(true));
   auto client = rclcpp_action::create_client<MoveGroupSequence>(
-      node, "move_group_sequence");
+      node, move_group_sequence_action_name());
 
   constexpr double kActionWaitSec = 10.0;
   if (!client->wait_for_action_server(

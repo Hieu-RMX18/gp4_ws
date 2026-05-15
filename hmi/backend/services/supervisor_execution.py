@@ -9,6 +9,7 @@ from ..domain.models import (
     CommandRecord,
     RuntimeMode,
     RuntimeSnapshot,
+    SystemRuntimeState,
 )
 
 
@@ -58,18 +59,16 @@ class SupervisorExecutionMixin:
     ) -> dict[str, Any]:
         lease = self._assert_controller(session_id, operator_id, lease_token)
         runtime = self._current_runtime()
-        if runtime.mode != RuntimeMode.HARDWARE:
-            return {
-                "accepted": False,
-                "message": f"{action_label} is allowed only in hardware mode.",
-            }
-
-        preflight = self._execution_preflight(requested_mode=RuntimeMode.HARDWARE)
+        preflight = self._servo_control_preflight(
+            runtime=runtime,
+            action_label=action_label,
+            require_auto=action_label == "Servo START",
+        )
         if not preflight["accepted"]:
             return {
                 "accepted": False,
                 "message": "; ".join(preflight["reasons"])
-                or "hardware preflight failed.",
+                or "servo control preflight failed.",
             }
 
         adapter_method = getattr(self._ros, adapter_method_name, None)
@@ -101,6 +100,50 @@ class SupervisorExecutionMixin:
             "message": str(result.get("message", "")),
         }
 
+    def _servo_control_preflight(
+        self,
+        *,
+        runtime: RuntimeSnapshot,
+        action_label: str,
+        require_auto: bool,
+    ) -> dict[str, Any]:
+        reasons: list[str] = []
+        robot_status = runtime.robot_status
+
+        if runtime.mode != RuntimeMode.HARDWARE:
+            reasons.append(f"{action_label} is allowed only in hardware mode.")
+
+        if runtime.system_state in {
+            SystemRuntimeState.ESTOP,
+            SystemRuntimeState.FAULT,
+            SystemRuntimeState.LOST_CONN,
+            SystemRuntimeState.TIMEOUT,
+        }:
+            reasons.append(
+                f"runtime state {runtime.system_state.value} blocks servo control."
+            )
+
+        if robot_status.e_stop != "CLEAR":
+            reasons.append(f"e-stop state must be CLEAR, got {robot_status.e_stop}.")
+
+        if robot_status.alarm_state != "NONE":
+            reasons.append(
+                f"alarm state must be NONE, got {robot_status.alarm_state}."
+            )
+
+        if require_auto and robot_status.motion_mode != "AUTO":
+            reasons.append(
+                f"robot motion mode must be AUTO before Servo START, got {robot_status.motion_mode}."
+            )
+
+        return {
+            "accepted": len(reasons) == 0,
+            "mode": runtime.mode.value,
+            "reasons": reasons,
+            "runtimeState": runtime.system_state.value,
+            "robotStatus": robot_status.to_dict(),
+        }
+
     def _confirm_command_internal(
         self,
         *,
@@ -116,6 +159,7 @@ class SupervisorExecutionMixin:
             lease=lease,
             parsed_intent=command.parsed_intent,
             requested_mode=command.mode,
+            enforce_execution_readiness=True,
         )
         if command.mode == RuntimeMode.HARDWARE:
             self._audit.record_runtime_event(

@@ -30,12 +30,12 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "depth_profile",
-                default_value="848x480x30",
+                default_value="848,480,30",
                 description="Depth stream resolution for calibration",
             ),
             DeclareLaunchArgument(
                 "color_profile",
-                default_value="1280x720x30",
+                default_value="1280,720,30",
                 description="Color stream resolution for ArUco detection",
             ),
             # Camera via rs_launch.py — same namespace strategy as camera.launch.py

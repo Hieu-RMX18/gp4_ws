@@ -96,6 +96,28 @@ def test_valid_two_step_pose_sequence(safety_rules):
     assert reason == ""
 
 
+def test_validate_callback_checks_blended_sequence_steps_not_default_goal_pose(
+    safety_rules,
+):
+    gate = _make_gate(safety_rules)
+    cmd = {
+        "primitive_type": "BLENDED_SEQUENCE",
+        "sequence_steps": [
+            _valid_step(blend_radius_m=0.01),
+            _valid_step(blend_radius_m=0.0, x=0.20),
+        ],
+    }
+    request = _make_request()
+    request.command_json = json.dumps(cmd)
+    request.target_pose.position.z = 0.0
+    response = MagicMock(valid=False, reason="", sanitized_json="")
+
+    result = gate.validate_callback(request, response)
+
+    assert result.valid is True
+    assert json.loads(result.sanitized_json)["primitive_type"] == "BLENDED_SEQUENCE"
+
+
 def test_rejects_single_step(safety_rules):
     gate = _make_gate(safety_rules)
     cmd = {
@@ -197,10 +219,10 @@ def test_rejects_pose_step_outside_workspace(safety_rules):
     assert "out of bounds" in reason
 
 
-# ── GOAL_JOINTS checks ──
+# ── Unsupported typed-step checks ──
 
 
-def test_valid_joints_step(safety_rules):
+def test_rejects_joints_step(safety_rules):
     gate = _make_gate(safety_rules)
     cmd = {
         "primitive_type": "BLENDED_SEQUENCE",
@@ -210,42 +232,11 @@ def test_valid_joints_step(safety_rules):
         ],
     }
     ok, reason = gate._validate_blended_sequence(cmd, _make_request())
-    assert ok is True
-
-
-def test_rejects_joints_step_wrong_count(safety_rules):
-    gate = _make_gate(safety_rules)
-    cmd = {
-        "primitive_type": "BLENDED_SEQUENCE",
-        "sequence_steps": [
-            _joints_step([0.0, 0.0, 0.0], blend_radius_m=0.01),
-            _valid_step(blend_radius_m=0.0),
-        ],
-    }
-    ok, reason = gate._validate_blended_sequence(cmd, _make_request())
     assert ok is False
-    assert "exactly 6 joint_target values" in reason
+    assert "GOAL_JOINTS is not supported" in reason
 
 
-def test_rejects_joints_step_outside_limits(safety_rules):
-    gate = _make_gate(safety_rules)
-    cmd = {
-        "primitive_type": "BLENDED_SEQUENCE",
-        "sequence_steps": [
-            _joints_step([0.0, 0.0, 0.0, 0.0, 0.0, 0.0], blend_radius_m=0.01),
-            # J5 limit max is 1.603 rad; use 2.0 rad to trigger reject
-            _joints_step([0.0, 0.0, 0.0, 0.0, 2.0, 0.0], blend_radius_m=0.0),
-        ],
-    }
-    ok, reason = gate._validate_blended_sequence(cmd, _make_request())
-    assert ok is False
-    assert "joint_5_b" in reason and "above limit" in reason
-
-
-# ── GOAL_NAMED checks ──
-
-
-def test_valid_named_step_home(safety_rules):
+def test_rejects_named_step_home(safety_rules):
     gate = _make_gate(safety_rules)
     cmd = {
         "primitive_type": "BLENDED_SEQUENCE",
@@ -255,7 +246,22 @@ def test_valid_named_step_home(safety_rules):
         ],
     }
     ok, reason = gate._validate_blended_sequence(cmd, _make_request())
-    assert ok is True
+    assert ok is False
+    assert "GOAL_NAMED is not supported" in reason
+
+
+def test_rejects_home_primitive_step(safety_rules):
+    gate = _make_gate(safety_rules)
+    cmd = {
+        "primitive_type": "BLENDED_SEQUENCE",
+        "sequence_steps": [
+            _valid_step(primitive_type="HOME", blend_radius_m=0.0),
+            _valid_step(blend_radius_m=0.0),
+        ],
+    }
+    ok, reason = gate._validate_blended_sequence(cmd, _make_request())
+    assert ok is False
+    assert "unsupported primitive_type" in reason
 
 
 def test_rejects_named_step_not_in_allowlist(safety_rules):
@@ -269,7 +275,7 @@ def test_rejects_named_step_not_in_allowlist(safety_rules):
     }
     ok, reason = gate._validate_blended_sequence(cmd, _make_request())
     assert ok is False
-    assert "named_target" in reason and "not in allowed set" in reason
+    assert "GOAL_NAMED is not supported" in reason
 
 
 def test_rejects_named_step_empty(safety_rules):
@@ -283,4 +289,4 @@ def test_rejects_named_step_empty(safety_rules):
     }
     ok, reason = gate._validate_blended_sequence(cmd, _make_request())
     assert ok is False
-    assert "GOAL_NAMED requires named_target" in reason
+    assert "GOAL_NAMED is not supported" in reason

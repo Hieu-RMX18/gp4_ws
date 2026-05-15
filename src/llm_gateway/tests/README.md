@@ -14,16 +14,17 @@ This tier covers:
 
 | Test file                         | Focus                                         |
 | --------------------------------- | --------------------------------------------- |
-| `test_parser.py`                  | LLM response extraction                       |
-| `test_schema_validator.py`        | Schema envelope checks                        |
+| `test_core_pipeline.py`           | Parser, execution command helpers, workplane hydration |
+| `test_contracts.py`               | Schema, semantic IR, and cross-layer contract checks |
 | `test_normalizer.py`              | Normalization defaults                        |
 | `test_semantic_validator.py`      | Semantic safety rules                         |
-| `test_contract_consistency.py`    | Cross-layer primitive set alignment           |
 | `test_intent_router.py`           | Semantic IR → primitive routing               |
-| `test_draw_shape.py`              | draw_shape macro routing (sim-only policy)    |
+| `test_drawing.py`                 | Drawing geometry, draw_shape, draw_text, stroke font |
 | `test_sequence_validator.py`      | Sequence prevalidation logic                  |
 | `test_prompt_builder_v2_1.py`     | System prompt contract tests                  |
-| `test_react_tools/`               | Source-level ReAct tool safety contracts      |
+| `test_react_agent.py`             | ReAct agent loop, state injector, iteration budget |
+| `test_react_tools.py`             | Source-level ReAct tool safety contracts      |
+| `test_llm_backend.py`             | LLM backend config and retry behavior         |
 | `test_get_pose.py` (Tier 1 tests) | GET_POSE schema, normalizer, semantic, parser |
 
 **How to run:**

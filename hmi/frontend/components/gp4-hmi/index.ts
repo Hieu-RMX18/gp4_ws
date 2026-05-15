@@ -5,6 +5,7 @@ export { QuickCommands } from './QuickCommands';
 export { ChatPanel } from './ChatPanel';
 export { CommandComposer } from './CommandComposer';
 export { SystemMetrics } from './SystemMetrics';
+export { TcpPosePanel } from './TcpPosePanel';
 export { TelemetrySources } from './TelemetrySources';
 export { ControlLeasePanel } from './ControlLeasePanel';
 export { SystemLog } from './SystemLog';

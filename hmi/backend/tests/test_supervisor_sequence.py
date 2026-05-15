@@ -211,13 +211,13 @@ class ShouldEmitBlendedSequenceTests(unittest.TestCase):
             SupervisorSequenceMixin._should_emit_blended_sequence(steps, None)
         )
 
-    def test_mixed_ptp_lin_home_eligible(self) -> None:
+    def test_mixed_ptp_lin_home_not_eligible(self) -> None:
         steps = [
             {"action": "PTP", "targetSummary": "A"},
             {"action": "LIN", "targetSummary": "B"},
             {"action": "HOME", "targetSummary": "C"},
         ]
-        self.assertTrue(
+        self.assertFalse(
             SupervisorSequenceMixin._should_emit_blended_sequence(steps, None)
         )
 

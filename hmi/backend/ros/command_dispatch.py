@@ -377,6 +377,7 @@ class CommandDispatchMixin:
             "IO_SET",
             "ALARM_RESET",
             "GET_POSE",
+            "BLENDED_SEQUENCE",
         }:
             payload = {"primitive_type": primitive_action}
             payload.update(parameters)
@@ -765,6 +766,10 @@ class CommandDispatchMixin:
         step.primitive_type = str(payload.get("primitive_type", "LIN"))
         if "target_pose" in payload and Pose is not None:
             step.target_pose = self._dict_to_pose(payload["target_pose"])
+        if "joint_target" in payload:
+            step.joint_target = [
+                float(value) for value in payload["joint_target"]
+            ]
         step.blend_radius_m = float(payload.get("blend_radius_m", 0.0))
         step.planner_id = str(payload.get("planner_id", "PILZ_LIN"))
         step.velocity_scale = float(payload.get("velocity_scale", 0.0))

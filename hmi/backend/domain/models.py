@@ -257,6 +257,7 @@ class CommandRecord:
     sequence_diagnostics: list[str] = field(default_factory=list)
     child_command_ids: list[str] = field(default_factory=list)
     manual_recovery_required: bool = False
+    pipeline_traces: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)

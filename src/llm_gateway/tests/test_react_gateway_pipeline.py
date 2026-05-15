@@ -49,8 +49,7 @@ def _make_gateway_shell(react_result):
     LLMGatewayNode = _gateway_node_type()
     node = object.__new__(LLMGatewayNode)
     node._runtime_mode = "hardware"
-    node._review_intent_token = "review-token"
-    node._review_intent_requires_token = True
+    node._review_intent_requires_token = False
     node._react_enabled = True
     node._react_agent = _StaticReActAgent(react_result)
     node._llm_client = _LegacyClientMustNotRun()
@@ -82,26 +81,6 @@ def _make_gateway_shell(react_result):
     return node, statuses, dispatched
 
 
-def _signed_review_token(
-    *,
-    raw_text: str,
-    runtime_mode: str,
-    session_id: str = "session-a",
-    operator_id: str = "operator-a",
-    command_id: str = "command-a",
-) -> str:
-    from llm_gateway.llm_gateway_node import build_review_intent_token
-
-    return build_review_intent_token(
-        shared_secret="review-token",  # pragma: allowlist secret
-        raw_text=raw_text,
-        runtime_mode=runtime_mode,
-        session_id=session_id,
-        operator_id=operator_id,
-        command_id=command_id,
-    )
-
-
 def test_react_semantic_ir_go_home_routes_through_intent_router():
     node, statuses, dispatched = _make_gateway_shell({"intent": "go_home"})
 
@@ -123,10 +102,7 @@ def test_review_intent_returns_semantic_ir_without_dispatching_motion():
         session_id="session-a",
         operator_id="operator-a",
         command_id="command-a",
-        review_token=_signed_review_token(
-            raw_text="move to ready",
-            runtime_mode="hardware",
-        ),
+        review_token="",
     )
     response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
 
@@ -150,10 +126,7 @@ def test_review_intent_home_motion_uses_react_without_dispatching_motion():
         session_id="session-a",
         operator_id="operator-a",
         command_id="command-a",
-        review_token=_signed_review_token(
-            raw_text="di ve home",
-            runtime_mode="hardware",
-        ),
+        review_token="",
     )
     response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
 
@@ -173,6 +146,18 @@ def test_review_intent_home_motion_uses_react_without_dispatching_motion():
         ("stop", '{"intent":"stop"}'),
         ("get pose", '{"intent":"get_pose","reference_frame":"base_link"}'),
         ("wait 2 s", '{"intent":"wait","wait_duration_sec":2.0}'),
+        (
+            "move down 1 cm",
+            '{"intent":"move_relative","delta":{"x":0.0,"y":0.0,"z":-0.01},"reference_frame":"base_link"}',
+        ),
+        (
+            "move joint 2 5 deg",
+            '{"intent":"move_joint","joint_index":1,"joint_angle":0.08726646259971647}',
+        ),
+        (
+            "home, wait 1 s, then move down 1 cm",
+            '{"intent":"sequence","steps":[{"intent":"go_home"},{"intent":"wait","wait_duration_sec":1.0},{"intent":"move_relative","delta":{"x":0.0,"y":0.0,"z":-0.01},"reference_frame":"base_link"}]}',
+        ),
     ],
 )
 def test_review_intent_direct_quick_commands_skip_react_tools(
@@ -187,10 +172,99 @@ def test_review_intent_direct_quick_commands_skip_react_tools(
         session_id="session-a",
         operator_id="operator-a",
         command_id="command-a",
-        review_token=_signed_review_token(
-            raw_text=raw_text,
-            runtime_mode="hardware",
+        review_token="",
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is True
+    assert result.error == ""
+    assert result.semantic_ir_json == expected_semantic_ir_json
+    assert node._react_agent.user_text is None
+    assert dispatched == []
+    assert "routed" not in statuses
+
+
+def test_review_intent_forward_fast_path_uses_tool0_orientation():
+    node, _statuses, dispatched = _make_gateway_shell(
+        {"intent": "error", "error": "react should not run for direct tool move"}
+    )
+    node._request_current_pose_snapshot = lambda reference_frame: {
+        "position": {"x": 0.3, "y": 0.0, "z": 0.3},
+        "orientation": {"x": 0.0, "y": 0.0, "z": 0.70710678, "w": 0.70710678},
+    }
+    request = SimpleNamespace(
+        raw_text="move forward 5 cm",
+        runtime_mode="hardware",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token="",
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is True
+    assert result.error == ""
+    semantic_ir = LLMParser().parse(result.semantic_ir_json)
+    assert semantic_ir["intent"] == "move_relative"
+    assert semantic_ir["reference_frame"] == "base_link"
+    assert semantic_ir["delta"]["x"] == pytest.approx(0.0, abs=1e-8)
+    assert semantic_ir["delta"]["y"] == pytest.approx(0.05)
+    assert dispatched == []
+
+
+def test_review_intent_forward_fast_path_fails_closed_without_current_pose():
+    node, _statuses, dispatched = _make_gateway_shell(
+        {"intent": "error", "error": "react should not run for direct tool move"}
+    )
+    node._request_current_pose_snapshot = lambda reference_frame: None
+    request = SimpleNamespace(
+        raw_text="move forward 5 cm",
+        runtime_mode="hardware",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token="",
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is False
+    assert "current pose unavailable" in result.error
+    assert dispatched == []
+
+
+@pytest.mark.parametrize(
+    ("raw_text", "expected_semantic_ir_json"),
+    [
+        (
+            "draw a circle with radius 10 mm",
+            '{"intent":"draw_shape","shape_type":"circle","units":"mm","frame_id":"base_link","params":{"radius":10.0}}',
         ),
+        (
+            "write GP4",
+            '{"intent":"draw_text","text":"GP4","units":"mm","frame_id":"base_link","font":{"type":"single_stroke_builtin","height":20}}',
+        ),
+    ],
+)
+def test_review_intent_direct_sim_draw_commands_skip_react_tools(
+    raw_text, expected_semantic_ir_json
+):
+    node, statuses, dispatched = _make_gateway_shell(
+        {"intent": "error", "error": "react should not run for deterministic sim draw commands"}
+    )
+    node._runtime_mode = "sim"
+    request = SimpleNamespace(
+        raw_text=raw_text,
+        runtime_mode="sim",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token="",
     )
     response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
 
@@ -226,10 +300,7 @@ def test_review_intent_named_pose_motion_uses_react(raw_text, react_result):
         session_id="session-a",
         operator_id="operator-a",
         command_id="command-a",
-        review_token=_signed_review_token(
-            raw_text=raw_text,
-            runtime_mode="hardware",
-        ),
+        review_token="",
     )
     response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
 
@@ -251,15 +322,6 @@ def test_review_intent_named_pose_motion_uses_react(raw_text, react_result):
     ("raw_text", "react_result"),
     [
         (
-            "move up 5 cm",
-            {
-                "intent": "move_relative",
-                "delta": {"x": 0.0, "y": 0.0, "z": 5.0},
-                "linear_unit": "cm",
-                "reference_frame": "base_link",
-            },
-        ),
-        (
             "move to Cartesian x 300 mm y 0 z 400",
             {
                 "intent": "absolute_move_ptp",
@@ -278,10 +340,7 @@ def test_review_intent_cartesian_motion_text_uses_react(raw_text, react_result):
         session_id="session-a",
         operator_id="operator-a",
         command_id="command-a",
-        review_token=_signed_review_token(
-            raw_text=raw_text,
-            runtime_mode="hardware",
-        ),
+        review_token="",
     )
     response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
 
@@ -318,7 +377,7 @@ def test_review_intent_rejects_runtime_mode_mismatch_before_llm_call(monkeypatch
         session_id="session-a",
         operator_id="operator-a",
         command_id="command-a",
-        review_token=_signed_review_token(raw_text="go home", runtime_mode="sim"),
+        review_token="",
     )
     response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
 
@@ -332,7 +391,7 @@ def test_review_intent_rejects_runtime_mode_mismatch_before_llm_call(monkeypatch
     assert "routed" not in statuses
 
 
-def test_review_intent_rejects_missing_review_token_before_llm_call():
+def test_review_intent_accepts_missing_review_token():
     node, _statuses, dispatched = _make_gateway_shell({"intent": "go_home"})
     request = SimpleNamespace(
         raw_text="go home",
@@ -346,13 +405,13 @@ def test_review_intent_rejects_missing_review_token_before_llm_call():
 
     result = node._on_review_intent(request, response)
 
-    assert result.accepted is False
-    assert "review token" in result.error
+    assert result.accepted is True
+    assert result.error == ""
     assert node._react_agent.user_text is None
     assert dispatched == []
 
 
-def test_review_intent_rejects_plain_shared_secret_token_before_llm_call():
+def test_review_intent_ignores_legacy_review_token_value():
     node, _statuses, dispatched = _make_gateway_shell({"intent": "go_home"})
     request = SimpleNamespace(
         raw_text="go home",
@@ -366,16 +425,15 @@ def test_review_intent_rejects_plain_shared_secret_token_before_llm_call():
 
     result = node._on_review_intent(request, response)
 
-    assert result.accepted is False
-    assert "review token mismatch" in result.error
+    assert result.accepted is True
+    assert result.error == ""
     assert node._react_agent.user_text is None
     assert dispatched == []
 
 
-def test_review_intent_requires_configured_token_even_in_sim_before_llm_call():
+def test_review_intent_accepts_when_token_not_required_and_not_configured():
     node, _statuses, dispatched = _make_gateway_shell({"intent": "go_home"})
     node._runtime_mode = "sim"
-    node._review_intent_token = ""
     node._review_intent_requires_token = False
     request = SimpleNamespace(
         raw_text="go home",
@@ -389,9 +447,8 @@ def test_review_intent_requires_configured_token_even_in_sim_before_llm_call():
 
     result = node._on_review_intent(request, response)
 
-    assert result.accepted is False
-    assert "review token" in result.error
-    assert node._react_agent.user_text is None
+    assert result.accepted is True
+    assert result.error == ""
     assert dispatched == []
 
 

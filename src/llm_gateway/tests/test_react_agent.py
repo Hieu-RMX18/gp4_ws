@@ -1,3 +1,8 @@
+"""Consolidated tests; original source sections are marked below."""
+
+
+
+# ---- test_react_agent_basic.py ----
 """Tests for ReAct agent basic behaviour."""
 
 import json
@@ -456,3 +461,178 @@ def test_agent_llm_error_produces_handoff():
     result = agent.run("anything")
     assert result.get("_handoff") is True
     assert "llm_request_failed" in result["reason"]
+
+
+# ---- test_react_iteration_budget.py ----
+"""Tests for ReAct iteration budget tiering."""
+
+from llm_gateway.react_planner import IterationBudget, IterationCounters
+from llm_gateway.react_planner import Tool
+
+
+class FakeReadonlyTool(Tool):
+    name = "readonly_tool"
+    is_readonly = True
+
+
+class FakeMotionTool(Tool):
+    name = "motion_tool"
+    is_motion = True
+
+
+class FakeComboTool(Tool):
+    name = "combo_tool"
+    is_readonly = True
+    is_motion = True
+
+
+def test_counters_start_at_zero():
+    c = IterationCounters()
+    assert c.total == 0
+    assert c.motion == 0
+    assert c.readonly == 0
+    assert c.repair == 0
+
+
+def test_can_invoke_readonly_within_budget():
+    budget = IterationBudget(max_total=5, max_readonly=3)
+    c = IterationCounters()
+    t = FakeReadonlyTool()
+    ok, reason = c.can_invoke(t, budget)
+    assert ok is True
+    assert reason == ""
+
+
+def test_readonly_exhausted():
+    budget = IterationBudget(max_total=5, max_readonly=2)
+    c = IterationCounters()
+    t = FakeReadonlyTool()
+    c.record(t)
+    c.record(t)
+    ok, reason = c.can_invoke(t, budget)
+    assert ok is False
+    assert "max_readonly exceeded" in reason
+
+
+def test_motion_exhausted():
+    budget = IterationBudget(max_total=5, max_motion=1)
+    c = IterationCounters()
+    t = FakeMotionTool()
+    c.record(t)
+    ok, reason = c.can_invoke(t, budget)
+    assert ok is False
+    assert "max_motion exceeded" in reason
+
+
+def test_total_exhausted():
+    budget = IterationBudget(max_total=2)
+    c = IterationCounters()
+    t = FakeReadonlyTool()
+    c.record(t)
+    c.record(t)
+    ok, reason = c.can_invoke(t, budget)
+    assert ok is False
+    assert "max_total exceeded" in reason
+
+
+def test_combo_tool_counts_both():
+    c = IterationCounters()
+    t = FakeComboTool()
+    c.record(t)
+    assert c.total == 1
+    assert c.motion == 1
+    assert c.readonly == 1
+
+
+# ---- test_react_state_injector.py ----
+"""Tests for ReAct state injector."""
+
+import ast
+from pathlib import Path
+
+from llm_gateway.react_planner import StateInjector
+
+
+def _subscription_qos_arg(constructor: ast.FunctionDef, topic: str) -> ast.AST:
+    for node in ast.walk(constructor):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "create_subscription"
+            and len(node.args) >= 4
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == topic
+        ):
+            continue
+        return node.args[3]
+    raise AssertionError(f"missing {topic} subscription")
+
+
+def test_react_state_subscriptions_use_sensor_qos():
+    node_path = (
+        Path(__file__).resolve().parents[1] / "llm_gateway" / "llm_gateway_node.py"
+    )
+    module = ast.parse(node_path.read_text(encoding="utf-8"))
+    node_class = next(
+        item
+        for item in module.body
+        if isinstance(item, ast.ClassDef) and item.name == "LLMGatewayNode"
+    )
+    constructor = next(
+        item
+        for item in node_class.body
+        if isinstance(item, ast.FunctionDef) and item.name == "__init__"
+    )
+
+    for topic in ("/yaskawa/joint_states", "/yaskawa/robot_status"):
+        qos_arg = _subscription_qos_arg(constructor, topic)
+        assert isinstance(qos_arg, ast.Name)
+        assert qos_arg.id == "qos_profile_sensor_data"
+
+
+def test_default_snapshot():
+    inj = StateInjector()
+    snap = inj.snapshot()
+    rs = snap["robot_state"]
+    assert rs["joints_rad"] == [0.0] * 6
+    assert rs["joint_names"] == [
+        "joint_1_s",
+        "joint_2_l",
+        "joint_3_u",
+        "joint_4_r",
+        "joint_5_b",
+        "joint_6_t",
+    ]
+    assert rs["mode"] == "IDLE"
+    assert rs["active_alarms"] == []
+    assert rs["velocity_scale_active"] == 0.06
+    assert rs["capabilities"] == {"gripper": False, "perception": False}
+
+
+def test_update_joint_states():
+    inj = StateInjector()
+    inj.update_joint_states({"position": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]})
+    snap = inj.snapshot()
+    assert snap["robot_state"]["joints_rad"] == [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+
+
+def test_update_robot_status():
+    inj = StateInjector()
+    inj.update_robot_status({"mode": "MOVING", "active_alarms": ["alarm1"]})
+    snap = inj.snapshot()
+    assert snap["robot_state"]["mode"] == "MOVING"
+    assert snap["robot_state"]["active_alarms"] == ["alarm1"]
+
+
+def test_set_velocity_scale():
+    inj = StateInjector()
+    inj.set_velocity_scale(0.25)
+    assert inj.snapshot()["robot_state"]["velocity_scale_active"] == 0.25
+
+
+def test_set_capabilities():
+    inj = StateInjector()
+    inj.set_capabilities(gripper=True, perception=False)
+    caps = inj.snapshot()["robot_state"]["capabilities"]
+    assert caps["gripper"] is True
+    assert caps["perception"] is False

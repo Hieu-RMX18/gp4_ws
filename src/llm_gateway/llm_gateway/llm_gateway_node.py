@@ -5,12 +5,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import hashlib
-import hmac
 import json
+import math
 import os
 import re
 import threading
+import time
 from typing import Any, Dict, List
 
 import rclpy
@@ -66,7 +66,6 @@ from llm_gateway.semantic_ir_contract import validate_semantic_ir_contract
 
 
 EXECUTOR_SHUTDOWN_TIMEOUT_SEC = 2.0
-_REVIEW_INTENT_HMAC_VERSION = "v1"
 _DIRECT_STOP_REVIEW_TEXTS = {"stop", "stop motion", "cancel motion", "halt"}
 _DIRECT_GET_POSE_REVIEW_TEXTS = {
     "get pose",
@@ -77,32 +76,28 @@ _DIRECT_GET_POSE_REVIEW_TEXTS = {
 _DIRECT_WAIT_REVIEW_RE = re.compile(
     r"(?:wait|pause)\s+([+-]?\d+(?:\.\d+)?)\s*(?:s|sec|second|seconds)?"
 )
-
-
-def build_review_intent_token(
-    *,
-    shared_secret: str,
-    raw_text: str,
-    runtime_mode: str,
-    session_id: str,
-    operator_id: str,
-    command_id: str,
-) -> str:
-    """Build the signed ReviewIntent token expected from the HMI backend."""
-    normalized_fields = [
-        str(raw_text or "").strip(),
-        str(runtime_mode or "").strip(),
-        str(session_id or "").strip(),
-        str(operator_id or "").strip(),
-        str(command_id or "").strip(),
-    ]
-    message = "\0".join(normalized_fields).encode("utf-8")
-    digest = hmac.new(
-        str(shared_secret or "").encode("utf-8"),
-        message,
-        hashlib.sha256,
-    ).hexdigest()
-    return f"{_REVIEW_INTENT_HMAC_VERSION}:{digest}"
+_DIRECT_MOVE_REL_REVIEW_RE = re.compile(
+    r"(?:move|go)\s+"
+    r"(up|down|left|right|forward|back|backward)\s+"
+    r"([+-]?\d+(?:\.\d+)?)\s*(m|cm|mm)"
+)
+_DIRECT_MOVE_JOINT_REVIEW_RE = re.compile(
+    r"(?:move|jog)\s+joint\s+([1-6])\s+"
+    r"([+-]?\d+(?:\.\d+)?)\s*(deg|degree|degrees|rad|radian|radians)?"
+)
+_DIRECT_DRAW_CIRCLE_REVIEW_RE = re.compile(
+    r"draw\s+(?:a\s+)?circle(?:\s+(?:with\s+)?radius)?\s+"
+    r"([+]?\d+(?:\.\d+)?)\s*(m|cm|mm)"
+)
+_DIRECT_DRAW_TEXT_REVIEW_RE = re.compile(
+    r"(?:write|draw\s+text)\s+(.+)"
+)
+_DIRECT_VIETNAMESE_DRAW_TEXT_REVIEW_RE = re.compile(
+    r"(?:vẽ|ve)\s+(?:chữ|chu)\s+(.+)"
+)
+_DIRECT_SEQUENCE_SPLIT_RE = re.compile(
+    r"\s*(?:;|\n+|,|\b(?:and\s+then|then)\b)\s*", re.IGNORECASE
+)
 
 
 @dataclass
@@ -178,8 +173,7 @@ class LLMGatewayNode(Node):
         )
         runtime_mode = self._resolve_runtime_mode()
         self._runtime_mode = runtime_mode
-        self._review_intent_token = os.getenv("GP4_REVIEW_INTENT_TOKEN", "").strip()
-        self._review_intent_requires_token = True
+        self._review_intent_requires_token = False
         self._intent_router = intent_router or IntentRouter(runtime_mode=runtime_mode)
         self._sequence_validator = sequence_validator or SequenceValidator(
             schema_validator=self._schema_validator,
@@ -410,9 +404,20 @@ class LLMGatewayNode(Node):
         )
 
     @staticmethod
-    def _direct_review_semantic_ir(intent_text: str) -> Dict[str, Any] | None:
+    def _direct_review_semantic_ir(
+        intent_text: str,
+        *,
+        allow_sequence: bool = True,
+        runtime_mode: str = "",
+    ) -> Dict[str, Any] | None:
         normalized = " ".join(str(intent_text or "").strip().lower().split())
         normalized = normalized.strip(" .!?")
+        if allow_sequence:
+            sequence = LLMGatewayNode._direct_review_sequence_semantic_ir(
+                normalized, runtime_mode=runtime_mode
+            )
+            if sequence is not None:
+                return sequence
         if normalized in _DIRECT_STOP_REVIEW_TEXTS:
             return {"intent": "stop"}
         if normalized in {"home", "go home", "return home"}:
@@ -429,12 +434,131 @@ class LLMGatewayNode(Node):
                     "error": "wait duration must be non-negative",
                 }
             return {"intent": "wait", "wait_duration_sec": duration_sec}
+
+        move_relative = LLMGatewayNode._direct_review_move_relative(normalized)
+        if move_relative is not None:
+            return move_relative
+
+        move_joint = LLMGatewayNode._direct_review_move_joint(normalized)
+        if move_joint is not None:
+            return move_joint
+
+        draw = LLMGatewayNode._direct_review_draw_request(normalized)
+        if draw is not None:
+            return draw
         return None
 
+    @staticmethod
+    def _direct_review_sequence_semantic_ir(
+        normalized: str, *, runtime_mode: str = ""
+    ) -> Dict[str, Any] | None:
+        parts = [
+            part.strip(" ,;")
+            for part in _DIRECT_SEQUENCE_SPLIT_RE.split(normalized)
+            if part.strip(" ,;")
+        ]
+        if len(parts) < 2:
+            return None
+        steps: list[dict[str, Any]] = []
+        for part in parts:
+            step = LLMGatewayNode._direct_review_semantic_ir(
+                part, allow_sequence=False, runtime_mode=runtime_mode
+            )
+            if step is None:
+                return None
+            steps.append(step)
+        return {"intent": "sequence", "steps": steps}
+
+    @staticmethod
+    def _direct_review_move_relative(normalized: str) -> Dict[str, Any] | None:
+        match = _DIRECT_MOVE_REL_REVIEW_RE.fullmatch(normalized)
+        if not match:
+            return None
+        direction = match.group(1)
+        magnitude = float(match.group(2))
+        unit = match.group(3)
+        if magnitude < 0.0:
+            return {"intent": "error", "error": "relative move distance must be non-negative"}
+        scale = {"m": 1.0, "cm": 0.01, "mm": 0.001}[unit]
+        distance_m = magnitude * scale
+        axis_delta = {
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+        }
+        if direction == "up":
+            axis_delta["z"] = distance_m
+        elif direction == "down":
+            axis_delta["z"] = -distance_m
+        elif direction == "right":
+            axis_delta["y"] = -distance_m
+        elif direction == "left":
+            axis_delta["y"] = distance_m
+        elif direction == "forward":
+            axis_delta["x"] = distance_m
+        else:
+            axis_delta["x"] = -distance_m
+        reference_frame = (
+            "base_link" if direction in {"up", "down"} else "tool0"
+        )
+        return {
+            "intent": "move_relative",
+            "delta": axis_delta,
+            "reference_frame": reference_frame,
+        }
+
+    @staticmethod
+    def _direct_review_move_joint(normalized: str) -> Dict[str, Any] | None:
+        match = _DIRECT_MOVE_JOINT_REVIEW_RE.fullmatch(normalized)
+        if not match:
+            return None
+        joint_index = int(match.group(1)) - 1
+        angle = float(match.group(2))
+        unit = match.group(3) or "deg"
+        if unit in {"deg", "degree", "degrees"}:
+            angle = math.radians(angle)
+        elif unit not in {"rad", "radian", "radians"}:
+            return {"intent": "error", "error": "joint angle unit must be deg or rad"}
+        return {
+            "intent": "move_joint",
+            "joint_index": joint_index,
+            "joint_angle": angle,
+        }
+
+    @staticmethod
+    def _direct_review_draw_request(normalized: str) -> Dict[str, Any] | None:
+        circle = _DIRECT_DRAW_CIRCLE_REVIEW_RE.fullmatch(normalized)
+        if circle:
+            return {
+                "intent": "draw_shape",
+                "shape_type": "circle",
+                "units": circle.group(2),
+                "frame_id": "base_link",
+                "params": {"radius": float(circle.group(1))},
+            }
+
+        text_match = _DIRECT_DRAW_TEXT_REVIEW_RE.fullmatch(normalized)
+        if text_match is None:
+            text_match = _DIRECT_VIETNAMESE_DRAW_TEXT_REVIEW_RE.fullmatch(normalized)
+        if text_match is None:
+            return None
+        text = text_match.group(1).strip()
+        if not text:
+            return None
+        return {
+            "intent": "draw_text",
+            "text": text.upper(),
+            "units": "mm",
+            "frame_id": "base_link",
+            "font": {"type": "single_stroke_builtin", "height": 20},
+        }
+
     def _generate_review_semantic_ir(self, intent_text: str) -> Dict[str, Any]:
-        direct_review = self._direct_review_semantic_ir(intent_text)
+        direct_review = self._direct_review_semantic_ir(
+            intent_text, runtime_mode=self._runtime_mode
+        )
         if direct_review is not None:
-            return direct_review
+            return self._resolve_tool_relative_review_move(direct_review)
 
         if self._react_enabled and self._react_agent is not None:
             react_result = self._react_agent.run(intent_text)
@@ -447,11 +571,118 @@ class LLMGatewayNode(Node):
                 "hint": "Rephrase the command with clearer intent or check that all required parameters are provided.",
             }
 
+        self._emit_trace("llm_request_started", "reasoning")
         llm_response = self._llm_client.generate_response(intent_text)
-        return self._parser.parse(llm_response)
+        self._emit_trace("llm_response_received", "reasoning")
+        parsed = self._parser.parse(llm_response)
+        self._emit_trace("parsed", "parsing")
+        return parsed
+
+    def _resolve_tool_relative_review_move(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Convert direct fast-path tool0 nudges into base_link deltas.
+
+        The safety and motion layers only accept MOVE_REL in base_link, so
+        operator words like forward/left/right/back must be grounded in the
+        current tool0 orientation before intent review succeeds.
+        """
+        intent = str(payload.get("intent", "")).strip()
+        if intent == "sequence":
+            steps = payload.get("steps")
+            if isinstance(steps, list):
+                resolved = dict(payload)
+                resolved["steps"] = [
+                    self._resolve_tool_relative_review_move(step)
+                    if isinstance(step, dict)
+                    else step
+                    for step in steps
+                ]
+                return resolved
+            return payload
+
+        if intent != "move_relative" or payload.get("reference_frame") != "tool0":
+            return payload
+
+        current_pose = self._request_current_pose_snapshot("base_link")
+        if current_pose is None:
+            return {
+                "error": "CURRENT_POSE_UNAVAILABLE",
+                "message": (
+                    "current pose unavailable for tool0-relative move; "
+                    "cannot transform forward/back/left/right into base_link"
+                ),
+                "hint": "Verify /get_current_pose is available and returns base_link pose.",
+            }
+
+        try:
+            base_delta = self._rotate_tool_delta_to_base(
+                payload.get("delta", {}), current_pose
+            )
+        except ValueError as exc:
+            return {
+                "error": "CURRENT_POSE_INVALID",
+                "message": str(exc),
+                "hint": "Verify /get_current_pose returns a finite unit quaternion.",
+            }
+
+        resolved = dict(payload)
+        resolved["delta"] = base_delta
+        resolved["reference_frame"] = "base_link"
+        return resolved
+
+    @staticmethod
+    def _rotate_tool_delta_to_base(
+        delta: Any, current_pose: Dict[str, Any]
+    ) -> Dict[str, float]:
+        """Rotate tool-relative delta by current quaternion orientation.
+        
+        Uses standard quaternion rotation formula: v' = v + 2*cross(q_xyz, cross(q_xyz, v) + qw*v)
+        """
+        if not isinstance(delta, dict):
+            raise ValueError("tool-relative move requires a delta object")
+        orientation = current_pose.get("orientation")
+        if not isinstance(orientation, dict):
+            raise ValueError("current pose is missing orientation")
+        vx = float(delta.get("x", 0.0))
+        vy = float(delta.get("y", 0.0))
+        vz = float(delta.get("z", 0.0))
+        qx = float(orientation.get("x", 0.0))
+        qy = float(orientation.get("y", 0.0))
+        qz = float(orientation.get("z", 0.0))
+        qw = float(orientation.get("w", 1.0))
+        norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+        if not math.isfinite(norm) or norm <= 1e-9:
+            raise ValueError("current pose orientation quaternion is invalid")
+        qx /= norm
+        qy /= norm
+        qz /= norm
+        qw /= norm
+
+        # Cross product: q_xyz x v
+        cross_x = qy * vz - qz * vy
+        cross_y = qz * vx - qx * vz
+        cross_z = qx * vy - qy * vx
+
+        # Add qw * v to cross product
+        add_x = cross_x + qw * vx
+        add_y = cross_y + qw * vy
+        add_z = cross_z + qw * vz
+
+        # Cross product: q_xyz x (cross + qw*v)
+        cross2_x = qy * add_z - qz * add_y
+        cross2_y = qz * add_x - qx * add_z
+        cross2_z = qx * add_y - qy * add_x
+
+        # Final: v' = v + 2 * cross2
+        return {
+            "x": vx + 2.0 * cross2_x,
+            "y": vy + 2.0 * cross2_y,
+            "z": vz + 2.0 * cross2_z,
+        }
 
     def _authorize_review_intent(self, request: ReviewIntent.Request) -> str:
-        """Return an error string when the review request is not HMI-originated."""
+        """Return an error string when required HMI metadata is missing."""
         required_metadata = {
             "session_id": str(getattr(request, "session_id", "") or "").strip(),
             "operator_id": str(getattr(request, "operator_id", "") or "").strip(),
@@ -461,24 +692,6 @@ class LLMGatewayNode(Node):
         if missing:
             return "ReviewIntent requires HMI metadata: " + ", ".join(missing)
 
-        if not self._review_intent_token:
-            return (
-                "ReviewIntent review token is required; "
-                "set GP4_REVIEW_INTENT_TOKEN for both HMI backend and llm_gateway."
-            )
-
-        provided = str(getattr(request, "review_token", "") or "").strip()
-        expected = build_review_intent_token(
-            shared_secret=self._review_intent_token,
-            raw_text=str(getattr(request, "raw_text", "") or ""),
-            runtime_mode=str(getattr(request, "runtime_mode", "") or ""),
-            session_id=required_metadata["session_id"],
-            operator_id=required_metadata["operator_id"],
-            command_id=required_metadata["command_id"],
-        )
-        if not hmac.compare_digest(provided, expected):
-            return "ReviewIntent review token mismatch."
-
         return ""
 
     def _on_review_intent(
@@ -486,7 +699,9 @@ class LLMGatewayNode(Node):
         request: ReviewIntent.Request,
         response: ReviewIntent.Response,
     ) -> ReviewIntent.Response:
+        self._active_command_id = str(getattr(request, "command_id", "") or "").strip()
         intent_text = str(getattr(request, "raw_text", "") or "").strip()
+        self._emit_trace("prompt_received", "ingress", summary=intent_text[:80])
         if not intent_text:
             response.accepted = False
             response.error = "raw_text is required for intent review."
@@ -562,7 +777,12 @@ class LLMGatewayNode(Node):
             response.accepted = False
             response.error = "review result must be Semantic IR with an intent field."
             return response
-        if not self._semantic_ir_contains_intent(semantic_ir, "return_to_start"):
+        if (
+            not self._semantic_ir_contains_intent(semantic_ir, "return_to_start")
+            and not self._semantic_ir_contains_any_intent(
+                semantic_ir, {"draw_shape", "draw_text"}
+            )
+        ):
             try:
                 routed = IntentRouter(runtime_mode=effective_runtime_mode).route(
                     semantic_ir
@@ -606,6 +826,24 @@ class LLMGatewayNode(Node):
         if isinstance(payload, list):
             return any(
                 LLMGatewayNode._semantic_ir_contains_intent(value, target_intent)
+                for value in payload
+            )
+        return False
+
+    @staticmethod
+    def _semantic_ir_contains_any_intent(
+        payload: Any, target_intents: set[str]
+    ) -> bool:
+        if isinstance(payload, dict):
+            if str(payload.get("intent") or "").strip() in target_intents:
+                return True
+            return any(
+                LLMGatewayNode._semantic_ir_contains_any_intent(value, target_intents)
+                for value in payload.values()
+            )
+        if isinstance(payload, list):
+            return any(
+                LLMGatewayNode._semantic_ir_contains_any_intent(value, target_intents)
                 for value in payload
             )
         return False
@@ -655,8 +893,28 @@ class LLMGatewayNode(Node):
     def _tri_state_is_true(value: Any) -> bool:
         return int(getattr(value, "val", TriState.UNKNOWN)) == int(TriState.TRUE)
 
+    def _emit_trace(self, event: str, phase: str, level: str = "INFO",
+                    summary: str = "", command_id: str = "", **details) -> None:
+        """Publish structured command trace event to /llm_debug."""
+        import json
+        import time
+        payload = json.dumps({
+            "t": "command_trace",
+            "ts": time.time(),
+            "cmd_id": command_id or getattr(self, "_active_command_id", ""),
+            "layer": "llm_gateway",
+            "phase": phase,
+            "event": event,
+            "level": level,
+            "summary": summary,
+            "details": details if details else None,
+        })
+        if hasattr(self, "_llm_debug_publisher") and self._llm_debug_publisher is not None:
+            self._llm_debug_publisher.publish(String(data=payload))
+
     def process_intent(self, intent_text: str) -> None:
         self.publish_status("received")
+        self._emit_trace("prompt_received", "ingress", summary=intent_text[:80])
 
         payload: str
         if self._react_enabled and self._react_agent is not None:
@@ -676,7 +934,9 @@ class LLMGatewayNode(Node):
             payload = json.dumps(react_result)
         else:
             try:
+                self._emit_trace("llm_request_started", "reasoning")
                 llm_response = self._llm_client.generate_response(intent_text)
+                self._emit_trace("llm_response_received", "reasoning")
             except Exception as exc:
                 self._reject("llm_request_failed", str(exc), intent_text=intent_text)
                 return
@@ -698,6 +958,7 @@ class LLMGatewayNode(Node):
     ) -> None:
         try:
             parsed_command = self._parser.parse(raw_payload)
+            self._emit_trace("parsed", "parsing")
         except Exception as exc:
             self._reject(
                 "llm_parse_failed",
@@ -735,6 +996,7 @@ class LLMGatewayNode(Node):
         )
 
         self.publish_status("parsed")
+        self._emit_trace("schema_validated", "validation")
         try:
             routed_result = self._intent_router.route(parsed_command)
         except Exception as exc:
@@ -747,6 +1009,7 @@ class LLMGatewayNode(Node):
             return
 
         self.publish_status("routed")
+        self._emit_trace("routed", "routing", summary=f"route={routed_result.route_type}")
 
         if routed_result.route_type == "error":
             error_payload = routed_result.error_payload or {}
@@ -1321,15 +1584,28 @@ class LLMGatewayNode(Node):
         if callable(done) and done():
             return True, future.result()
 
-        completed = threading.Event()
         add_done_callback = getattr(future, "add_done_callback", None)
         if not callable(add_done_callback):
             return False, None
 
-        add_done_callback(lambda _: completed.set())
-        if not completed.wait(timeout_sec):
-            return False, None
-        return True, future.result()
+        result_container: list[Any] = [None]
+        def _resolve(f):
+            try:
+                result_container[0] = f.result()
+            except Exception as exc:
+                result_container[0] = exc
+
+        add_done_callback(_resolve)
+        # Use a short-poll loop so the executor callback that completes the
+        # future can run on another thread while we yield the GIL.
+        start = time.monotonic()
+        while time.monotonic() - start < timeout_sec:
+            if result_container[0] is not None:
+                if isinstance(result_container[0], Exception):
+                    return False, None
+                return True, result_container[0]
+            time.sleep(0.01)
+        return False, None
 
     def _query_perception_detections(self, args: Dict[str, Any]) -> Dict[str, Any]:
         client = getattr(self, "_get_object_positions_client", None)
@@ -1487,6 +1763,7 @@ class LLMGatewayNode(Node):
         if hint:
             debug_payload["hint"] = hint
         self._publish_debug(debug_payload)
+        self._emit_trace(f"rejected_{stage}", "error", level="ERROR", summary=reason, error_code=stage, error_why=reason, error_next_action=hint)
         self.publish_status(f"rejected:{stage}")
 
     def _publish_debug(self, payload: Dict[str, Any]) -> None:

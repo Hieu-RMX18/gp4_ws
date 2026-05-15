@@ -199,6 +199,19 @@ protected:
     }
   }
 
+  void SetUp() override {
+    try {
+      auto probe_node = std::make_shared<rclcpp::Node>("hw_adapter_dds_probe");
+      auto probe_publisher =
+          probe_node->create_publisher<sensor_msgs::msg::JointState>(
+              "/test_hw_adapter/dds_probe", rclcpp::QoS(1));
+      (void)probe_publisher;
+    } catch (const std::exception &exc) {
+      GTEST_SKIP() << "DDS transport unavailable for hw_adapter node test: "
+                   << exc.what();
+    }
+  }
+
   static rclcpp::NodeOptions
   make_node_options(const std::string &robot_status_topic,
                     const std::string &joint_states_topic,

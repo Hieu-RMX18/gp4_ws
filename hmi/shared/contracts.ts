@@ -173,6 +173,18 @@ export interface CommandExecutionResult {
   correlationId?: string | null;
 }
 
+export interface PipelineTrace {
+  t: string;
+  ts: number;
+  cmd_id: string;
+  layer: string;
+  phase: string;
+  event: string;
+  level: string;
+  summary: string;
+  details?: Record<string, unknown> | null;
+}
+
 export interface CommandView {
   commandId: string;
   commandKind: 'command';
@@ -203,6 +215,7 @@ export interface CommandView {
   parentSequenceId?: string | null;
   sequenceStepIndex?: number | null;
   sequenceStepCount?: number | null;
+  pipelineTraces?: PipelineTrace[];
 }
 
 export interface SequenceView {
@@ -276,6 +289,16 @@ export interface ReplayDetail {
   runtimeEvents: TimelineEvent[];
 }
 
+export interface ToolPose {
+  x: number;
+  y: number;
+  z: number;
+  roll: number;
+  pitch: number;
+  yaw: number;
+  frameId: string;
+}
+
 export interface HmiStateSnapshot {
   schemaVersion: string;
   generatedAt: string;
@@ -293,6 +316,7 @@ export interface HmiStateSnapshot {
   jointPositions: JointPosition[];
   planMetrics: PlanMetrics | null;
   replayItems: ReplayListItem[];
+  toolPose: ToolPose | null;
 }
 
 export interface RuntimeStateResponse {

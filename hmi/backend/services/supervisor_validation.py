@@ -20,6 +20,16 @@ EVENT_DRIVEN_SOURCE_NAMES = {
     "review_intent_service",
 }
 
+POST_PARSE_INFO_ONLY_SOURCE_NAMES = {
+    "gateway_status",
+    "supervisor_alerts",
+}
+
+EXECUTION_BOUNDARY_SOURCE_NAMES = {
+    "validate_command_service",
+    "execute_motion_action",
+}
+
 
 class SupervisorValidationMixin:
     def _parse_intent(
@@ -65,13 +75,17 @@ class SupervisorValidationMixin:
         lease: Any,
         parsed_intent: dict[str, Any] | None,
         requested_mode: RuntimeMode,
+        enforce_execution_readiness: bool = False,
     ) -> dict[str, Any]:
         source_statuses = self._read_source_statuses()
+        nonblocking_source_names = self._nonblocking_source_names(
+            enforce_execution_readiness=enforce_execution_readiness
+        )
         critical_sources = [
             source
             for source in source_statuses
             if getattr(source, "active", False)
-            and source.name not in EVENT_DRIVEN_SOURCE_NAMES
+            and source.name not in nonblocking_source_names
         ]
         optional_sources = [
             source
@@ -121,7 +135,10 @@ class SupervisorValidationMixin:
             )
 
         if not preflight.get("accepted", True):
-            preflight_reasons = list(preflight.get("reasons") or [])
+            preflight_reasons = self._filtered_preflight_reasons(
+                preflight.get("reasons") or [],
+                enforce_execution_readiness=enforce_execution_readiness,
+            )
             if preflight_reasons:
                 blocking_reasons.extend(preflight_reasons)
 
@@ -176,6 +193,35 @@ class SupervisorValidationMixin:
             "hardwareGate": hardware_gate.to_dict(),
             "preflight": preflight,
         }
+
+    def _nonblocking_source_names(
+        self, *, enforce_execution_readiness: bool
+    ) -> set[str]:
+        nonblocking = set(EVENT_DRIVEN_SOURCE_NAMES)
+        nonblocking.update(POST_PARSE_INFO_ONLY_SOURCE_NAMES)
+        if not enforce_execution_readiness:
+            nonblocking.update(EXECUTION_BOUNDARY_SOURCE_NAMES)
+        return nonblocking
+
+    def _filtered_preflight_reasons(
+        self,
+        reasons: list[Any],
+        *,
+        enforce_execution_readiness: bool,
+    ) -> list[str]:
+        if enforce_execution_readiness:
+            return [str(reason) for reason in reasons]
+
+        ignored_source_names = (
+            POST_PARSE_INFO_ONLY_SOURCE_NAMES | EXECUTION_BOUNDARY_SOURCE_NAMES
+        )
+        filtered: list[str] = []
+        for reason in reasons:
+            text = str(reason)
+            if any(source_name in text for source_name in ignored_source_names):
+                continue
+            filtered.append(text)
+        return filtered
 
     def _assess_risk(
         self, parsed_intent: dict[str, Any] | None

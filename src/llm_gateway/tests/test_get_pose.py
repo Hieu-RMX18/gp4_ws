@@ -135,7 +135,7 @@ def test_gateway_routes_get_pose_to_query_service(ros_integration_context):
     debug_messages = []
     node.publish_status = lambda status: statuses.append(status)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
 
     # Mock the LLM to return a GET_POSE semantic IR command
@@ -204,7 +204,7 @@ def test_gateway_fails_closed_when_get_pose_service_unavailable(
     debug_messages = []
     node.publish_status = lambda status: statuses.append(status)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
 
     get_pose_payload = json.dumps(
@@ -238,7 +238,7 @@ def test_gateway_handles_get_pose_service_failure(ros_integration_context):
     debug_messages = []
     node.publish_status = lambda status: statuses.append(status)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
 
     get_pose_payload = json.dumps(

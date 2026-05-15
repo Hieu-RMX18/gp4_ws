@@ -10,8 +10,8 @@
 
 Primary architecture note:
 
-- `hmi/HMI_V2_COMMAND_INGRESS.md`
 - `hmi/HARDWARE_TELEMETRY_VALIDATION.md`
+- `docs/hmi/HMI_ROS_INTERFACES.md`
 
 ## Backend dependencies
 

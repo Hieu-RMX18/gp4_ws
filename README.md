@@ -29,7 +29,7 @@ An end-to-end, deterministic LLM-driven motion planning and execution system for
 - **Fail-Closed Safety Engine:** Evaluates targets against workspace bounds, forbidden zones, and mechanical constraints before planning occurs.
 - **Advanced Motion Core:** Collision-aware planning via MoveIt 2, TRAC-IK inverse kinematics, and smooth trajectory generation (TOTG + Ruckig). Execution logic is split into focused modules per primitive type.
 - **Hardened Execution Pipeline:** Connects via MotoROS2 driver. Separates motion dispatch, state queries, and hardware I/O into distinct execution paths.
-- **HMI Web Interface:** React 18 + FastAPI bridge providing telemetry monitoring, command ingress, jog pendant, and session management.
+- **HMI Web Interface:** React 18 + FastAPI bridge providing telemetry monitoring, real-time observability console, command ingress, jog pendant, and session management.
 
 ---
 
@@ -108,10 +108,11 @@ Current verified status is software/simulation only for the full HMI ->
 ReviewIntent -> safety -> MoveIt -> hw_adapter pipeline. Individual hardware
 primitives have been tested, but full MoveIt-to-hardware end-to-end execution is
 not claimed by this branch. Real hardware commissioning still requires the
-read-only checklist in `hmi/HARDWARE_READONLY_VALIDATION.md`, hardware-gate
-evidence, explicit hardware mode, controller lease, operator confirmation, and a
-separately authorized execution pass. `IO_SET`, real TCP offset, and D435i
-hand-eye extrinsics remain deferred until measured and approved.
+read-only checklist in `hmi/HARDWARE_READONLY_VALIDATION.md`, explicit hardware mode,
+controller lease, operator confirmation, and a separately authorized execution pass.
+(The JSON evidence-based hardware gate was removed to simplify local development).
+`IO_SET` and real TCP offset remain deferred until measured and approved. For D435i
+hand-eye calibration, refer to `docs/perception/d435i_hand_eye_calibration_runbook.md`.
 
 ---
 
@@ -260,8 +261,9 @@ cd ~/gp4_ws/hmi/frontend && npm run dev
 ## HMI Web Interface
 
 The HMI provides a browser-based operator panel with:
-- **Telemetry panel** — joint positions, robot status, gateway/LLM state
+- **Telemetry panel** — joint positions, TCP pose, robot status, gateway/LLM state
 - **Command ingress** — submit natural-language text through `ReviewIntent` and the supervisor validation pipeline
+- **Observability Console** — real-time command pipeline tracing, execution monitoring, and task validation
 - **Jog pendant** — real-time joint jogging (requires `jog_pendant` stack running)
 - **Session management** — operator session lock and audit trail
 
@@ -284,7 +286,6 @@ Full spec: `hmi/HMI_V2_COMMAND_INGRESS.md`
 | Environment Variable | Description |
 |----------------------|-------------|
 | `GP4_LLM_API_KEY`    | API key for `llm_gateway` LLM backend |
-| `GP4_REVIEW_INTENT_TOKEN` | Shared HMI backend -> `llm_gateway` token for `/llm_gateway/review_intent`; required in hardware runtime mode |
 | `RMW_IMPLEMENTATION` | Set to `rmw_fastrtps_cpp` for hardware launch |
 | `ROS_DOMAIN_ID`      | Keep at `0` for this GP4 workspace |
 

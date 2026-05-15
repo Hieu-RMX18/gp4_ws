@@ -108,7 +108,7 @@ Current verified status is software/simulation only for the full HMI ->
 ReviewIntent -> safety -> MoveIt -> hw_adapter pipeline. Individual hardware
 primitives have been tested, but full MoveIt-to-hardware end-to-end execution is
 not claimed by this branch. Real hardware commissioning still requires the
-read-only checklist in `hmi/HARDWARE_READONLY_VALIDATION.md`, explicit hardware mode,
+read-only checklist in `hmi/HARDWARE_TELEMETRY_VALIDATION.md`, explicit hardware mode,
 controller lease, operator confirmation, and a separately authorized execution pass.
 (The JSON evidence-based hardware gate was removed to simplify local development).
 `IO_SET` and real TCP offset remain deferred until measured and approved. For D435i
@@ -269,7 +269,8 @@ The HMI provides a browser-based operator panel with:
 
 The HMI command path follows the same safety pipeline: `ValidateCommand → ExecuteMotion`. It does **not** bypass to MotoROS2 directly. Human confirmation is owned by the HMI supervisor lease/confirm flow before dispatch; the `ExecuteMotion` action no longer carries an approval flag.
 
-Full spec: `hmi/HMI_V2_COMMAND_INGRESS.md`
+Full spec: `hmi/README.md`
+ROS interface inventory: `docs/hmi/HMI_ROS_INTERFACES.md`
 
 ---
 

@@ -27,6 +27,7 @@ _FROZEN_SEMANTIC_INTENTS = frozenset(
         "absolute_move_lin",
         "circular_move",
         "move_joint",
+        "move_joint_delta",
         "move_joints",
         "io_set",
         "draw_shape",

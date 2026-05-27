@@ -25,6 +25,14 @@
   flex-shrink: 0;
 }
 
+.log-source {
+  color: var(--color-text-tertiary);
+  font-weight: 500;
+  flex-shrink: 0;
+  min-width: 64px;
+  opacity: 0.7;
+}
+
 .log-level.info {
   color: #185fa5;
 }

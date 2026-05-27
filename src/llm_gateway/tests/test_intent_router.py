@@ -251,7 +251,7 @@ def test_set_speed():
 def test_set_speed_missing_velocity_raises():
     router = _router()
 
-    with pytest.raises((ValueError, KeyError, TypeError)):
+    with pytest.raises(ValueError, match="velocity_scale"):
         router.route({"intent": "set_speed"})
 
 
@@ -271,7 +271,7 @@ def test_wait():
 def test_wait_missing_duration_raises():
     router = _router()
 
-    with pytest.raises((ValueError, KeyError, TypeError)):
+    with pytest.raises(ValueError, match="wait_duration_sec"):
         router.route({"intent": "wait"})
 
 
@@ -316,7 +316,9 @@ def test_move_relative_preserves_explicit_linear_unit():
 def test_move_relative_missing_delta_raises():
     router = _router()
 
-    with pytest.raises(ValueError, match="delta"):
+    with pytest.raises(
+        ValueError, match="relative move requires direction and distance"
+    ):
         router.route({"intent": "move_relative", "reference_frame": "base_link"})
 
 
@@ -454,11 +456,18 @@ def test_move_joint():
     assert cmd["joint_angle"] == 0.524
 
 
-def test_move_joint_missing_fields_raises():
+def test_move_joint_missing_joint_index_raises():
     router = _router()
 
-    with pytest.raises((ValueError, KeyError, TypeError)):
-        router.route({"intent": "move_joint"})
+    with pytest.raises(ValueError, match="joint_index"):
+        router.route({"intent": "move_joint", "joint_angle": 0.5})
+
+
+def test_move_joint_missing_joint_angle_raises():
+    router = _router()
+
+    with pytest.raises(ValueError, match="joint_angle"):
+        router.route({"intent": "move_joint", "joint_index": 2})
 
 
 # ── move_joints ──────────────────────────────────────────────────────────────
@@ -507,11 +516,18 @@ def test_io_set():
     assert cmd["io_value"] == 1
 
 
-def test_io_set_missing_fields_raises():
+def test_io_set_missing_io_address_raises():
     router = _router()
 
-    with pytest.raises((ValueError, KeyError, TypeError)):
-        router.route({"intent": "io_set"})
+    with pytest.raises(ValueError, match="io_address"):
+        router.route({"intent": "io_set", "io_value": 1})
+
+
+def test_io_set_missing_io_value_raises():
+    router = _router()
+
+    with pytest.raises(ValueError, match="io_value"):
+        router.route({"intent": "io_set", "io_address": 10010})
 
 
 # ── sequence ─────────────────────────────────────────────────────────────────

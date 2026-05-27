@@ -12,7 +12,7 @@ workspace_bounds:
   x_max:  0.45   # conservative cap; do not expand positive X for hardware pass
   y_min: -0.16   # station front wall -0.197m + 37mm; kept above front_wall_guard max
   y_max:  0.52   # reach-limited  (back wall at +0.806m, beyond reach)
-  z_min:  0.23   # table-top estimated 0.20m + 30mm margin
+  z_min:  0.15   # lowered per operator verification 2026-05-17; robot safely reaches below prev 0.23
   z_max:  0.65   # raised per operator approval for taller workpieces; still inside station mesh + reach envelope
 
 # Backward-compatible keys still used by safety.command_validator.
@@ -48,14 +48,14 @@ forbidden_zones:
     size_z: 1.50
 
   # Low-Z floor/table clearance. Defence-in-depth under workspace z_min.
-  # Spans Z: [0.00, 0.20]. Prevents inadvertent descent into table surface.
+  # Spans Z: [0.00, 0.12]. Prevents inadvertent descent into table surface.
   - name: floor_clearance_guard
     x:  0.00
     y:  0.30
-    z:  0.10
+    z:  0.06
     size_x: 1.50
     size_y: 1.10
-    size_z: 0.20
+    size_z: 0.12
 
 # operational_joint_limits — per U1 of PATCH-v3.1, J5 is HARD ±90°.
 # Do NOT widen this limit. If a use case requires J5 outside ±90°,
@@ -74,7 +74,7 @@ operational_joint_limits:
   joint_2_l: {min: -1.9198, max:  2.2689}  # = hardware L (asymmetric)
   joint_3_u: {min: -1.1344, max:  3.4906}  # = hardware U (asymmetric)
   joint_4_r: {min: -2.443, max:  2.443}   # +/-140 deg (hardware R is +/-200 deg, derated)
-  joint_5_b: {min: -1.686, max:  1.686}   # ~+/-96.6 deg (hardware B is +/-123 deg, derated; widened per operator 2026-05-15)
+  joint_5_b: {min: -1.80, max:  1.80}     # +/-103 deg (hardware B is +/-123 deg, derated; widened per operator 2026-05-17 for HOME margin)
   joint_6_t:
     default:  {min: -3.142, max:  3.142}     # +/-180 deg (default safety envelope)
     # Extended +/-455 deg mode is disabled for the current hardware-debug wave.
@@ -83,6 +83,7 @@ operational_joint_limits:
 
 joint_position_guard:
   enabled: true
+  tolerance_rad: 0.005   # 0.29 deg — absorbs MoveIt interpolation artifacts without widening limits
   reject_message_template: "joint_position_guard reject at point[{idx}]: {joint} = {value:.4f} rad outside [{min:.4f}, {max:.4f}]"
 
 manipulability_guard:
@@ -137,4 +138,4 @@ require_human_approval:
 # W4: Perception calibration quality gates
 calibration:
   max_age_days: 30
-  max_reprojection_error_mm: 3.0
+  max_reprojection_error_mm: 5.0

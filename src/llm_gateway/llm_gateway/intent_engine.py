@@ -212,9 +212,36 @@ import logging
 import math
 from typing import List, Optional
 
-from geometry_msgs.msg import Pose, Quaternion
-
 _LOGGER = logging.getLogger(__name__)
+
+
+def _import_geometry_msgs():
+    """Lazy import geometry_msgs types.
+
+    geometry_msgs is a ROS 2 package that is unavailable when
+    llm_gateway is imported from the source tree without a full
+    ROS 2 environment (e.g. HMI backend tests with PYTHONPATH=hmi/backend).
+
+    When the real types are unavailable this returns SimpleNamespace-based
+    stubs so normalizers and validators can still construct pose objects.
+    """
+    try:
+        from geometry_msgs.msg import Pose as _Pose, Quaternion as _Quaternion
+    except ImportError:
+        from types import SimpleNamespace
+
+        def _make_quaternion(*, x=0.0, y=0.0, z=0.0, w=1.0):
+            return SimpleNamespace(x=x, y=y, z=z, w=w)
+
+        def _make_pose():
+            return SimpleNamespace(
+                position=SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                orientation=_make_quaternion(),
+            )
+
+        return _make_pose, _make_quaternion
+
+    return _Pose, _Quaternion
 
 # Explicit unit vocabulary accepted at the LLM/raw-command boundary.
 _VALID_LINEAR_UNITS = {"m", "cm", "mm"}
@@ -291,7 +318,8 @@ def _normalize_single_joint_angle(
     return _wrap_to_pi(angle)
 
 
-def _rpy_to_quaternion(roll_rad: float, pitch_rad: float, yaw_rad: float) -> Quaternion:
+def _rpy_to_quaternion(roll_rad: float, pitch_rad: float, yaw_rad: float) -> "Quaternion":
+    _, Quaternion = _import_geometry_msgs()
     cy = math.cos(yaw_rad * 0.5)
     sy = math.sin(yaw_rad * 0.5)
     cp = math.cos(pitch_rad * 0.5)
@@ -309,7 +337,8 @@ def _rpy_to_quaternion(roll_rad: float, pitch_rad: float, yaw_rad: float) -> Qua
 def _normalize_orientation(
     raw_orientation: Dict[str, Any],
     angular_unit: Optional[str] = None,
-) -> Quaternion:
+) -> "Quaternion":
+    _, Quaternion = _import_geometry_msgs()
     if not isinstance(raw_orientation, dict):
         raise ValueError("target_pose.orientation must be an object.")
 
@@ -347,13 +376,14 @@ def normalize_pose(
     raw_pose: Dict[str, Any],
     linear_unit: Optional[str] = None,
     angular_unit: Optional[str] = None,
-) -> Pose:
+) -> "Pose":
     """Convert position/orientation into geometry_msgs/Pose.
 
     When linear_unit/angular_unit are provided, explicit conversion is used.
     When absent, values are assumed SI (meters/radians).
     Legacy heuristic only activates if _COMPAT_UNIT_HEURISTIC is True.
     """
+    Pose, _ = _import_geometry_msgs()
     if not isinstance(raw_pose, dict):
         raise ValueError("target_pose must be an object.")
 
@@ -447,7 +477,7 @@ class Normalizer:
         self.default_velocity_scale = float(default_velocity_scale)
         self.default_acceleration_scale = float(default_acceleration_scale)
 
-    def normalize_pose(self, raw_pose: Dict[str, Any]) -> Pose:
+    def normalize_pose(self, raw_pose: Dict[str, Any]) -> "Pose":
         return normalize_pose(raw_pose)
 
     def normalize_joints(self, raw_joints: List[Any]) -> List[float]:
@@ -591,7 +621,10 @@ from typing import Tuple
 
 import jsonschema
 import yaml
-from ament_index_python.packages import get_package_share_directory
+try:
+    from ament_index_python.packages import get_package_share_directory
+except ImportError:
+    get_package_share_directory = None  # type: ignore[assignment]
 
 
 def _default_schema_path() -> str:
@@ -654,7 +687,28 @@ import logging
 
 import numpy as np
 
-from safety.policy_loader import _FAILSAFE_MOTION_LIMITS, load_safety_rules
+# Failsafe motion limits — hardcoded safety boundary. These mirror the identical
+# values in safety.policy_loader._FAILSAFE_MOTION_LIMITS so intent_engine stays
+# importable when the safety package is not on the path (e.g. HMI backend tests
+# running outside a colcon workspace).
+_FAILSAFE_MOTION_LIMITS: dict[str, float] = {
+    "max_velocity_scale": 0.06,
+    "max_acceleration_scale": 0.06,
+    "max_move_rel_translation": 0.21,
+}
+
+
+def _load_safety_rules() -> dict:
+    """Lazy-load the full safety rules dict from the safety package.
+
+    Returns an empty dict when the safety package is not importable so that
+    SemanticValidator and drawing routers use their internal defaults.
+    """
+    try:
+        from safety.policy_loader import load_safety_rules as _loader
+    except ImportError:
+        return {}
+    return _loader()
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -693,12 +747,12 @@ class SemanticValidator:
     _DEFAULT_BOUNDS = {
         "x": (-0.45, 0.45),
         "y": (-0.16, 0.52),
-        "z": (0.23, 0.65),
+        "z": (0.15, 0.65),
     }
 
     def __init__(self, safety_rules: dict | None = None):
         if safety_rules is None:
-            safety_rules = load_safety_rules()
+            safety_rules = _load_safety_rules()
         circ_cfg = safety_rules.get("circ", {})
         self._circ_degenerate_tolerance = float(
             circ_cfg.get("degenerate_tolerance", 1e-3)
@@ -1270,7 +1324,7 @@ class GoalMapper:
         self._default_acceleration_scale = float(default_acceleration_scale)
 
     @staticmethod
-    def _pose_to_payload(pose: Pose) -> Dict[str, Any]:
+    def _pose_to_payload(pose: "Pose") -> Dict[str, Any]:
         return {
             "position": {
                 "x": float(pose.position.x),
@@ -1287,6 +1341,8 @@ class GoalMapper:
 
     def to_execute_motion_goal(self, command: Dict[str, Any]) -> Any:
         from interfaces.action import ExecuteMotion
+
+        Pose, _ = _import_geometry_msgs()
 
         goal = ExecuteMotion.Goal()
         goal.primitive_type = str(command["primitive_type"])
@@ -1562,7 +1618,13 @@ def hydrate_draw_workplane(
 
 from copy import deepcopy
 
-from safety.policy_loader import load_safety_rules as _load_safety_rules
+# _load_safety_rules is defined earlier in this module as a lazy loader;
+# when the safety package is importable this import replaces it with the
+# direct function (identical call signature).
+try:
+    from safety.policy_loader import load_safety_rules as _load_safety_rules
+except ImportError:
+    pass
 
 from llm_gateway.drawing_geometry import (
     DrawingGeometryError,
@@ -2594,6 +2656,148 @@ _GP4_JOINT_NAMES = (
     "joint_5_b",
     "joint_6_t",
 )
+GP4_JOINT_NAMES = _GP4_JOINT_NAMES
+_GP4_JOINT_ALIAS_TO_INDEX: Dict[str, int] = {
+    "1": 0,
+    "s": 0,
+    "joint1": 0,
+    "joint1s": 0,
+    "joint_1_s": 0,
+    "2": 1,
+    "l": 1,
+    "joint2": 1,
+    "joint2l": 1,
+    "joint_2_l": 1,
+    "3": 2,
+    "u": 2,
+    "joint3": 2,
+    "joint3u": 2,
+    "joint_3_u": 2,
+    "4": 3,
+    "r": 3,
+    "joint4": 3,
+    "joint4r": 3,
+    "joint_4_r": 3,
+    "5": 4,
+    "b": 4,
+    "joint5": 4,
+    "joint5b": 4,
+    "joint_5_b": 4,
+    "6": 5,
+    "t": 5,
+    "joint6": 5,
+    "joint6t": 5,
+    "joint_6_t": 5,
+}
+
+def _copy_semantic_ir(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _copy_semantic_ir(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_copy_semantic_ir(child) for child in value]
+    return value
+
+def _joint_alias_key(value: Any) -> str:
+    return "".join(
+        char for char in str(value or "").strip().lower() if char.isalnum()
+    )
+
+def resolve_gp4_joint_index(value: Any) -> int:
+    if isinstance(value, int):
+        index = value
+    elif isinstance(value, float) and value.is_integer():
+        index = int(value)
+    else:
+        text = str(value or "").strip().lower()
+        if text in _GP4_JOINT_ALIAS_TO_INDEX:
+            return _GP4_JOINT_ALIAS_TO_INDEX[text]
+        key = _joint_alias_key(text)
+        if key in _GP4_JOINT_ALIAS_TO_INDEX:
+            return _GP4_JOINT_ALIAS_TO_INDEX[key]
+        raise ValueError(f"unknown GP4 joint alias '{value}'")
+    if 0 <= index < len(_GP4_JOINT_NAMES):
+        return index
+    if 1 <= index <= len(_GP4_JOINT_NAMES):
+        return index - 1
+    raise ValueError(f"joint_index {index} out of range [0, 5]")
+
+def _current_joint_positions_for_delta(
+    *,
+    current_joint_positions_rad: Sequence[float] | None,
+    current_joint_positions_by_name: Mapping[str, float] | None,
+) -> list[float]:
+    if current_joint_positions_by_name:
+        by_name = {
+            str(name): float(position)
+            for name, position in current_joint_positions_by_name.items()
+        }
+        if all(joint_name in by_name for joint_name in _GP4_JOINT_NAMES):
+            return [by_name[joint_name] for joint_name in _GP4_JOINT_NAMES]
+    if current_joint_positions_rad is not None:
+        positions = [float(value) for value in current_joint_positions_rad]
+        if len(positions) >= len(_GP4_JOINT_NAMES):
+            return positions[: len(_GP4_JOINT_NAMES)]
+    raise ValueError(
+        "current joint positions unavailable for relative joint move; "
+        "cannot compute absolute target"
+    )
+
+def prepare_semantic_ir_for_routing(
+    payload: Dict[str, Any],
+    *,
+    current_joint_positions_rad: Sequence[float] | None = None,
+    current_joint_positions_by_name: Mapping[str, float] | None = None,
+) -> Dict[str, Any]:
+    """Resolve state-dependent Semantic IR before passing it to IntentRouter."""
+    if not isinstance(payload, dict):
+        return payload
+    intent = str(payload.get("intent") or "").strip()
+    if intent == "sequence":
+        prepared = _copy_semantic_ir(payload)
+        steps = prepared.get("steps")
+        if isinstance(steps, list):
+            prepared["steps"] = [
+                prepare_semantic_ir_for_routing(
+                    step,
+                    current_joint_positions_rad=current_joint_positions_rad,
+                    current_joint_positions_by_name=current_joint_positions_by_name,
+                )
+                if isinstance(step, dict)
+                else step
+                for step in steps
+            ]
+        return prepared
+    if intent != "move_joint_delta":
+        return _copy_semantic_ir(payload)
+
+    positions = _current_joint_positions_for_delta(
+        current_joint_positions_rad=current_joint_positions_rad,
+        current_joint_positions_by_name=current_joint_positions_by_name,
+    )
+    raw_joint = (
+        payload.get("joint_index")
+        if "joint_index" in payload
+        else payload.get("joint_name", payload.get("joint", payload.get("axis")))
+    )
+    joint_index = resolve_gp4_joint_index(raw_joint)
+    if "delta_angle" not in payload:
+        raise ValueError("move_joint_delta requires delta_angle")
+    delta_rad = _convert_angular(
+        _to_float(payload["delta_angle"], "delta_angle"),
+        payload.get("angular_unit"),
+        "delta_angle",
+    )
+
+    prepared = _copy_semantic_ir(payload)
+    prepared["intent"] = "move_joint"
+    prepared["joint_index"] = joint_index
+    prepared["joint_angle"] = positions[joint_index] + delta_rad
+    prepared["angular_unit"] = "rad"
+    prepared.pop("delta_angle", None)
+    prepared.pop("joint", None)
+    prepared.pop("joint_name", None)
+    prepared.pop("axis", None)
+    return prepared
 
 
 def _default_macro_policy_path() -> str:
@@ -2666,6 +2870,9 @@ _NAMED_POSE_ALIASES: Dict[str, str] = {
     "pose b": "poseB",
     "a": "poseA",
     "b": "poseB",
+    "first": "poseA",
+    "first pose": "poseA",
+    "the first pose": "poseA",
     "point a": "poseA",
     "point b": "poseB",
     # Vietnamese aliases
@@ -2806,14 +3013,23 @@ class IntentRouter(DrawRouterMixin):
             return self._route_move_relative(payload)
         if intent == "move_joint":
             return self._route_move_joint(payload)
+        if intent == "move_joint_delta":
+            raise ValueError(
+                "move_joint_delta must be resolved to move_joint before routing; "
+                "current joint positions were unavailable."
+            )
         if intent == "move_joints":
             return self._route_move_joints(payload)
         if intent == "set_speed":
+            if "velocity_scale" not in payload:
+                raise ValueError("set_speed requires velocity_scale.")
             return {
                 "primitive_type": "SET_SPEED",
                 "velocity_scale": float(payload["velocity_scale"]),
             }
         if intent == "wait":
+            if "wait_duration_sec" not in payload:
+                raise ValueError("wait requires wait_duration_sec.")
             return {
                 "primitive_type": "WAIT",
                 "wait_duration_sec": float(payload["wait_duration_sec"]),
@@ -2821,6 +3037,10 @@ class IntentRouter(DrawRouterMixin):
         if intent == "stop":
             return {"primitive_type": "STOP"}
         if intent == "io_set":
+            if "io_address" not in payload:
+                raise ValueError("io_set requires io_address.")
+            if "io_value" not in payload:
+                raise ValueError("io_set requires io_value.")
             return {
                 "primitive_type": "IO_SET",
                 "io_address": int(payload["io_address"]),
@@ -2920,7 +3140,7 @@ class IntentRouter(DrawRouterMixin):
     def _route_move_relative(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         delta = payload.get("delta")
         if not isinstance(delta, dict):
-            raise ValueError("move_relative requires delta.")
+            raise ValueError("relative move requires direction and distance.")
 
         reference_frame = payload.get("reference_frame", _FRAME_BASE_LINK)
         self._validate_reference_frame(reference_frame)
@@ -2934,6 +3154,10 @@ class IntentRouter(DrawRouterMixin):
         }
 
     def _route_move_joint(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if "joint_index" not in payload:
+            raise ValueError("move_joint requires joint_index.")
+        if "joint_angle" not in payload:
+            raise ValueError("move_joint requires joint_angle.")
         return {
             "primitive_type": "MOVE_JOINT",
             "joint_index": int(payload["joint_index"]),
@@ -3088,6 +3312,7 @@ __all__ = [
     "SequenceValidationError",
     "SequenceValidationResult",
     "SequenceValidator",
+    "canonicalize_named_pose",
     "command_from_sanitized_json",
     "compile_strokes_to_commands",
     "hydrate_draw_workplane",

@@ -6,15 +6,18 @@
 namespace motion_core {
 
 JointPositionGuard::JointPositionGuard(
-    std::unordered_map<std::string, JointLimit> limits) {
+    std::unordered_map<std::string, JointLimit> limits,
+    double tolerance_rad)
+    : tolerance_rad_(tolerance_rad) {
   for (auto &[name, lim] : limits) {
     limits_[name] = TieredLimit{lim, std::nullopt};
   }
 }
 
 JointPositionGuard::JointPositionGuard(
-    std::unordered_map<std::string, TieredLimit> tiered_limits)
-    : limits_(std::move(tiered_limits)) {}
+    std::unordered_map<std::string, TieredLimit> tiered_limits,
+    double tolerance_rad)
+    : limits_(std::move(tiered_limits)), tolerance_rad_(tolerance_rad) {}
 
 bool JointPositionGuard::check_trajectory(
     const trajectory_msgs::msg::JointTrajectory &traj, std::string &reason,
@@ -43,7 +46,8 @@ bool JointPositionGuard::check_trajectory(
       if (mode == Mode::Extended && tiered.extended_limit.has_value()) {
         active_limit = &tiered.extended_limit.value();
       }
-      if (value < active_limit->min || value > active_limit->max) {
+      if (value < (active_limit->min - tolerance_rad_) ||
+          value > (active_limit->max + tolerance_rad_)) {
         std::ostringstream stream;
         stream << "joint_position_guard reject at point[" << i
                << "]: " << traj.joint_names[j] << " = " << std::fixed

@@ -152,16 +152,16 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
 
   const logEntries = useMemo<LogEntryView[]>(() => {
     const reviewEntries = buildReviewLogEntries(activeReviewJob, blockingReasons, declineReason, state.generatedAt);
-    const entries = state.messages
+    const entries: LogEntryView[] = state.messages
       .filter(shouldShowMessageInSystemLog)
-      .slice(-11)
-      .map((m) => ({ id: m.id, time: formatTimestamp(m.timestamp), level: toLogLevel(m), message: m.text }));
+      .slice(-25)
+      .map((m) => ({ id: m.id, time: formatTimestamp(m.timestamp), level: toLogLevel(m), message: m.text, source: m.source ?? null }));
     entries.unshift(...reviewEntries);
     if (actionFeedback) {
-      entries.unshift({ id: actionFeedback.id, time: formatTimestamp(actionFeedback.timestamp), level: actionFeedback.level, message: actionFeedback.message });
+      entries.unshift({ id: actionFeedback.id, time: formatTimestamp(actionFeedback.timestamp), level: actionFeedback.level, message: actionFeedback.message, source: null });
     }
-    if (entries.length > 0) return entries.slice(0, 14);
-    return [{ id: 'runtime-bootstrap', time: formatTimestamp(state.generatedAt), level: state.runtime.blocking ? 'warn' as const : 'info' as const, message: state.runtime.statusText }];
+    if (entries.length > 0) return entries.slice(0, 30);
+    return [{ id: 'runtime-bootstrap', time: formatTimestamp(state.generatedAt), level: state.runtime.blocking ? 'warn' as const : 'info' as const, message: state.runtime.statusText, source: null }];
   }, [actionFeedback, activeReviewJob, blockingReasons, declineReason, state.generatedAt, state.messages, state.runtime.blocking, state.runtime.statusText]);
 
   // ── Action handlers ─────────────────────────────────────────────────────

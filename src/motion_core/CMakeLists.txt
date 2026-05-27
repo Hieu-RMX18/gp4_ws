@@ -276,6 +276,18 @@ if(BUILD_TESTING)
     )
   endif()
 
+  ament_add_gtest(test_trajectory_validator
+    test/test_trajectory_validator.cpp
+  )
+  if(TARGET test_trajectory_validator)
+    target_link_libraries(test_trajectory_validator
+      ${PROJECT_NAME}_components
+    )
+    target_include_directories(test_trajectory_validator PRIVATE
+      include
+    )
+  endif()
+
   ament_add_gtest(test_primitive_router_dispatch
     test/test_primitive_router_dispatch.cpp
   )

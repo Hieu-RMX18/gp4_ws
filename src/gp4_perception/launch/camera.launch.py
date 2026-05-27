@@ -11,24 +11,35 @@ Reference: https://github.com/realsenseai/realsense-ros (ros2-master branch)
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
-from launch_ros.substitutions import FindPackageShare
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description() -> LaunchDescription:
+    serial_no = ParameterValue(LaunchConfiguration("serial"), value_type=str)
+    align_depth = ParameterValue(LaunchConfiguration("align_depth"), value_type=bool)
+    enable_sync = ParameterValue(LaunchConfiguration("enable_sync"), value_type=bool)
+    pointcloud = ParameterValue(LaunchConfiguration("pointcloud"), value_type=bool)
+    spatial_filter = ParameterValue(
+        LaunchConfiguration("spatial_filter"), value_type=bool
+    )
+    temporal_filter = ParameterValue(
+        LaunchConfiguration("temporal_filter"), value_type=bool
+    )
+
     return LaunchDescription(
         [
             # --- Configurable launch arguments ---
             DeclareLaunchArgument(
                 "depth_profile",
-                default_value="848,480,30",
+                default_value="848x480x30",
                 description="Depth stream resolution and FPS (W,H,FPS)",
             ),
             DeclareLaunchArgument(
                 "color_profile",
-                default_value="1280,720,30",
+                default_value="1280x720x30",
                 description="Color stream resolution and FPS (W,H,FPS)",
             ),
             DeclareLaunchArgument(
@@ -47,11 +58,6 @@ def generate_launch_description() -> LaunchDescription:
                 description="Enable point cloud generation",
             ),
             DeclareLaunchArgument(
-                "emitter_enabled",
-                default_value="1",
-                description="IR emitter: 1=on, 0=off (disable if IR cross-talk)",
-            ),
-            DeclareLaunchArgument(
                 "serial",
                 default_value="",
                 description="Camera serial number (empty = auto-discover)",
@@ -66,52 +72,48 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="true",
                 description="Enable temporal consistency filter",
             ),
-            DeclareLaunchArgument(
-                "depth_qos",
-                default_value="SENSOR_DATA",
-                description="QoS for depth topics (SENSOR_DATA = BEST_EFFORT)",
-            ),
-            DeclareLaunchArgument(
-                "color_qos",
-                default_value="SENSOR_DATA",
-                description="QoS for color topics (SENSOR_DATA = BEST_EFFORT)",
-            ),
-            # --- Include upstream RealSense launch ---
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    [
-                        FindPackageShare("realsense2_camera"),
-                        "/launch",
-                        "/rs_launch.py",
-                    ]
-                ),
-                launch_arguments={
-                    # Camera identity
-                    "camera_namespace": "",
-                    "camera_name": "camera",
-                    "serial_no": LaunchConfiguration("serial"),
-                    # Stream profiles (ros2-master format)
-                    "depth_module.depth_profile": LaunchConfiguration("depth_profile"),
-                    "rgb_camera.color_profile": LaunchConfiguration("color_profile"),
-                    # Alignment and sync
-                    "align_depth.enable": LaunchConfiguration("align_depth"),
-                    "enable_sync": LaunchConfiguration("enable_sync"),
-                    # Point cloud
-                    "pointcloud.enable": LaunchConfiguration("pointcloud"),
-                    # IR emitter
-                    "depth_module.emitter_enabled": LaunchConfiguration(
-                        "emitter_enabled"
-                    ),
-                    # Post-processing filters
-                    "spatial_filter.enable": LaunchConfiguration("spatial_filter"),
-                    "temporal_filter.enable": LaunchConfiguration("temporal_filter"),
-                    # QoS — must match subscriber side (BEST_EFFORT / SENSOR_DATA)
-                    "depth_qos": LaunchConfiguration("depth_qos"),
-                    "color_qos": LaunchConfiguration("color_qos"),
-                    # TF — publish internal camera frame TFs as static
-                    "publish_tf": "true",
-                    "tf_publish_rate": "0.0",
-                }.items(),
+            # --- RealSense camera node ---
+            Node(
+                package="realsense2_camera",
+                executable="realsense2_camera_node",
+                namespace="",
+                name="camera",
+                output="screen",
+                emulate_tty=True,
+                parameters=[
+                    {
+                        # Camera identity
+                        "camera_namespace": "",
+                        "camera_name": "camera",
+                        "serial_no": serial_no,
+                        "enable_color": True,
+                        "enable_depth": True,
+                        "enable_infra": False,
+                        "enable_infra1": False,
+                        "enable_infra2": False,
+                        "enable_gyro": False,
+                        "enable_accel": False,
+                        # Stream profiles (ros2-master format)
+                        "depth_module.depth_profile": LaunchConfiguration(
+                            "depth_profile"
+                        ),
+                        "rgb_camera.color_profile": LaunchConfiguration(
+                            "color_profile"
+                        ),
+                        # Alignment and sync
+                        "align_depth.enable": align_depth,
+                        "enable_sync": enable_sync,
+                        # Point cloud
+                        "pointcloud.enable": pointcloud,
+                        # Post-processing filters
+                        "spatial_filter.enable": spatial_filter,
+                        "temporal_filter.enable": temporal_filter,
+                        # TF - publish internal camera frame TFs as static
+                        "publish_tf": True,
+                        "tf_publish_rate": 0.0,
+                    }
+                ],
+                arguments=["--ros-args", "--log-level", "info"],
             ),
         ]
     )

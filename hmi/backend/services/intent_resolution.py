@@ -30,8 +30,10 @@ if _SAFETY_SOURCE.exists():
 
 try:  # pragma: no cover - fallback logic is covered
     from llm_gateway.intent_engine import IntentRouter
+    from llm_gateway.intent_engine import prepare_semantic_ir_for_routing
 except Exception:  # pragma: no cover - depends on optional source path
     IntentRouter = None  # type: ignore[assignment]
+    prepare_semantic_ir_for_routing = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - fallback logic is covered
     from llm_gateway.intent_engine import (
@@ -117,6 +119,9 @@ class IntentResolutionService(IntentNormalizationMixin):
         working_payload = dict(candidate_payload)
         try:
             working_payload = self._inject_return_to_start_joints(
+                working_payload, current_joints
+            )
+            working_payload = self._prepare_semantic_ir_for_routing(
                 working_payload, current_joints
             )
         except IntentResolutionError as exc:
@@ -276,6 +281,39 @@ class IntentResolutionService(IntentNormalizationMixin):
             joint_target.append(math.radians(float(position_deg)))
         return joint_target
 
+    def _prepare_semantic_ir_for_routing(
+        self, payload: dict[str, Any], current_joints: list[Any]
+    ) -> dict[str, Any]:
+        if not self._semantic_ir_contains_intent(payload, "move_joint_delta"):
+            return dict(payload)
+        if prepare_semantic_ir_for_routing is None:
+            raise IntentResolutionError(
+                "semantic intent preparation is unavailable because llm_gateway.intent_engine is not importable."
+            )
+        try:
+            if len(current_joints) != len(JOINT_NAMES):
+                raise IntentResolutionError(
+                    "move_joint_delta requires a complete current joint snapshot.",
+                    missing_slots=["joint_positions"],
+                )
+            joint_positions_rad = []
+            for index, joint in enumerate(current_joints):
+                position_deg = getattr(joint, "position_deg", None)
+                if position_deg is None:
+                    raise IntentResolutionError(
+                        "move_joint_delta requires a complete current joint snapshot.",
+                        missing_slots=[f"joint_positions[{index}]"],
+                    )
+                joint_positions_rad.append(math.radians(float(position_deg)))
+            return prepare_semantic_ir_for_routing(
+                payload,
+                current_joint_positions_rad=joint_positions_rad,
+            )
+        except IntentResolutionError:
+            raise
+        except ValueError as exc:
+            raise IntentResolutionError(str(exc)) from exc
+
     def _inject_return_to_start_joints_recursive(
         self, payload: dict[str, Any], joint_target: list[float]
     ) -> dict[str, Any]:
@@ -378,6 +416,7 @@ class IntentResolutionService(IntentNormalizationMixin):
                 raise IntentResolutionError(
                     "semantic intent routing is unavailable because llm_gateway.intent_engine is not importable."
                 )
+            payload = self._prepare_semantic_ir_for_routing(payload, current_joints)
             routed = IntentRouter(runtime_mode=runtime_mode).route(payload)
             if routed.route_type == "error":
                 message = (routed.error_payload or {}).get("message") or (

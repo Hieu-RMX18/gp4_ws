@@ -1,8 +1,8 @@
 # HMI ROS Interface Inventory — W0.T9
 
-**Date:** 2026-05-04
+**Date:** 2026-05-27 (updated)
 **Purpose:** Catalog all ROS surfaces consumed by `hmi/backend/` and `hmi/frontend/`
-so that later waves (W2–W7) can assess HMI breaking-change risk before modifying
+so that later waves can assess HMI breaking-change risk before modifying
 any ROS topic, service, or action.
 
 ## Discovery evidence
@@ -49,6 +49,25 @@ HMI frontend connects to the HMI backend via WebSocket (`/api/hmi/stream`), NOT 
 | `/llm_gateway/hydrate_workplane` | Service | `adapter.py:155,422` | Client | `interfaces/HydrateWorkplane` | MEDIUM |
 | `/llm_gateway/get_primitive_constants` | Service | `adapter.py:156,453` | Client | `interfaces/GetPrimitiveConstants` | LOW |
 | `/supervisor/confirm_execution` | Service | `adapter.py:158,489` | Client | `interfaces/ConfirmExecution` | HIGH |
+
+### ROS Parameters (safety-related)
+
+| Parameter | Used by | Type | Purpose |
+|-----------|---------|------|---------|
+| `safety_rules_yaml_path` | `motion_core_node.cpp`, `hw_adapter` | `string` | Path to `safety_rules.yaml` driving JointPositionGuard, ManipulabilityGuard, workspace bounds, and forbidden zones |
+
+### Safety Guard Pipeline (downstream of HMI dispatch)
+
+These guards run in the motion pipeline after HMI dispatches `/execute_motion`.
+They are not directly consumed by HMI but affect execution outcomes:
+
+| Guard | Stage | Location | Trigger |
+|-------|-------|----------|----------|
+| JointPositionGuard | A (Pre-Planning) | `PrimitiveRouterDispatch` | Before trajectory downsampling |
+| JointPositionGuard | B (Quality Gate) | `QualityGate` | Before plan dispatch |
+| ManipulabilityGuard | B (Quality Gate) | `QualityGate` | Before plan dispatch |
+| JointPositionGuard | C (Dispatch Boundary) | `hw_adapter/TrajectoryExecutor` | Before hardware execution |
+| WristFlipGuard | B (Quality Gate) | `QualityGate` | Cumulative rotation check |
 
 ## Change sensitivity definitions
 

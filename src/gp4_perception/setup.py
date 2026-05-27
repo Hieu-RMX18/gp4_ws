@@ -26,6 +26,7 @@ setup(
             "calibration_service = gp4_perception.calibration:main_calibration_service",
             "tf_publisher = gp4_perception.calibration:main_tf_publisher",
             "scene_processor = gp4_perception.scene_processor:main",
+            "detection_visualizer = gp4_perception.detection_visualizer:main",
         ],
     },
 )

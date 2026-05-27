@@ -29,7 +29,7 @@ struct MoveRelLimits {
   static constexpr double kYMin =
       -0.16; // front wall -0.197 + 37mm; above front_wall_guard max
   static constexpr double kYMax = 0.52; // reach-limited
-  static constexpr double kZMin = 0.23; // table top ~0.20 + 30mm
+  static constexpr double kZMin = 0.15; // lowered per operator verification 2026-05-17
   static constexpr double kZMax =
       0.65; // raised per operator approval for taller workpieces
 
@@ -50,13 +50,13 @@ struct MoveRelLimits {
   static constexpr double kRightWallSizeY = 1.10;
   static constexpr double kRightWallSizeZ = 1.50;
 
-  // floor_clearance_guard: low-Z table/floor zone, Z in [0.00, 0.20].
+  // floor_clearance_guard: low-Z table/floor zone, Z in [0.00, 0.12].
   static constexpr double kFloorClearanceX = 0.00;
   static constexpr double kFloorClearanceY = 0.30;
-  static constexpr double kFloorClearanceZ = 0.10;
+  static constexpr double kFloorClearanceZ = 0.06;
   static constexpr double kFloorClearanceSizeX = 1.50;
   static constexpr double kFloorClearanceSizeY = 1.10;
-  static constexpr double kFloorClearanceSizeZ = 0.20;
+  static constexpr double kFloorClearanceSizeZ = 0.12;
 };
 
 /// Validate that reference_frame is either empty or "base_link".

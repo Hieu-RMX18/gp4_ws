@@ -1,11 +1,13 @@
 """Safety guards for perception calibration and depth quality.
 
-Three guards:
-  - calibration freshness (≤30 days)
+Two guards:
   - reprojection error (≤3 mm)
   - depth noise (range-aware, interpolated from breakpoints)
-"""
 
+Calibration age/freshness is NOT enforced — a valid calibration_date is
+required to exist but has no expiry.  Re-calibrate when the camera is
+physically moved.
+"""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -15,7 +17,7 @@ from typing import Any
 EXTRINSICS_SCHEMA = {
     "hand_eye_extrinsics": {
         "parent_frame": "base_link",
-        "child_frame": "camera_color_optical_frame",
+        "child_frame": "camera_link",
         "translation": {"x": float, "y": float, "z": float},
         "rotation_quat": {"x": float, "y": float, "z": float, "w": float},
         "calibration_date": str,
@@ -28,25 +30,24 @@ EXTRINSICS_SCHEMA = {
 
 
 def check_calibration_freshness(
-    extrinsics_yaml: dict, max_age_days: int
+    extrinsics_yaml: dict, max_age_days: int = 0
 ) -> tuple[bool, str]:
-    """Return (ok, reason) for calibration age check."""
+    """Return (ok, reason) — only checks that a calibration_date exists.
+
+    The *max_age_days* parameter is kept in the signature for API
+    compatibility but is **ignored**.  No time-based expiry is enforced.
+    """
     date_str = extrinsics_yaml.get("hand_eye_extrinsics", {}).get("calibration_date")
     if not date_str or date_str == "<NOT_CALIBRATED>":
         return False, "calibration_date missing — run /perception/calibrate_hand_eye"
     try:
-        # Normalize: strip trailing Z and replace with +00:00 so fromisoformat
-        # always produces a timezone-aware datetime.
         normalized = date_str.replace("Z", "+00:00")
         cal_date = datetime.fromisoformat(normalized)
         if cal_date.tzinfo is None:
             cal_date = cal_date.replace(tzinfo=timezone.utc)
     except ValueError:
         return False, f"calibration_date '{date_str}' is not a valid ISO 8601 timestamp"
-    now = datetime.now(timezone.utc)
-    age_days = (now - cal_date).total_seconds() / 86400.0
-    if age_days > max_age_days:
-        return False, f"calibration is {age_days:.1f} days old (max {max_age_days})"
+    # No age check — calibration is valid indefinitely until re-calibrated.
     return True, ""
 
 
@@ -61,13 +62,26 @@ def check_reprojection_error(extrinsics_yaml: dict, max_mm: float) -> tuple[bool
 
 
 def _interpolate_threshold(
-    distance_m: float, breakpoints: list[dict[str, Any]]
+    distance_m: float,
+    breakpoints: list[dict[str, Any]],
+    extrapolation: str = "reject",
 ) -> float | None:
-    """Linear interpolation of noise threshold from breakpoints."""
+    """Linear interpolation of noise threshold from breakpoints.
+
+    Args:
+        extrapolation: 'reject' returns None for out-of-range distances,
+                       'clamp' uses the nearest endpoint threshold.
+    """
     if not breakpoints:
         return None
     bp = sorted(breakpoints, key=lambda b: b["distance_m"])
-    if distance_m < bp[0]["distance_m"] or distance_m > bp[-1]["distance_m"]:
+    if distance_m < bp[0]["distance_m"]:
+        if extrapolation == "clamp":
+            return float(bp[0]["noise_mm_max"])
+        return None
+    if distance_m > bp[-1]["distance_m"]:
+        if extrapolation == "clamp":
+            return float(bp[-1]["noise_mm_max"])
         return None
     for i in range(len(bp) - 1):
         d0, n0 = bp[i]["distance_m"], bp[i]["noise_mm_max"]
@@ -84,9 +98,10 @@ def check_depth_noise(
     detection_distance_m: float,
     observed_noise_mm: float,
     breakpoints: list[dict[str, Any]],
+    extrapolation: str = "reject",
 ) -> tuple[bool, str]:
     """Return (ok, reason) for depth noise at a given distance."""
-    threshold = _interpolate_threshold(detection_distance_m, breakpoints)
+    threshold = _interpolate_threshold(detection_distance_m, breakpoints, extrapolation)
     if threshold is None:
         return (
             False,

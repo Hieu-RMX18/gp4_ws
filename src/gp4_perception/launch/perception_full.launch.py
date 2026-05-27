@@ -1,4 +1,4 @@
-"""Launch full perception stack: camera + scene processor + TF."""
+"""Launch full perception stack: camera + scene processor + TF + viewer."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
@@ -11,7 +11,22 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description() -> LaunchDescription:
     return LaunchDescription(
         [
-            DeclareLaunchArgument("serial", default_value="<RUNTIME>"),
+            DeclareLaunchArgument("serial", default_value="943222073917"),
+            DeclareLaunchArgument(
+                "enable_bbox_filter",
+                default_value="true",
+                description="Enable workspace bounding-box filter (set false to see all detections)",
+            ),
+            DeclareLaunchArgument(
+                "depth_profile",
+                default_value="848x480x30",
+                description="Depth stream resolution and FPS (W,H,FPS)",
+            ),
+            DeclareLaunchArgument(
+                "color_profile",
+                default_value="1280x720x30",
+                description="Color stream resolution and FPS (W,H,FPS)",
+            ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     [
@@ -20,13 +35,20 @@ def generate_launch_description() -> LaunchDescription:
                         "/camera.launch.py",
                     ]
                 ),
-                launch_arguments={"serial": LaunchConfiguration("serial")}.items(),
+                launch_arguments={
+                    "serial": LaunchConfiguration("serial"),
+                    "depth_profile": LaunchConfiguration("depth_profile"),
+                    "color_profile": LaunchConfiguration("color_profile"),
+                }.items(),
             ),
             Node(
                 package="gp4_perception",
                 executable="scene_processor",
                 name="scene_processor",
                 output="screen",
+                parameters=[
+                    {"enable_bbox_filter": LaunchConfiguration("enable_bbox_filter")},
+                ],
             ),
             Node(
                 package="gp4_perception",
@@ -34,5 +56,12 @@ def generate_launch_description() -> LaunchDescription:
                 name="tf_publisher",
                 output="screen",
             ),
+            Node(
+                package="gp4_perception",
+                executable="detection_visualizer",
+                name="detection_visualizer",
+                output="screen",
+            ),
         ]
     )
+

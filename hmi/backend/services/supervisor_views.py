@@ -496,6 +496,7 @@ class SupervisorViewsMixin:
         text: str,
         command_id: str | None = None,
         tag: str | None = None,
+        source: str | None = None,
     ) -> ChatMessage:
         message = ChatMessage(
             message_id=str(uuid4()),
@@ -504,6 +505,7 @@ class SupervisorViewsMixin:
             timestamp=_utcnow().strftime("%H:%M:%S"),
             text=text,
             tag=tag,
+            source=source,
         )
         self._messages.append(message)
         return message

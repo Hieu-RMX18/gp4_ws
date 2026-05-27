@@ -44,17 +44,17 @@ ros2 topic info /camera/depth/color/points -v
 The short path is below. Use the full runbook for preflight, TF checks, safety
 boundaries, and troubleshooting.
 
-1. Attach ArUco/Charuco board to the gripper (eye-to-hand setup).
+1. Attach the Charuco 10x11 board to the gripper (eye-to-hand setup).
 2. Launch calibration collection:
    ```bash
    ros2 launch gp4_perception calibration_collect.launch.py
    ```
 3. Jog the robot through varied poses (12–24 recommended). Spread orientations.
 4. Call the service:
-   ```bash
-   ros2 service call /perception/calibrate_hand_eye interfaces/srv/CalibrateHandEye \
-     "{fiducial_id: 'board_5x7', min_samples: 12}"
-   ```
+  ```bash
+  ros2 service call /perception/calibrate_hand_eye interfaces/srv/CalibrateHandEye \
+     "{fiducial_id: 'charuco_10x11_20mm_15mm', min_samples: 12}"
+  ```
 5. Verify extrinsics:
    ```bash
    cat src/gp4_perception/config/extrinsics.yaml
@@ -83,7 +83,7 @@ ros2 topic info /camera/depth/color/points -v
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Stale calibration error on launch | extrinsics.yaml has `<NOT_CALIBRATED>` or date >30 days | Re-run calibration service |
-| Frame mismatch in TF tree | OpenCV optical frame vs ROS frame conversion error | Check `camera_color_optical_frame` orientation in extrinsics |
+| Frame mismatch in TF tree | Missing or conflicting camera root/optical transforms | Check `base_link -> camera_link` in extrinsics and RealSense `camera_link -> camera_color_optical_frame` TF |
 | Random missing depth pixels | IR projector cross-talk with fluorescent lighting | Set `emitter_enabled:=false` in launch |
 | Scene processor callback never fires | QoS mismatch (RELIABLE subscriber vs BEST_EFFORT publisher) | Ensure `qos_profile_sensor_data` is used |
 | MoveIt becomes unresponsive | Collision objects published too frequently | Lower detection rate or increase TTL in perception.yaml |

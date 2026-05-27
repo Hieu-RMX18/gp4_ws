@@ -24,6 +24,7 @@ public:
   static constexpr double kMinimumFractionCartesianPath = 0.95;
   static constexpr double kMinimumFractionLin = 0.90;
   static constexpr double kMinimumFractionCIRC = 0.90;
+  static constexpr double kMinimumFractionMoveRel = 0.70;
   static constexpr double kFractionNotApplicable = -1.0;
 
   /// Returns the minimum acceptable Cartesian fraction for the given primitive.

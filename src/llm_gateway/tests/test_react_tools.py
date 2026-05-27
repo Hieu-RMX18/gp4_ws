@@ -106,6 +106,7 @@ from llm_gateway.react_planner import StateInjector
 from llm_gateway.react_planner import GetCurrentPoseTool
 from llm_gateway.react_planner import PlanMotionTool
 from llm_gateway.react_planner import QueryPerceptionTool
+from llm_gateway.react_planner import ReActAgent
 from llm_gateway.react_planner import SubmitMotionTool
 from llm_gateway.intent_engine import Normalizer
 from llm_gateway.intent_engine import SchemaValidator
@@ -123,14 +124,39 @@ class _PoseNode:
 
 class _PoseSnapshotNode:
     def __init__(self):
-        self.requested_frame = None
+        self.cache_requested_frame = None
+        self.live_requested_frame = None
+
+    def _get_cached_current_pose_snapshot(self, reference_frame):
+        self.cache_requested_frame = reference_frame
+        return None
 
     def _request_current_pose_snapshot(self, reference_frame):
-        self.requested_frame = reference_frame
+        self.live_requested_frame = reference_frame
         return {
-            "position": {"x": 0.30, "y": 0.0, "z": 0.40},
+            "position": {"x": 0.31, "y": 0.02, "z": 0.41},
             "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
         }
+
+class _UnavailablePoseSnapshotNode(_PoseSnapshotNode):
+    def _request_current_pose_snapshot(self, reference_frame):
+        self.live_requested_frame = reference_frame
+        return None
+
+
+class _CachedPoseNode:
+    def __init__(self):
+        self.requested_frame = None
+
+    def _get_cached_current_pose_snapshot(self, reference_frame):
+        self.requested_frame = reference_frame
+        return {
+            "position": {"x": 0.31, "y": 0.02, "z": 0.41},
+            "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+        }
+
+    def _request_current_pose_snapshot(self, reference_frame):
+        raise AssertionError("service path should not run when fresh cached pose exists")
 
 
 class _ValidationResponse:
@@ -294,16 +320,16 @@ def test_react_callback_path_does_not_use_nested_spin_until_future_complete():
     assert offenders == []
 
 
-def test_get_current_pose_uses_get_current_pose_srv_contract():
+def test_get_current_pose_requires_gateway_cache_contract():
     result = GetCurrentPoseTool().invoke(
         {},
         AgentContext(state_injector=StateInjector(), ros_node=_PoseNode()),
     )
     assert result.ok is False
-    assert result.error == "get_current_pose async client is not exposed to ReAct tools"
+    assert result.error == "get_current_pose is not exposed to ReAct tools"
 
 
-def test_get_current_pose_uses_node_pose_snapshot_contract():
+def test_get_current_pose_fetches_live_pose_on_cache_miss():
     node = _PoseSnapshotNode()
     result = GetCurrentPoseTool().invoke(
         {"reference_frame": "base_link"},
@@ -311,7 +337,31 @@ def test_get_current_pose_uses_node_pose_snapshot_contract():
     )
     assert result.ok is True
     assert result.payload["pose"]["header"]["frame_id"] == "base_link"
-    assert result.payload["pose"]["pose"]["position"]["x"] == 0.30
+    assert result.payload["pose"]["pose"]["position"]["x"] == 0.31
+    assert node.cache_requested_frame == "base_link"
+    assert node.live_requested_frame == "base_link"
+
+def test_get_current_pose_fails_closed_when_cache_and_live_pose_are_unavailable():
+    node = _UnavailablePoseSnapshotNode()
+    result = GetCurrentPoseTool().invoke(
+        {"reference_frame": "base_link"},
+        AgentContext(state_injector=StateInjector(), ros_node=node),
+    )
+    assert result.ok is False
+    assert "current_pose_unavailable" in result.error
+    assert node.cache_requested_frame == "base_link"
+    assert node.live_requested_frame == "base_link"
+
+
+def test_get_current_pose_prefers_fresh_gateway_cache_before_service_call():
+    node = _CachedPoseNode()
+    result = GetCurrentPoseTool().invoke(
+        {"reference_frame": "base_link"},
+        AgentContext(state_injector=StateInjector(), ros_node=node),
+    )
+    assert result.ok is True
+    assert result.payload["pose"]["header"]["frame_id"] == "base_link"
+    assert result.payload["pose"]["pose"]["position"]["x"] == 0.31
     assert node.requested_frame == "base_link"
 
 
@@ -455,6 +505,20 @@ def test_submit_motion_description_matches_confirmation_handoff_contract():
 
     assert "confirmation" in description
     assert "without executing" in description
+
+
+def test_react_prompt_uses_hardware_adjacent_velocity_cap():
+    prompt = ReActAgent(
+        llm_client=None,
+        tool_registry=SimpleNamespace(available_tools_description=lambda: ""),
+        state_injector=StateInjector(),
+        budget=SimpleNamespace(max_iterations=1),
+        schema_validator=None,
+    )._build_prompt("move up 1 cm", {}, [])
+
+    prompt_text = "\n".join(message["content"] for message in prompt)
+    assert "velocity_scale 0.06" in prompt_text
+    assert "velocity_scale 0.10" not in prompt_text
 
 
 def test_submit_motion_fails_closed_without_ros_node():

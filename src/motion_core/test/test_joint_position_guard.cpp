@@ -13,7 +13,7 @@ std::unordered_map<std::string, JointLimit> make_operational_limits() {
   return {
       {"joint_1_s", {-2.967, 2.967}}, {"joint_2_l", {-1.920, 2.269}},
       {"joint_3_u", {-1.134, 3.491}}, {"joint_4_r", {-2.443, 2.443}},
-      {"joint_5_b", {-1.603, 1.603}}, {"joint_6_t", {-3.142, 3.142}},
+      {"joint_5_b", {-1.80, 1.80}}, {"joint_6_t", {-3.142, 3.142}},
   };
 }
 
@@ -64,18 +64,18 @@ TEST(JointPositionGuardTest, RejectsJoint4RAboveLimit) {
                                "joint_4_r", "joint_5_b", "joint_6_t"},
                               {
                                   {0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
-                                  {0.0, 0.0, 0.0, 2.444, 0.0, 0.0},
+                                  {0.0, 0.0, 0.0, 2.460, 0.0, 0.0},
                               });
   std::string reason;
   EXPECT_FALSE(guard.check_trajectory(traj, reason));
   EXPECT_NE(reason.find("joint_4_r"), std::string::npos);
   EXPECT_NE(reason.find("point[1]"), std::string::npos);
-  EXPECT_NE(reason.find("2.4440"), std::string::npos);
+  EXPECT_NE(reason.find("2.4600"), std::string::npos);
 }
 
 TEST(JointPositionGuardTest, RejectsJoint5BAtPoint3) {
   JointPositionGuard guard(make_operational_limits());
-  auto traj = make_trajectory({"joint_5_b"}, {{0.0}, {-0.5}, {-1.0}, {-1.604}});
+  auto traj = make_trajectory({"joint_5_b"}, {{0.0}, {-0.5}, {-1.0}, {-1.815}});
   std::string reason;
   EXPECT_FALSE(guard.check_trajectory(traj, reason));
   EXPECT_NE(reason.find("joint_5_b"), std::string::npos);
@@ -93,7 +93,7 @@ TEST(JointPositionGuardTest, RejectsJoint6TFarOutside) {
 
 TEST(JointPositionGuardTest, ReasonMessageMatchesFormat) {
   JointPositionGuard guard(make_operational_limits());
-  auto traj = make_trajectory({"joint_5_b"}, {{-1.700}});
+  auto traj = make_trajectory({"joint_5_b"}, {{-1.815}});
   std::string reason;
   EXPECT_FALSE(guard.check_trajectory(traj, reason));
   EXPECT_NE(reason.find("joint_position_guard reject at point[0]"),
@@ -107,8 +107,8 @@ TEST(JointPositionGuardTest, HasLimitAndGetLimit) {
   EXPECT_TRUE(guard.has_limit("joint_5_b"));
   EXPECT_FALSE(guard.has_limit("nonexistent_joint"));
   const auto lim = guard.get_limit("joint_5_b");
-  EXPECT_DOUBLE_EQ(lim.min, -1.603);
-  EXPECT_DOUBLE_EQ(lim.max, 1.603);
+  EXPECT_DOUBLE_EQ(lim.min, -1.80);
+  EXPECT_DOUBLE_EQ(lim.max, 1.80);
 }
 
 TEST(JointPositionGuardTest, DefaultConstructedPassesEverything) {
@@ -158,6 +158,36 @@ TEST(JointPositionGuardTest, ModeExtendedFallsBackToDefaultForNonTiered) {
   EXPECT_FALSE(
       guard.check_trajectory(traj, reason, JointPositionGuard::Mode::Extended));
   EXPECT_NE(reason.find("mode=extended"), std::string::npos);
+}
+
+TEST(JointPositionGuardTest, ToleranceAllowsSlightOvershoot) {
+  JointPositionGuard guard(make_operational_limits(), 0.005);
+  auto traj = make_trajectory({"joint_5_b"}, {{-1.8037}});
+  std::string reason;
+  EXPECT_TRUE(guard.check_trajectory(traj, reason));
+  EXPECT_TRUE(reason.empty());
+}
+
+TEST(JointPositionGuardTest, ToleranceStillRejectsBeyondMargin) {
+  JointPositionGuard guard(make_operational_limits(), 0.005);
+  auto traj = make_trajectory({"joint_5_b"}, {{-1.810}});
+  std::string reason;
+  EXPECT_FALSE(guard.check_trajectory(traj, reason));
+  EXPECT_NE(reason.find("joint_5_b"), std::string::npos);
+}
+
+TEST(JointPositionGuardTest, ZeroToleranceRejectsExactOvershoot) {
+  JointPositionGuard guard(make_operational_limits(), 0.0);
+  auto traj = make_trajectory({"joint_5_b"}, {{-1.8001}});
+  std::string reason;
+  EXPECT_FALSE(guard.check_trajectory(traj, reason));
+  EXPECT_NE(reason.find("joint_5_b"), std::string::npos);
+}
+
+TEST(JointPositionGuardTest, DefaultToleranceMatchesConstant) {
+  JointPositionGuard guard(make_operational_limits());
+  EXPECT_DOUBLE_EQ(guard.tolerance_rad(),
+                   JointPositionGuard::kDefaultToleranceRad);
 }
 
 } // namespace

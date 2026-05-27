@@ -274,13 +274,13 @@ export function buildReviewLogEntries(
 ): LogEntryView[] {
   const time = formatTimestamp(job?.createdAt ?? fallbackTimestamp);
   const entries: LogEntryView[] = [
-    { id: 'review-plan-fingerprint', time, level: 'info', message: formatPlanFingerprintLog(job) },
+    { id: 'review-plan-fingerprint', time, level: 'info', message: formatPlanFingerprintLog(job), source: null },
   ];
   if (blockingReasons.length > 0) {
-    entries.push({ id: 'review-blocking-reasons', time, level: 'warn', message: `Blocking reasons: ${blockingReasons.join(' ')}` });
+    entries.push({ id: 'review-blocking-reasons', time, level: 'warn', message: `Blocking reasons: ${blockingReasons.join(' ')}`, source: null });
   }
   if (declineReason) {
-    entries.push({ id: 'review-decline-reason', time, level: 'err', message: `Decline reason: ${declineReason}` });
+    entries.push({ id: 'review-decline-reason', time, level: 'err', message: `Decline reason: ${declineReason}`, source: null });
   }
   return entries;
 }

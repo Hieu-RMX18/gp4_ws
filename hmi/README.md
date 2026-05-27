@@ -1,17 +1,70 @@
-# GP4 HMI telemetry bridge v1 + supervisor command ingress v2
+# GP4 HMI — Telemetry Bridge v1 + Supervisor Command Ingress v2
 
 ## Current state
 
 - Telemetry bridge v1 remains frozen for runtime-state, freshness, heartbeat, and schema-version behavior.
-- HMI v2 now adds a supervisor-owned command ingress path on top of that baseline.
-- Command ingress is **sim-only** in this build.
-- MotoROS2 / hardware freshness and hardware execution remain explicitly unverified.
-- Confirmed commands now validate through `/validate_command` and dispatch `/execute_motion` in **sim mode only**.
+- HMI v2 adds a supervisor-owned command ingress path on top of that baseline.
+- Command ingress is operational on both sim and hardware.
+- Hardware telemetry validation Phase A is **confirmed** (see `HARDWARE_TELEMETRY_VALIDATION.md`).
+- Confirmed commands validate through `/validate_command` and dispatch `/execute_motion`.
+- Full pipeline (HMI → safety → MoveIt → hw_adapter → YRC1000micro) commissioned and running on real hardware.
+- Safety guards (JointPositionGuard, ManipulabilityGuard, WristFlipGuard) are wired into the motion pipeline downstream of HMI command dispatch.
+- CI no longer masks HMI backend/frontend test failures; 7 pre-existing backend tests fail due to missing generated interfaces (not a new regression).
 
-Primary architecture note:
+Primary architecture notes:
 
 - `hmi/HARDWARE_TELEMETRY_VALIDATION.md`
 - `docs/hmi/HMI_ROS_INTERFACES.md`
+
+## Architecture
+
+```
+hmi/frontend (React 18 + Vite + TypeScript)
+    │  REST + WebSocket via Vite proxy
+    ▼
+hmi/backend/api (FastAPI)
+    │  rclpy native (NOT rosbridge)
+    ▼
+ROS 2 topics / services / actions
+```
+
+### Backend services
+
+| Service | File | Responsibility |
+|---------|------|---------------|
+| Supervisor | `supervisor_service.py` | Top-level supervisor orchestrator |
+| Supervisor Execution | `supervisor_execution.py` | Execute motion via `/execute_motion` action |
+| Supervisor Lifecycle | `supervisor_lifecycle.py` | State machine for command lifecycle |
+| Supervisor Sequence | `supervisor_sequence.py` | Multi-step sequence execution ("park" verb removed) |
+| Supervisor Submission | `supervisor_submission.py` | ReviewIntent submission and command routing |
+| Supervisor Validation | `supervisor_validation.py` | Pre-dispatch command validation |
+| Supervisor Views | `supervisor_views.py` | Read-only supervisor state queries |
+| Telemetry Bridge | `telemetry_bridge_service.py` | Telemetry snapshot, freshness, WebSocket stream |
+| Jog Service | `jog_service.py` | Real-time joint jogging dispatch |
+| Session Lock | `session_lock_service.py` | Operator session lease management |
+| Audit | `audit_service.py` | Execution audit trail |
+| Intent Resolution | `intent_resolution.py` | Natural language → structured intent |
+| Intent Normalization | `intent_normalization.py` | Unit/defaults normalization |
+| Intent Constants | `intent_constants.py` | Shared intent definitions |
+
+### Frontend components
+
+| Component | File | Description |
+|-----------|------|-------------|
+| GP4HMI | `GP4HMI.tsx` | Main HMI layout shell |
+| Topbar | `gp4-hmi/Topbar.tsx` | Header bar with status indicators |
+| ChatPanel | `gp4-hmi/ChatPanel.tsx` | Natural language command input |
+| CommandComposer | `gp4-hmi/CommandComposer.tsx` | Structured command builder |
+| CommandPipelinePanel | `gp4-hmi/CommandPipelinePanel.tsx` | Pipeline stage visualization |
+| ControlLeasePanel | `gp4-hmi/ControlLeasePanel.tsx` | Operator lease acquire/release |
+| JointMonitor | `gp4-hmi/JointMonitor.tsx` | Joint position readout |
+| TcpPosePanel | `gp4-hmi/TcpPosePanel.tsx` | TCP XYZ/RPY display |
+| TelemetrySources | `gp4-hmi/TelemetrySources.tsx` | Source freshness status |
+| SystemMetrics | `gp4-hmi/SystemMetrics.tsx` | System health metrics |
+| SystemLog | `gp4-hmi/SystemLog.tsx` | Real-time log viewer |
+| QuickCommands | `gp4-hmi/QuickCommands.tsx` | Preset command shortcuts |
+| JogPendant | `JogPendant.tsx` | Real-time joint jogging UI |
+| RuntimeStateBanner | `RuntimeStateBanner.tsx` | Runtime state indicator |
 
 ## Backend dependencies
 
@@ -178,13 +231,16 @@ Schema compatibility policy:
 Unit verification:
 
 ```bash
-python3 -m unittest -v \
-  hmi.backend.tests.test_telemetry_bridge_v1 \
-  hmi.backend.tests.test_ros_adapter \
-  hmi.backend.tests.test_supervisor_service \
-  hmi.backend.tests.test_audit_service
+# Backend tests (requires generated ROS interfaces in install/)
+pytest hmi/backend -v
+
+# Frontend build check
 cd /home/hieu2/gp4_ws/hmi/frontend && npm run build
 ```
+
+> **Note:** 7 backend tests currently fail due to missing generated ROS interfaces
+> when run outside a full `colcon build` environment. This is a pre-existing issue
+> that was previously masked by CI `|| true`. It is not a new regression.
 
 ## Runtime validation
 
@@ -243,13 +299,16 @@ Timing-sensitive scenarios:
 
 These rely on freshness windows and scheduler timing, so they are the first to show machine-load or timing jitter issues.
 
-## Hardware telemetry validation gate
+## Hardware telemetry validation
 
-Phase A for hardware remains open. Use the read-only capture tool and worksheet in:
+Phase A telemetry validation is **confirmed** on the live hardware stack.
+Hardware command execution remains gated at runtime by mode selection,
+controller lease, operator confirmation, command validation, and execution preflight.
 
-- `hmi/HARDWARE_TELEMETRY_VALIDATION.md`
+See `hmi/HARDWARE_TELEMETRY_VALIDATION.md` for the full validation worksheet and
+capture tool usage.
 
-Capture command:
+Capture command (read-only, does not enable execution):
 
 ```bash
 cd /home/hieu2/gp4_ws
@@ -258,5 +317,3 @@ python3 hmi/tools/hardware_telemetry_validation.py \
   --duration-sec 120 \
   --output /tmp/gp4_hardware_telemetry_report.json
 ```
-
-This does not enable execution. It only captures live MotoROS2 telemetry evidence.

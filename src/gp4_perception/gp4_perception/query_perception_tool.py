@@ -13,7 +13,8 @@ from typing import Any
 
 import yaml
 
-from .safety_guards import check_calibration_freshness
+from .safety_guards import check_reprojection_error
+from .scene_geometry import _display_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -67,14 +68,7 @@ def _format_detection(detection: dict) -> dict:
     max_dim_cm = round(max(size["x"], size["y"], size["z"]) * 100, 1)
 
     # Build human-readable description.
-    parts = class_id.split("_") if class_id else ["unknown"]
-    if len(parts) == 2:
-        color, shape = parts[0], parts[1]
-        desc = f"{color} {shape}"
-    elif len(parts) == 1:
-        desc = parts[0]
-    else:
-        desc = class_id
+    desc = _display_name(class_id)
 
     description = (
         f"{desc} at x={position['x']}, y={position['y']}, z={position['z']} "
@@ -126,14 +120,7 @@ def _format_detections_from_ros(detections: list) -> list[dict]:
                 }
 
         max_dim_cm = round(max(size["x"], size["y"], size["z"]) * 100, 1)
-        parts = class_id.split("_") if class_id else ["unknown"]
-        if len(parts) == 2:
-            color, shape = parts[0], parts[1]
-            desc = f"{color} {shape}"
-        elif len(parts) == 1:
-            desc = parts[0]
-        else:
-            desc = class_id
+        desc = _display_name(class_id)
 
         description = (
             f"{desc} at x={position['x']}, y={position['y']}, z={position['z']} "
@@ -156,16 +143,19 @@ def _format_detections_from_ros(detections: list) -> list[dict]:
 def query_perception(
     args: dict[str, Any],
     context_state: dict[str, Any],
-    max_age_days: int = 30,
+    max_reprojection_error_mm: float = 5.0,
     extrinsics_path: Path | None = None,
+    # Legacy parameter kept for API compatibility — ignored.
+    max_age_days: int = 0,
 ) -> dict[str, Any]:
     """Body of the query_perception tool.
 
     Args:
         args: tool arguments dict; may contain "class_filter".
         context_state: agent context state snapshot; must include "mode".
-        max_age_days: calibration freshness threshold.
+        max_reprojection_error_mm: calibration residual threshold.
         extrinsics_path: override path to extrinsics.yaml.
+        max_age_days: **Ignored** — kept for call-site compatibility.
 
     Returns:
         dict with keys ok, error, payload following ToolResult convention.
@@ -180,7 +170,7 @@ def query_perception(
         }
 
     extrinsics = load_extrinsics(extrinsics_path)
-    ok, reason = check_calibration_freshness(extrinsics, max_age_days)
+    ok, reason = check_reprojection_error(extrinsics, max_reprojection_error_mm)
     if not ok:
         return {"ok": False, "error": f"calibration_invalid: {reason}", "payload": None}
 

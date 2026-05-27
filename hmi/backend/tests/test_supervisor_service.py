@@ -1861,6 +1861,29 @@ class SupervisorServiceTests(unittest.TestCase):
         )
         self.assertTrue(any("Step 6/6 RESULT" in text for text in confirm_messages))
 
+    def test_step_messages_include_source_labels_and_match_api_contract(self) -> None:
+        lease_token = self._acquire_lease()
+        submit_response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="home",
+            mode="sim",
+        )
+
+        parsed = CommandMutationResponseModel.model_validate(submit_response)
+        sources_by_text = {
+            msg.text: msg.source for msg in parsed.snapshot.messages if msg.source
+        }
+
+        self.assertEqual(sources_by_text["home"], "operator")
+        self.assertTrue(
+            any(
+                source == "safety" and "VALIDATING" in text
+                for text, source in sources_by_text.items()
+            )
+        )
+
     def test_terminal_command_trace_logs_are_human_readable(self) -> None:
         lease_token = self._acquire_lease()
         with self.assertLogs("uvicorn.error", level="INFO") as captured:

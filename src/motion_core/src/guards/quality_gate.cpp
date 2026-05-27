@@ -22,6 +22,9 @@ double QualityGate::minimum_cartesian_fraction_for_primitive(
   if (primitive == "CIRC") {
     return kMinimumFractionCIRC;
   }
+  if (primitive == "MOVE_REL") {
+    return kMinimumFractionMoveRel;
+  }
   return kMinimumCartesianFraction;
 }
 

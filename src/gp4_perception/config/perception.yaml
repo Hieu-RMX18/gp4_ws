@@ -1,19 +1,20 @@
 perception:
   workspace_bbox_m:
-    x: [0.20, 0.55]
-    y: [-0.30, 0.30]
-    z: [0.00, 0.40]
-  voxel_size_m: 0.005
-  ransac_distance_threshold_m: 0.005
-  cluster_tolerance_m: 0.02
-  cluster_min_size: 50
-  cluster_max_size: 5000
+    x: [0.15, 0.70]
+    y: [-0.35, 0.35]
+    z: [0.01, 0.40]
+  voxel_size_m: 0.008
+  ransac_distance_threshold_m: 0.010
+  cluster_tolerance_m: 0.025
+  cluster_min_size: 200
+  cluster_max_size: 10000
   detection_ttl_s: 2.0
   depth_noise:
     # Range-aware threshold. D435i noise grows with distance; one flat number is wrong.
     # Linear interpolation between the breakpoints below.
+    # NOTE: thresholds relaxed for USB 2.1 — tighten when USB 3.0 is available.
     breakpoints:
-      - {distance_m: 0.30, noise_mm_max: 2.0}
-      - {distance_m: 0.50, noise_mm_max: 3.5}
-      - {distance_m: 0.80, noise_mm_max: 6.0}
-    extrapolation: "reject"   # outside breakpoints -> reject detection
+      - {distance_m: 0.30, noise_mm_max: 5.0}
+      - {distance_m: 0.50, noise_mm_max: 8.0}
+      - {distance_m: 0.80, noise_mm_max: 15.0}
+    extrapolation: "clamp"    # outside breakpoints -> use nearest breakpoint

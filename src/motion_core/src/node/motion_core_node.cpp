@@ -21,6 +21,8 @@
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <yaml-cpp/yaml.h>
 
+#include <std_msgs/msg/string.hpp>
+
 #include <interfaces/action/dispatch_trajectory.hpp>
 #include <interfaces/action/execute_motion.hpp>
 #include <interfaces/srv/alarm_reset.hpp>
@@ -59,6 +61,8 @@ public:
         quality_gate_(kTrajectoryHardLimitPoints,
                       QualityGate::kMinimumCartesianFraction,
                       JointPositionGuard{}, ManipulabilityGuard::disabled()) {
+    trace_pub_ = create_publisher<std_msgs::msg::String>("/llm_debug", 10);
+    
     // V4 Contract: motion_core does NOT execute directly on hardware.
     // It sends validated trajectories to hw_adapter via DispatchTrajectory
     // action.
@@ -103,16 +107,23 @@ public:
               tiered_limits[name] = TieredLimit{lim, std::nullopt};
             }
           }
+          double tolerance_rad = JointPositionGuard::kDefaultToleranceRad;
+          const auto guard_node = root["joint_position_guard"];
+          if (guard_node && guard_node["tolerance_rad"]) {
+            tolerance_rad = guard_node["tolerance_rad"].as<double>();
+          }
           const auto count = tiered_limits.size();
-          joint_position_guard_ = JointPositionGuard(std::move(tiered_limits));
+          joint_position_guard_ =
+              JointPositionGuard(std::move(tiered_limits), tolerance_rad);
           quality_gate_ = QualityGate(kTrajectoryHardLimitPoints,
                                       QualityGate::kMinimumCartesianFraction,
                                       joint_position_guard_,
                                       ManipulabilityGuard::disabled());
           RCLCPP_INFO(
               get_logger(),
-              "JointPositionGuard loaded %zu operational joint limits from %s",
-              count, safety_rules_yaml_path_.c_str());
+              "JointPositionGuard loaded %zu operational joint limits from %s "
+              "(tolerance=%.4f rad)",
+              count, safety_rules_yaml_path_.c_str(), tolerance_rad);
         } else {
           RCLCPP_WARN(get_logger(),
                       "No operational_joint_limits section in %s; "
@@ -290,6 +301,7 @@ private:
 
   std::shared_ptr<moveit::planning_interface::MoveGroupInterface> move_group_;
   PlanningSceneManager scene_manager_{get_logger()};
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr trace_pub_;
   bool require_planning_scene_{true};
   SceneLoadResult scene_load_result_{SceneLoadResult::SCENE_NOT_READY};
   std::string scene_objects_path_;
@@ -311,6 +323,35 @@ private:
     std::string reason;
     std::string note;
   };
+
+  void emit_trace(const std::string &event, const std::string &phase,
+                  const std::string &level, const std::string &summary,
+                  const std::string &details_json = "") {
+    if (!trace_pub_) return;
+    
+    auto ts = std::chrono::duration_cast<std::chrono::duration<double>>(
+                  std::chrono::system_clock::now().time_since_epoch())
+                  .count();
+    
+    std::ostringstream oss;
+    oss << "{"
+        << "\"t\":\"command_trace\","
+        << "\"ts\":" << ts << ","
+        << "\"cmd_id\":\"\","
+        << "\"layer\":\"motion_core\","
+        << "\"phase\":\"" << phase << "\","
+        << "\"event\":\"" << event << "\","
+        << "\"level\":\"" << level << "\","
+        << "\"summary\":\"" << summary << "\"";
+    if (!details_json.empty()) {
+      oss << ",\"details\":" << details_json;
+    }
+    oss << "}";
+    
+    std_msgs::msg::String msg;
+    msg.data = oss.str();
+    trace_pub_->publish(msg);
+  }
 
   void configure_manipulability_guard() {
     manipulability_guard_ = ManipulabilityGuard::disabled();
@@ -609,6 +650,8 @@ private:
     RCLCPP_INFO(get_logger(), "execute_motion goal_id=%s primitive=%s accepted",
                 goal_id.c_str(), primitive.c_str());
 
+    emit_trace("goal_accepted", "planning", "INFO", "Goal accepted: " + primitive);
+
     publish_feedback(goal_handle, 0.05, "goal_accepted");
 
     if (!ExecuteMotionActionSupport::is_supported_primitive(primitive)) {
@@ -634,6 +677,7 @@ private:
       const std::string reason = "orchestration reject: " + start_result.reason;
       RCLCPP_WARN(get_logger(), "execute_motion goal_id=%s primitive=%s %s",
                   goal_id.c_str(), primitive.c_str(), reason.c_str());
+      emit_trace("orchestration_reject", "planning", "ERROR", reason);
       abort_with_message(goal_handle, started_at, reason);
       return;
     }
@@ -748,6 +792,7 @@ private:
         [this, goal_sequence](const ExecutionPhase phase,
                               const std::string &detail) {
           execution_orchestrator_.update_phase(goal_sequence, phase, detail);
+          emit_trace("execution_phase_update", "execution", "INFO", detail);
         },
     });
 

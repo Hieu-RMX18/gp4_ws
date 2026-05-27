@@ -100,7 +100,7 @@ class ExecutionGate:
             return self._validate_callback_inner(request, response)
         finally:
             if response.valid:
-                self._emit_trace("validation_passed", level="INFO", summary="All safety checks passed")
+                self._emit_trace("validation_passed", level="INFO", summary="All safety checks passed", sanitized_json=response.sanitized_json)
             else:
                 self._emit_trace("validation_failed", level="ERROR", summary=response.reason, error_why=response.reason, error_where="safety/validate_command")
 
@@ -122,24 +122,35 @@ class ExecutionGate:
                     self.node.get_logger().warn(
                         "Bypassing readiness gate for ALARM_RESET recovery path."
                     )
+                    self._emit_trace("readiness_bypass", summary="ALARM_RESET bypasses readiness gate")
                 else:
                     reason = self._safety_manager.last_error_reason
                     self.node.get_logger().warn(
                         f"Execution blocked (fail-closed): {reason}"
                     )
+                    self._emit_trace("readiness_blocked", level="ERROR",
+                                     summary=f"Robot not ready: {reason}",
+                                     error_why=reason, error_where="safety/readiness_check")
                     response.valid = False
                     response.reason = f"BLOCKED: {reason}"
                     response.sanitized_json = ""
                     return response
+            else:
+                self._emit_trace("readiness_ok", summary="Robot readiness check PASSED")
 
         # 1. Validate JSON and parameters
+        self._emit_trace("param_validation_start", summary=f"Validating {raw_primitive_type} JSON parameters...")
         is_valid_cmd, reason_cmd = self.validator.validate(cmd_json)
         if not is_valid_cmd:
             self.node.get_logger().warn(f"Validation failed: {reason_cmd}")
+            self._emit_trace("param_validation_failed", level="ERROR",
+                             summary=f"Parameter check FAILED: {reason_cmd}",
+                             error_why=reason_cmd, error_where="safety/command_validator")
             response.valid = False
             response.reason = reason_cmd
             response.sanitized_json = ""
             return response
+        self._emit_trace("param_validation_passed", summary=f"{raw_primitive_type} parameter check PASSED")
 
         # 2. Extract command data
         cmd_data = json.loads(cmd_json)
@@ -149,15 +160,26 @@ class ExecutionGate:
         #     Pose check is skipped because the absolute target is computed
         #     from current_pose + delta inside motion_core — see class docstring.
         if prim_type == "MOVE_REL":
+            dx = cmd_data.get('delta_x', 0)
+            dy = cmd_data.get('delta_y', 0)
+            dz = cmd_data.get('delta_z', 0)
+            self._emit_trace("move_rel_delta_check",
+                             summary=f"Checking MOVE_REL deltas: dx={dx} dy={dy} dz={dz} frame={cmd_data.get('reference_frame','')}",
+                             delta_x=str(dx), delta_y=str(dy), delta_z=str(dz),
+                             max_norm=str(self._max_move_rel_delta_norm))
             move_rel_ok, move_rel_reason = self._validate_move_rel_deltas(cmd_data)
             if not move_rel_ok:
                 self.node.get_logger().warn(
                     f"MOVE_REL delta validation failed: {move_rel_reason}"
                 )
+                self._emit_trace("move_rel_delta_rejected", level="ERROR",
+                                 summary=move_rel_reason,
+                                 error_why=move_rel_reason, error_where="safety/move_rel_deltas")
                 response.valid = False
                 response.reason = move_rel_reason
                 response.sanitized_json = ""
                 return response
+            self._emit_trace("move_rel_delta_passed", summary="MOVE_REL delta magnitude and frame OK")
 
         # 3b. Check workspace and collisions if target_pose should be used.
         #     Skip for primitives that are non-pose commands.
@@ -182,13 +204,20 @@ class ExecutionGate:
             "BLENDED_SEQUENCE",
         }
         if prim_type not in pose_validation_skip_primitives and not ptp_with_joints:
+            p = request.target_pose.position
+            self._emit_trace("workspace_check",
+                             summary=f"Checking target pose in workspace: x={p.x:.4f} y={p.y:.4f} z={p.z:.4f}")
             is_valid_pose, reason_pose = self.guard.check_pose(request.target_pose)
             if not is_valid_pose:
                 self.node.get_logger().warn(f"Pose validation failed: {reason_pose}")
+                self._emit_trace("workspace_rejected", level="ERROR",
+                                 summary=f"Target pose OUTSIDE workspace: {reason_pose}",
+                                 error_why=reason_pose, error_where="safety/workspace_guard")
                 response.valid = False
                 response.reason = reason_pose
                 response.sanitized_json = ""
                 return response
+            self._emit_trace("workspace_passed", summary="Target pose within workspace bounds")
 
         # 3c. CIRC: validate auxiliary waypoint[0] workspace bounds (fail-closed)
         if prim_type == "CIRC":

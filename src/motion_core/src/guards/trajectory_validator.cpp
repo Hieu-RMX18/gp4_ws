@@ -1,5 +1,6 @@
 #include "motion_core/trajectory_validator.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 
@@ -18,6 +19,10 @@ bool validate_trajectory_structure(
     const trajectory_msgs::msg::JointTrajectory &traj, std::string &reason) {
   if (traj.points.empty()) {
     reason = "trajectory has no points";
+    return false;
+  }
+  if (traj.points.size() < 2U) {
+    reason = "trajectory must contain at least two points";
     return false;
   }
   if (traj.joint_names.empty()) {
@@ -75,6 +80,46 @@ bool validate_trajectory_structure(
     return false;
   }
 
+  return true;
+}
+
+bool is_single_point_noop_trajectory(
+    const trajectory_msgs::msg::JointTrajectory &traj,
+    const std::vector<double> &current_joint_positions, double tolerance_rad,
+    std::string &reason) {
+  reason.clear();
+  if (traj.points.size() != 1U) {
+    reason = "trajectory is not single-point";
+    return false;
+  }
+  if (traj.joint_names.empty()) {
+    reason = "single-point trajectory has no joint names";
+    return false;
+  }
+
+  const auto &positions = traj.points.front().positions;
+  if (positions.size() != current_joint_positions.size()) {
+    reason = "single-point trajectory joint count differs from current joint state";
+    return false;
+  }
+  if (positions.size() != traj.joint_names.size()) {
+    reason = "single-point trajectory positions size does not match joint count";
+    return false;
+  }
+  if (!is_finite_vector(positions) || !is_finite_vector(current_joint_positions)) {
+    reason = "single-point trajectory contains non-finite value";
+    return false;
+  }
+
+  for (std::size_t index = 0; index < positions.size(); ++index) {
+    if (std::abs(positions[index] - current_joint_positions[index]) >
+        tolerance_rad) {
+      reason = "single-point trajectory does not match current joint state";
+      return false;
+    }
+  }
+
+  reason.clear();
   return true;
 }
 

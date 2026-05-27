@@ -9,48 +9,41 @@
 #
 # Coordinate frame: base_link (GP4 robot base)
 #
-# Camera placement (from operator's perspective, facing the station front):
-#   - Upper-left corner of the station frame
-#   - Pitch down: ~40° (range 35–45°)
-#   - Yaw inward: ~20° (range 15–25°) towards workspace centre
+# Camera placement (operator perspective, facing station front):
+#   - Front of robot (facing direction at HOME pose), centred on base_link Y axis (X ≈ 0)
+#   - Diagonal distance from base origin to camera: ~1.025 m
+#   - Horizontal/vertical leg of the diagonal: ~0.724 m each
+#   - Pitch down ~45° towards base origin
 #
-# Station dimensions (from CAD, in base_link frame):
-#   X: [-0.482, +0.761]  Y: [-0.197, +0.806]  Z: [-0.757, +1.093]
-#
-# Estimated working distance from camera to workspace centre: ~0.7 m
-# D435i ideal range: 0.3–3.0 m → camera distance is well within spec.
+# This position is derived from physical measurement (scale 0.25 in CAD).
 
 camera_mount:
   # --- Nominal position in base_link frame ---
-  # Upper-left front corner of station frame.
-  # ASSUMPTION: these are rough estimates from CAD images.
-  # Operator MUST verify and adjust after physical mounting.
+  # Front-center relative to HOME pose facing direction.
   translation_m:
-    x: -0.482   # left edge of station (X_min = -0.482 m)
-    y:  0.806   # back edge of station (Y_max = +0.806 m)
-    z:  1.093   # top of station frame (Z_max = +1.093 m)
+    x:  0.000   # centred on robot Y axis (m)
+    y:  0.724   # forward from base origin at HOME pose (m)
+    z:  0.726   # height above base origin (m)
 
   # --- Nominal orientation ---
   # Euler angles (RPY) in base_link frame.
   # Camera optical axis: Z-forward, X-right, Y-down (OpenCV convention).
-  # These angles orient the camera to look DOWN and INWARD towards workspace.
-  #
-  # Pitch ~40° down from horizontal, yaw ~20° inward (towards +Y in base_link).
+  # Camera looks back toward robot base from +Y, pitched down ~45°.
   orientation_rpy_rad:
-    roll:  0.0
-    pitch: 0.70   # ~40° down  (0.698 rad)
-    yaw:   0.35   # ~20° inward (0.349 rad)
+    roll:  2.356   # ~135° (optical Z toward robot base)
+    pitch: 0.000
+    yaw:   3.142   # ~180°
 
   # --- FOV coverage check ---
   # D435i depth FOV: 87° × 58° (H × V)
-  # At 0.7 m distance with 40° pitch:
-  #   Horizontal coverage: ~2 × 0.7 × tan(43.5°) ≈ 1.33 m (covers workspace width)
-  #   Vertical coverage:   ~2 × 0.7 × tan(29°)   ≈ 0.78 m (covers workspace depth)
+  # At 1.025 m distance with 45° pitch:
+  #   Horizontal coverage: ~2 × 1.025 × tan(43.5°) ≈ 1.95 m
+  #   Vertical coverage:   ~2 × 1.025 × tan(29°)  ≈ 1.14 m
   # Conclusion: adequate coverage of the GP4 workspace area.
   fov_check:
-    estimated_distance_m: 0.70
-    h_coverage_m: 1.33
-    v_coverage_m: 0.78
+    estimated_distance_m: 1.025
+    h_coverage_m: 1.95
+    v_coverage_m: 1.14
     adequate: true
 
   # --- Calibration notes ---

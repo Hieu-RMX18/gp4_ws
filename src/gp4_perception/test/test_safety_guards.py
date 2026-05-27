@@ -33,7 +33,7 @@ class TestCalibrationFreshness:
         assert ok
         assert reason == ""
 
-    def test_stale_rejects(self):
+    def test_stale_is_accepted_when_age_not_enforced(self):
         old = (
             (datetime.now(timezone.utc) - timedelta(days=31))
             .isoformat()
@@ -43,8 +43,16 @@ class TestCalibrationFreshness:
             {"hand_eye_extrinsics": {"calibration_date": old}},
             max_age_days=30,
         )
-        assert not ok
-        assert "31" in reason or "days old" in reason
+        assert ok
+        assert reason == ""
+
+    def test_very_old_date_still_accepted(self):
+        ok, reason = check_calibration_freshness(
+            {"hand_eye_extrinsics": {"calibration_date": "2020-01-01T00:00:00Z"}},
+            max_age_days=30,
+        )
+        assert ok
+        assert reason == ""
 
 
 class TestReprojectionError:

@@ -135,6 +135,7 @@ export interface ChatMessage {
   timestamp: string;
   text: string;
   tag?: string | null;
+  source?: string | null;
 }
 
 export interface CommandValidationResult {

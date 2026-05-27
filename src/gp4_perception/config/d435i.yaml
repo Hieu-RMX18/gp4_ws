@@ -12,14 +12,14 @@ realsense:
   device_serial: "943222073917"   # operator fills or auto-discovers
 
   # --- Stream profiles ---
-  # Format: <width>,<height>,<fps>
+  # Format: <width>x<height>x<fps>
   depth_module:
-    depth_profile: "848,480,30"
-    infra_profile: "848,480,30"
+    depth_profile: "848x480x30"
+    infra_profile: "848x480x30"
     emitter_enabled: 1            # 1 = IR projector on (better structured-light depth)
 
   rgb_camera:
-    color_profile: "1280,720,30"  # lower than max 1920x1080 for less bandwidth;
+    color_profile: "1280x720x30"  # lower than max 1920x1080 for less bandwidth;
                                   # sufficient for ArUco detection and object recognition
 
   # --- Alignment & sync ---

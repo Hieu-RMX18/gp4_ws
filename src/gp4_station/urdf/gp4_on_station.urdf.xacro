@@ -37,10 +37,11 @@
   <xacro:motoman_gp4 prefix="" />
 
   <!-- ============================================================
-       D435i Camera — eye-to-hand, upper-left front corner of station
+       D435i Camera — eye-to-hand, front-center above robot base
        ============================================================
-       Position is NOMINAL from CAD. The actual camera-to-robot
-       transform comes from hand-eye calibration (extrinsics.yaml).
+       Position is NOMINAL from physical measurement (scale 0.25).
+       The actual camera-to-robot transform comes from hand-eye
+       calibration (extrinsics.yaml).
        This link exists for:
          1. RViz visualisation of camera position
          2. MoveIt collision avoidance (camera body as collision box)
@@ -50,20 +51,19 @@
          Z = forward (optical axis), X = right, Y = down
 
        Mount description (operator perspective, facing station front):
-         - Upper-left corner of station aluminium frame
-         - Pitch down ~40° towards workspace centre
-         - Yaw inward ~20° towards positive-Y in base_link
+         - Front of robot (facing direction at HOME pose), centred on base_link Y axis (X ≈ 0)
+         - Diagonal distance from base origin to camera: ~1025 mm
+         - Horizontal/vertical leg of the diagonal: ~724 mm each
+         - Pitch down ~45° towards base origin
        ============================================================ -->
 
-  <!-- Camera mount bracket (fixed to station frame) -->
+  <!-- Camera mount bracket (fixed directly to robot base for clarity) -->
   <link name="camera_mount_link" />
 
-  <joint name="station_to_camera_mount" type="fixed">
-    <parent link="station_link" />
+  <joint name="base_to_camera_mount" type="fixed">
+    <parent link="base_link" />
     <child link="camera_mount_link" />
-    <!-- TBD: operator must measure and update after physical mounting.
-         Current values are estimates from CAD images (station frame). -->
-    <origin xyz="-1.093 -0.504 0.636" rpy="0 0 0" />
+    <origin xyz="0.0 0.724 0.726" rpy="0 0 0" />
   </joint>
 
   <!-- Camera body link with collision box for MoveIt planning -->
@@ -90,23 +90,20 @@
   <joint name="camera_mount_to_camera" type="fixed">
     <parent link="camera_mount_link" />
     <child link="camera_link" />
-    <!-- Pitch ~40° down (0.698 rad), yaw ~20° inward (0.349 rad).
-         TBD: operator must verify orientation after mounting. -->
-    <origin xyz="0 0 0" rpy="0 0.698 0.349" />
+    <!-- Optical frame directly: Z forward toward robot base, X right, Y down -->
+    <origin xyz="0 0 0" rpy="2.356 0 3.1416" />
   </joint>
 
-  <!-- Camera optical frame (follows ROS/OpenCV convention: Z-forward, X-right, Y-down).
-       The realsense2_camera node publishes its own camera_color_optical_frame TF,
-       but this link lets the URDF TF tree stay connected even without the camera running.
-       After hand-eye calibration, the TFPublisher node overrides base_link → camera_color_optical_frame
-       with the precise calibrated transform from extrinsics.yaml. -->
+  <!-- Camera optical frame — same as camera_link for visual clarity.
+       The realsense2_camera node publishes its own camera_color_optical_frame TF.
+       This link keeps the URDF TF tree connected when the camera is offline. -->
   <link name="camera_color_optical_frame_nominal" />
 
   <joint name="camera_to_optical_nominal" type="fixed">
     <parent link="camera_link" />
     <child link="camera_color_optical_frame_nominal" />
-    <!-- ROS convention → optical frame: rotate -90° around Z, then -90° around X -->
-    <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708" />
+    <!-- Identity: camera_link already uses optical convention in this setup -->
+    <origin xyz="0 0 0" rpy="0 0 0" />
   </joint>
 
 </robot>

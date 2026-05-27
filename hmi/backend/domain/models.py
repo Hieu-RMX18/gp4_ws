@@ -210,6 +210,7 @@ class ChatMessage:
     timestamp: str
     text: str
     tag: str | None = None
+    source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -219,6 +220,7 @@ class ChatMessage:
             "timestamp": self.timestamp,
             "text": self.text,
             "tag": self.tag,
+            "source": self.source,
         }
 
 

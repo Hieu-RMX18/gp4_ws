@@ -7,15 +7,18 @@ import numpy as np
 
 from gp4_perception.scene_processor import (
     SceneProcessor,
+    _contour_filter,
     _detection_class_id,
     _euclidean_clusters,
     _filter_detections,
     _pca_bbox,
     _ransac_plane,
     _roi_crop,
+    _semantic_class_id,
     _transform_points,
     _voxel_downsample,
 )
+from gp4_perception.scene_geometry import _display_name
 from interfaces.srv import GetObjectPositions
 from moveit_msgs.msg import CollisionObject
 
@@ -216,6 +219,7 @@ class TestPerceptionContracts:
             {"distance_m": 0.3, "noise_mm_max": 2.0},
             {"distance_m": 0.8, "noise_mm_max": 3.0},
         ]
+        processor._extrapolation = "reject"
 
         processor._record_depth_quality(distance_m=0.5, noise_mm=8.0)
 
@@ -331,3 +335,125 @@ class TestPerceptionContracts:
         assert processor._calibration_status()[0] is True
         assert processor._calibration_status()[0] is True
         assert load_calls == [extrinsics_path]
+
+
+class TestContourFilter:
+    def test_solid_sphere_cluster_passes_contour_filter(self):
+        """A dense, spherical cluster should pass the solidity check."""
+        rng = np.random.default_rng(seed=42)
+        # Generate a solid ball of points.
+        pts = rng.normal(size=(300, 3)).astype(np.float32) * 0.02
+        pts += np.array([0.3, 0.0, 0.1])
+        keep, props = _contour_filter(pts)
+        assert keep is True
+        if props is not None:
+            assert props["solidity"] >= 0.30
+
+    def test_sparse_noise_cluster_may_be_rejected(self):
+        """Random sparse noise often produces low-solidity contours."""
+        rng = np.random.default_rng(seed=99)
+        pts = rng.random(size=(200, 3)).astype(np.float32) * 0.5
+        keep, props = _contour_filter(pts)
+        # We don't assert rejection since random points *can* be solid,
+        # but we verify the function runs without error and returns props.
+        assert isinstance(keep, bool)
+
+    def test_tiny_cluster_fails_open(self):
+        """Clusters with <5 points cannot form a contour — kept (fail-open)."""
+        pts = np.array(
+            [[0.1, 0.0, 0.0], [0.11, 0.0, 0.0], [0.1, 0.01, 0.0]],
+            dtype=np.float32,
+        )
+        keep, props = _contour_filter(pts)
+        assert keep is True
+        assert props is None
+
+    def test_pca_bbox_accepts_contour_props(self):
+        """_pca_bbox should accept contour_props without error."""
+        rng = np.random.default_rng(seed=42)
+        pts = rng.normal(size=(100, 3)).astype(np.float32) * 0.02
+        pts += np.array([0.3, 0.0, 0.1])
+        props = {"circularity": 0.9, "solidity": 0.95, "aspect_ratio": 1.1, "area_px": 500.0}
+        pose, dims, shape_class = _pca_bbox(pts, props)
+        assert shape_class == "sphere"
+
+
+class _FakeDims:
+    """Minimal stand-in for geometry_msgs.msg.Vector3 in tests."""
+
+    def __init__(self, x: float = 0.04, y: float = 0.04, z: float = 0.04):
+        self.x = x
+        self.y = y
+        self.z = z
+
+
+class TestSemanticClassId:
+    """Verify _semantic_class_id maps (color, shape, dims) → semantic name."""
+
+    # --- Core 5 objects ---
+    def test_red_sphere_is_apple(self):
+        assert _semantic_class_id("red", "sphere", _FakeDims()) == "apple"
+
+    def test_green_sphere_is_apple(self):
+        assert _semantic_class_id("green", "sphere", _FakeDims()) == "apple"
+
+    def test_yellow_sphere_is_yellow_ball(self):
+        assert _semantic_class_id("yellow", "sphere", _FakeDims()) == "yellow_ball"
+
+    def test_white_sphere_is_white_ball(self):
+        assert _semantic_class_id("white", "sphere", _FakeDims()) == "white_ball"
+
+    def test_red_box_is_red_box(self):
+        assert _semantic_class_id("red", "box", _FakeDims()) == "red_box"
+
+    def test_blue_box_is_blue_rectangle(self):
+        assert _semantic_class_id("blue", "box", _FakeDims()) == "blue_rectangle"
+
+    # --- Defensive: flat / unknown shape fallback ---
+    def test_red_flat_is_red_box(self):
+        assert _semantic_class_id("red", "flat", _FakeDims()) == "red_box"
+
+    def test_red_unknown_is_red_box(self):
+        assert _semantic_class_id("red", "unknown", _FakeDims()) == "red_box"
+
+    def test_blue_flat_is_blue_rectangle(self):
+        assert _semantic_class_id("blue", "flat", _FakeDims()) == "blue_rectangle"
+
+    def test_blue_unknown_is_blue_rectangle(self):
+        assert _semantic_class_id("blue", "unknown", _FakeDims()) == "blue_rectangle"
+
+    # --- Fallback: unrecognised combos get colour_shape ---
+    def test_yellow_box_fallback(self):
+        assert _semantic_class_id("yellow", "box", _FakeDims()) == "yellow_box"
+
+    def test_purple_cylinder_fallback(self):
+        assert _semantic_class_id("purple", "cylinder", _FakeDims()) == "purple_cylinder"
+
+    def test_unknown_color_returns_shape_only(self):
+        assert _semantic_class_id("unknown", "sphere", _FakeDims()) == "sphere"
+
+    # --- Edge cases ---
+    def test_none_color_treated_as_unknown(self):
+        assert _semantic_class_id(None, "box", _FakeDims()) == "box"
+
+    def test_case_insensitive(self):
+        assert _semantic_class_id("RED", "SPHERE", _FakeDims()) == "apple"
+
+
+class TestDisplayName:
+    """Verify _display_name returns human-readable strings."""
+
+    def test_known_names(self):
+        assert _display_name("apple") == "apple"
+        assert _display_name("yellow_ball") == "yellow ball"
+        assert _display_name("white_ball") == "white ball"
+        assert _display_name("red_box") == "red box"
+        assert _display_name("blue_rectangle") == "blue rectangle"
+
+    def test_fallback_replaces_underscores(self):
+        assert _display_name("purple_cylinder") == "purple cylinder"
+        assert _display_name("orange_flat") == "orange flat"
+
+    def test_single_word(self):
+        assert _display_name("sphere") == "sphere"
+

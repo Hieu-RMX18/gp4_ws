@@ -505,7 +505,7 @@ def test_e2e_move_rel_delta_returns_inside_workspace_from_low_pose():
     e2e_module = _load_e2e_module()
     safety_rules = {
         "workspace_bounds": {
-            "z_min": 0.23,
+            "z_min": 0.15,
             "z_max": 1.0,
         },
         "motion_limits": {
@@ -514,7 +514,7 @@ def test_e2e_move_rel_delta_returns_inside_workspace_from_low_pose():
     }
     pose = SimpleNamespace(
         position=SimpleNamespace(
-            z=0.22,
+            z=0.10,
         )
     )
 

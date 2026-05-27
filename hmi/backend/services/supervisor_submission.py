@@ -335,6 +335,7 @@ class SupervisorSubmissionMixin:
             origin="operator",
             text=raw_text or "Submitted structured command.",
             command_id=command_id,
+            source="operator",
         )
         self._audit.upsert_command(command)
         self._audit.record_transition(
@@ -432,6 +433,7 @@ class SupervisorSubmissionMixin:
             origin="operator",
             text=raw_text or "Submitted structured command.",
             command_id=command_id,
+            source="operator",
         )
         self._audit.upsert_command(command)
         self._audit.record_transition(
@@ -677,6 +679,7 @@ class SupervisorSubmissionMixin:
             origin="operator",
             text=raw_text or "Submitted structured sequence.",
             command_id=sequence_id,
+            source="operator",
         )
         self._audit.upsert_command(sequence)
         self._audit.record_transition(

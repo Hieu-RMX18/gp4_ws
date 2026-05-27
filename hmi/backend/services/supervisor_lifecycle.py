@@ -359,6 +359,19 @@ class SupervisorLifecycleMixin:
 
     # ── Transition helpers ─────────────────────────────────────────────────
 
+    @staticmethod
+    def _source_from_lifecycle_tag(tag: str | None) -> str:
+        if not tag:
+            return "supervisor"
+        t = tag.lower()
+        if t in {"validating", "validated", "needs_confirmation"}:
+            return "safety"
+        if t in {"executing", "execution_requested"}:
+            return "motion_core"
+        if t in {"succeeded", "failed"}:
+            return "hw_adapter"
+        return "supervisor"
+
     def _transition_command(
         self,
         command: CommandRecord,
@@ -392,6 +405,7 @@ class SupervisorLifecycleMixin:
                     text=message_text,
                     command_id=command.command_id,
                     tag=message_tag,
+                    source=self._source_from_lifecycle_tag(message_tag),
                 )
             ]
         self._emit_command_event(command, messages)
@@ -429,6 +443,7 @@ class SupervisorLifecycleMixin:
                     text=message_text,
                     command_id=command.command_id,
                     tag=message_tag,
+                    source=self._source_from_lifecycle_tag(message_tag),
                 )
             ]
         if command.command_kind == CommandKind.SEQUENCE:

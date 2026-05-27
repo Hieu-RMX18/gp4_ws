@@ -4,11 +4,17 @@ This runbook brings up the Intel RealSense D435i for the GP4 workcell and
 solves the eye-to-hand transform used by perception:
 
 ```text
-base_link -> camera_color_optical_frame
+base_link -> camera_link
 ```
 
-The camera is fixed to the station. The ArUco board is rigidly attached to the
-robot tool or end effector and moves with the robot during sample collection.
+The RealSense driver publishes the internal static transform from
+`camera_link` to `camera_color_optical_frame`. Calibration validates and stores
+only the station-mounted camera root transform to avoid giving the optical
+frame two TF parents.
+
+The camera is fixed to the station. The Charuco board is rigidly attached to
+the robot tool or end effector and moves with the robot during sample
+collection.
 
 ## Safety Boundary
 
@@ -61,7 +67,7 @@ camera availability before continuing.
 Launch the camera without the rest of the robot stack:
 
 ```bash
-ros2 launch gp4_perception camera.launch.py serial:=<D435I_SERIAL>
+ros2 launch gp4_perception camera.launch.py serial:=943222073917
 ```
 
 If there is only one RealSense connected, `serial:=` can be omitted. If multiple
@@ -93,17 +99,30 @@ are healthy.
 
 ## Calibration Target
 
-Generate the board from the same YAML that calibration uses:
+Use this board specification:
+
+- Target: Charuco
+- Layout: 10 rows x 11 columns
+- Dictionary: `DICT_5X5_100`
+- Checker/square size: 20 mm
+- Marker size: 15 mm
+
+Print the PDF at 100 percent scale. Do not fit-to-page or shrink-to-margins.
+After printing, measure one checker edge and one marker edge:
+
+- Checker edge must be 20 mm.
+- Marker edge must be 15 mm.
+
+The code reads the same geometry from:
 
 ```bash
-python3 tools/generate_aruco_board.py --output /tmp/aruco_board_5x7.png --dpi 300
+cat src/gp4_perception/config/fiducials.yaml
 ```
 
-Print at 100 percent scale. Do not fit-to-page. After printing, measure one
-marker edge with calipers or a ruler and confirm it is 35 mm, matching:
+Optional: regenerate a PNG from the YAML for quick visual checks:
 
 ```bash
-rg -n "marker_length_m" src/gp4_perception/config/fiducials.yaml
+python3 tools/generate_aruco_board.py --output /tmp/charuco_board_10x11.png --dpi 300
 ```
 
 Mount rules:
@@ -150,10 +169,10 @@ Collect 12 to 24 samples by jogging through varied poses:
 The calibration service logs each accepted sample. Once enough samples have
 been collected, solve:
 
-```bash
-ros2 service call /perception/calibrate_hand_eye interfaces/srv/CalibrateHandEye \
-  "{fiducial_id: 'board_5x7', min_samples: 12}"
-```
+  ```bash
+  ros2 service call /perception/calibrate_hand_eye interfaces/srv/CalibrateHandEye \
+  "{fiducial_id: 'charuco_10x11_20mm_15mm', min_samples: 12}"
+  ```
 
 Expected success response:
 
@@ -179,7 +198,7 @@ python3 tools/validate_safety_chain.py
 The `hand_eye_extrinsics` block must have:
 
 - `parent_frame: base_link`
-- `child_frame: camera_color_optical_frame`
+- `child_frame: camera_link`
 - a real ISO 8601 `calibration_date`, not `<NOT_CALIBRATED>`
 - `reprojection_error_mm <= 3.0`
 - `n_samples >= 12`
@@ -221,7 +240,8 @@ Expected status progression:
 - [ ] D435i appears in `lsusb` and `rs-enumerate-devices`.
 - [ ] `camera.launch.py` publishes color, camera-info, and point-cloud topics.
 - [ ] Sensor topics use `BEST_EFFORT` and `VOLATILE` QoS.
-- [ ] Printed ArUco marker length is verified at 35 mm.
+- [ ] Printed Charuco checker length is verified at 20 mm.
+- [ ] Printed Charuco marker length is verified at 15 mm.
 - [ ] `tf2_echo base_link tool0` works before collection.
 - [ ] Calibration service succeeds with at least 12 samples.
 - [ ] `reprojection_error_mm` is no more than 3.0.

@@ -181,6 +181,7 @@ FROZEN_SEMANTIC_INTENTS = frozenset(
         "absolute_move_lin",
         "circular_move",
         "move_joint",
+        "move_joint_delta",
         "move_joints",
         "io_set",
         "draw_shape",
@@ -195,7 +196,7 @@ _DEFAULT_WORKSPACE_BOUNDS = {
     "x_max": 0.45,
     "y_min": -0.16,
     "y_max": 0.52,
-    "z_min": 0.23,
+    "z_min": 0.15,
     "z_max": 0.65,
 }
 
@@ -281,8 +282,11 @@ A) Semantic IR (normal path):
 
 UNIT RULE:
   - Internal execution uses SI.
-  - If the user explicitly gives non-SI linear units, keep the user-provided
-    magnitude and add "linear_unit": "cm" | "mm".
+  - For move_relative, convert the user distance to meters inside delta and
+    omit linear_unit.
+  - For absolute/cartesian positions where the user explicitly gives non-SI
+    linear units, keep the user-provided magnitude and add
+    "linear_unit": "cm" | "mm".
   - If the user explicitly gives non-SI angular units, keep the user-provided
     magnitude and add "angular_unit": "deg".
   - If the user already speaks in meters/radians, or gives no unit, omit the
@@ -343,8 +347,10 @@ wait
 move_relative
   Move BY a relative amount from current position.
   Required: delta (object with x, y, z; set unused axes to 0.0)
-  Optional: linear_unit ("m"|"cm"|"mm"), reference_frame (default: "base_link")
+  Optional: reference_frame (default: "base_link")
   Safety: single MOVE_REL translation norm must stay ≤ 0.05 m for hardware use.
+  Operator words like "delta", "relative", "offset", "move", "go",
+  "down", "xuống", and "hạ" are natural language, not special syntax.
   VN: "nâng lên", "hạ xuống", "dịch lên/xuống", "nhích lên", "đẩy lên", "kéo xuống"
   Axis mapping:
     up/lên/nâng/nhấc     → delta.z positive
@@ -354,8 +360,12 @@ move_relative
     forward/trước/tiến    → delta.x positive
     back/sau/lùi          → delta.x negative
   Unit conversions: 1 phân = 1 cm = 0.01 m, 1 mm = 0.001 m
-  If user says cm/mm, preserve that unit explicitly instead of pre-converting.
-  → {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 5.0}, "linear_unit": "cm"}
+  Missing direction or distance:
+  → {"error": "MISSING_SLOT", "intent": "move_relative",
+     "missing_fields": ["direction", "distance"],
+     "hint": "relative move requires direction and distance."}
+  → {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05},
+     "reference_frame": "base_link"}
 
 absolute_move_ptp
   Move end-effector to absolute Cartesian position (joint-optimized path).
@@ -400,11 +410,18 @@ circular_move
   → {"intent": "circular_move", "target_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "auxiliary_pose": {"position": {"x": 0.32, "y": 0.05, "z": 0.42}}}
 
 move_joint
-  Move a single joint to a specific angle.
-  Required: joint_index (0–5), joint_angle (float)
+  Move a single joint to a specific ABSOLUTE angle. Use when user says "về N độ", "đặt về N", "to N degrees" (no + or - prefix).
+  Required: joint_index (0–5, 0=khớp 1, 1=khớp 2, ..., 5=khớp 6), joint_angle (float)
   Optional: angular_unit ("rad"|"deg")
-  VN: "xoay khớp N", "di chuyển khớp N", "đặt khớp N về"
-  → {"intent": "move_joint", "joint_index": 2, "joint_angle": 30.0, "angular_unit": "deg"}
+  VN: "đặt khớp N về X độ", "di chuyển khớp N tới X độ"
+  → {"intent": "move_joint", "joint_index": 1, "joint_angle": 30.0, "angular_unit": "deg"}
+
+move_joint_delta
+  Rotate a single joint by a RELATIVE delta from current position. Use when user says "+N", "-N", "thêm N", "bớt N", "xoay thêm N" (explicit + or - sign, or relative language).
+  Required: joint_index (0–5, 0=khớp 1, 1=khớp 2, ..., 5=khớp 6), delta_angle (float, positive=forward, negative=backward)
+  Optional: angular_unit ("rad"|"deg", default "deg")
+  VN: "xoay khớp N +X độ", "xoay khớp N -X độ", "xoay khớp N thêm X độ", "xoay khớp N bớt X độ"
+  → {"intent": "move_joint_delta", "joint_index": 0, "delta_angle": 15.0, "angular_unit": "deg"}
 
 move_joints
   Move all 6 joints simultaneously to target angles.
@@ -513,31 +530,40 @@ User: "go home, wait one second, then move linearly to x 0.3 y 0 z 0.3"
  ]}
 
 User: "nâng lên 5cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 5.0}, "linear_unit": "cm"}
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}, "reference_frame": "base_link"}
 
 User: "đưa nó lên cao thêm 5 phân"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 5.0}, "linear_unit": "cm"}
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}, "reference_frame": "base_link"}
 
 User: "lift 5 centimeters"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 5.0}, "linear_unit": "cm"}
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}, "reference_frame": "base_link"}
+
+User: "move down 2 cm"
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": -0.02}, "reference_frame": "base_link"}
+
+User: "move delta down 2 cm"
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": -0.02}, "reference_frame": "base_link"}
 
 User: "go up a bit"
 → {"error": "MISSING_SLOT", "intent": "move_relative",
-   "missing_fields": ["delta"], "hint": "How many cm should the robot move up?"}
+   "missing_fields": ["direction", "distance"],
+   "hint": "relative move requires direction and distance."}
 
 User: "hạ xuống một chút"
 → {"error": "MISSING_SLOT", "intent": "move_relative",
-   "missing_fields": ["delta"], "hint": "Hạ xuống bao nhiêu cm?"}
+   "missing_fields": ["direction", "distance"],
+   "hint": "relative move requires direction and distance."}
 
 User: "lower the arm 5cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": -5.0}, "linear_unit": "cm"}
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": -0.05}, "reference_frame": "base_link"}
 
 User: "dịch sang trái 4cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": -4.0, "z": 0.0}, "linear_unit": "cm"}
+→ {"intent": "move_relative", "delta": {"x": 0.0, "y": -0.04, "z": 0.0}, "reference_frame": "base_link"}
 
 User: "dịch sang trái"
 → {"error": "MISSING_SLOT", "intent": "move_relative",
-   "missing_fields": ["delta"], "hint": "Dịch sang trái bao nhiêu cm?"}
+   "missing_fields": ["direction", "distance"],
+   "hint": "relative move requires direction and distance."}
 
 User: "chạy tới điểm x 0.3, y 0, z 0.5 theo đường thẳng nhé"
 → {"intent": "absolute_move_lin", "target_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.5}}}
@@ -578,11 +604,20 @@ User: "dừng ngay"
 User: "emergency stop"
 → {"intent": "stop"}
 
-User: "xoay khớp 2 lên 30 độ"
-→ {"intent": "move_joint", "joint_index": 2, "joint_angle": 30.0, "angular_unit": "deg"}
+User: "đặt khớp 2 về 30 độ"
+→ {"intent": "move_joint", "joint_index": 1, "joint_angle": 30.0, "angular_unit": "deg"}
 
 User: "rotate joint 3 to 45 degrees"
-→ {"intent": "move_joint", "joint_index": 3, "joint_angle": 45.0, "angular_unit": "deg"}
+→ {"intent": "move_joint", "joint_index": 2, "joint_angle": 45.0, "angular_unit": "deg"}
+
+User: "xoay khớp 1 +15 độ"
+→ {"intent": "move_joint_delta", "joint_index": 0, "delta_angle": 15.0, "angular_unit": "deg"}
+
+User: "xoay khớp 3 -20 độ"
+→ {"intent": "move_joint_delta", "joint_index": 2, "delta_angle": -20.0, "angular_unit": "deg"}
+
+User: "xoay khớp 2 thêm 10 độ"
+→ {"intent": "move_joint_delta", "joint_index": 1, "delta_angle": 10.0, "angular_unit": "deg"}
 
 User: "đặt tất cả khớp về 0"
 → {"intent": "move_joints", "joint_target": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
@@ -938,6 +973,7 @@ class StateInjector:
         self._velocity_scale_active: float = 0.06
         self._gripper_available: bool = False
         self._perception_available: bool = False
+        self._available_named_poses: List[str] = []
 
     def update_joint_states(self, msg: Dict[str, Any]) -> None:
         self._last_joint_states = msg
@@ -951,6 +987,9 @@ class StateInjector:
     def set_capabilities(self, *, gripper: bool, perception: bool) -> None:
         self._gripper_available = gripper
         self._perception_available = perception
+
+    def set_available_named_poses(self, poses: List[str]) -> None:
+        self._available_named_poses = sorted(poses)
 
     def snapshot(self) -> Dict[str, Any]:
         """Return a structured state dict for inclusion in the LLM prompt."""
@@ -979,6 +1018,7 @@ class StateInjector:
                     "gripper": bool(self._gripper_available),
                     "perception": bool(self._perception_available),
                 },
+                "available_named_poses": list(self._available_named_poses),
             }
         }
 
@@ -1198,7 +1238,7 @@ class ComputeArcPointsTool(Tool):
         )
 
 
-"""Get current robot pose tool — calls existing ROS service."""
+"""Get current robot pose tool — uses gateway cache, then live pose service."""
 
 
 class GetCurrentPoseTool(Tool):
@@ -1223,25 +1263,46 @@ class GetCurrentPoseTool(Tool):
                 error="ros_node not available in AgentContext",
             )
 
+        cached_pose = getattr(node, "_get_cached_current_pose_snapshot", None)
         request_pose = getattr(node, "_request_current_pose_snapshot", None)
-        if not callable(request_pose):
+        if not callable(cached_pose) and not callable(request_pose):
             return ToolResult(
                 ok=False,
-                error="get_current_pose async client is not exposed to ReAct tools",
+                error="get_current_pose is not exposed to ReAct tools",
             )
 
         reference_frame = str(args.get("reference_frame") or "base_link")
-        pose = request_pose(reference_frame)
-        if pose is None:
-            return ToolResult(ok=False, error="get_current_pose unavailable")
+        pose = cached_pose(reference_frame) if callable(cached_pose) else None
+        if pose is None and callable(request_pose):
+            pose = request_pose(reference_frame)
+        if pose is not None:
+            return ToolResult(
+                ok=True,
+                payload={
+                    "pose": {
+                        "header": {"frame_id": reference_frame},
+                        "pose": pose,
+                    }
+                },
+            )
+
+        state_injector = getattr(context, "state_injector", None)
+        named_poses = []
+        if state_injector is not None:
+            snap = state_injector.snapshot()
+            named_poses = snap.get("robot_state", {}).get(
+                "available_named_poses", []
+            )
+        hint = " Verify /get_current_pose is available and returning base_link pose."
+        if named_poses:
+            hint += (
+                f" For named poses ({', '.join(named_poses)}), "
+                "output move_named_pose intent directly — "
+                "no get_current_pose needed."
+            )
         return ToolResult(
-            ok=True,
-            payload={
-                "pose": {
-                    "header": {"frame_id": reference_frame},
-                    "pose": pose,
-                }
-            },
+            ok=False,
+            error=f"current_pose_unavailable for frame {reference_frame}.{hint}",
         )
 
 
@@ -1737,19 +1798,46 @@ _REACT_SYSTEM_PROMPT_PREFIX = (
     "You produce Semantic IR JSON that the safety system reviews before any motion is executed.",
     "",
     "## Reasoning Rules",
-    "1. Think step by step. For multi-step tasks, break them into individual motion steps.",
-    "2. Use tools to gather information BEFORE producing a plan.",
-    "   - Use get_current_pose to know where the robot is now.",
-    "   - Use query_perception to find objects in the workspace.",
-    "   - Use compute_arc_points for circular motions.",
-    "   - Use plan_motion to validate a target BEFORE submitting.",
-    "3. If a user mentions an object by color or shape (e.g. 'red sphere', 'blue box'),",
+    "1. Prefer a single final Semantic IR response when the user already supplied all slots.",
+    "   Do not call tools just to translate or classify natural language.",
+    "2. Think step by step. For multi-step tasks, break them into individual motion steps.",
+    "3. Use tools ONLY when you need information you do not already have.",
+    "   - get_current_pose: ONLY needed for tool-frame/cartesian relative moves,",
+    "     coordinate arithmetic, or when the user asks 'where is the robot?'.",
+    "     NOT needed for base_link move_relative with explicit delta, or for move_joint_delta.",
+    "     NOT needed for: go_home, stop, alarm_reset, set_speed, wait, io_set,",
+    "     draw_shape, draw_text, or any command where the user supplies all coordinates explicitly.",
+    "   - query_perception: ONLY if the user references an object by color or shape.",
+    "   - compute_arc_points: ONLY for circular_move (CIRC primitive arc). NOT for draw_shape.",
+    "   - plan_motion: to validate a target BEFORE submitting (optional).",
+    "4. If a user mentions an object by color or shape (e.g. 'red sphere', 'blue box'),",
     "   FIRST call query_perception to locate it, then plan motion to its position.",
-    "4. For 'draw circle' or 'arc' commands, use compute_arc_points to calculate waypoints.",
-    "5. Never guess coordinates. Always query the current state first.",
+    "5. draw_shape and draw_text NEVER need get_current_pose or compute_arc_points.",
+    "   Just emit the Semantic IR with workplane mode 'tool' — the downstream compiler",
+    "   resolves the current pose and generates strokes automatically.",
+    "6. Do not call tools unnecessarily. If you have all the parameters, emit the Semantic IR directly.",
+    "",
+    "## Drawing Slot Rules",
+    "- Preserve the user's drawing unit in the 'units' field: mm, cm, or m.",
+    "- circle requires params.radius or params.diameter.",
+    "- square requires params.side.",
+    "- rectangle requires both params.width and params.height. Vietnamese 'rộng' is width; 'cao' or 'dài' is height.",
+    "- draw_text requires text and font.height. Vietnamese 'cao 2cm' means units='cm' and font.height=2.",
+    "- Use frame_id='base_link' and workplane={'mode':'tool'} for current-plane drawing.",
+    "- If a required size is missing, return an error object with error='MISSING_SLOT' and a missing_fields list.",
+    "",
+    "## Drawing Examples",
+    'User: "vẽ hình tròn trong mặt phẳng hiện tại bán kính 5cm"',
+    'Assistant: {"intent":"draw_shape","shape_type":"circle","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"params":{"radius":5}}',
+    'User: "vẽ hình chữ nhật rộng 6cm cao 3cm"',
+    'Assistant: {"intent":"draw_shape","shape_type":"rectangle","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"params":{"width":6,"height":3}}',
+    'User: "vẽ hình vuông cạnh 4cm"',
+    'Assistant: {"intent":"draw_shape","shape_type":"square","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"params":{"side":4}}',
+    'User: "vẽ chữ HELLO cao 2cm"',
+    'Assistant: {"intent":"draw_text","text":"HELLO","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"font":{"type":"single_stroke_builtin","height":2}}',
     "",
     "## Safety Rules",
-    "- NEVER exceed velocity_scale 0.10 unless explicitly instructed.",
+    "- NEVER exceed velocity_scale 0.06 for hardware-adjacent work.",
     "- NEVER produce raw joint trajectories — only Semantic IR with intent.",
     "- If a command is ambiguous or unsafe, respond with an error intent explaining why.",
     "- Joints 4, 5, 6 are prone to singularity near zero; avoid planning through those configs.",
@@ -1764,7 +1852,7 @@ _REACT_SYSTEM_PROMPT_SUFFIX = (
     'The final JSON must include an "intent" field and must not include "primitive_type".',
     'Multi-step requests: {"intent":"sequence","steps":[<semantic_ir_step>, ...]}.',
     "Each sequence step is also Semantic IR with its own intent.",
-    'Error responses: {"intent":"error","error":"<reason>"}.',
+    'Error responses: {"error":"<reason>","missing_fields":["<field>"],"hint":"<operator question>"}.',
 )
 
 
@@ -1819,6 +1907,15 @@ class ReActAgent:
             if not allowed:
                 return self._handoff(reason, history)
 
+            if hasattr(self._ros_node, "_emit_trace"):
+                self._ros_node._emit_trace(
+                    "react_iteration",
+                    "reasoning",
+                    source="react",
+                    iteration=counters.total + 1,
+                    history_len=len(history)
+                )
+
             messages = self._build_prompt(user_text, state, history)
             try:
                 llm_response = self._llm_client.generate_response_from_messages(
@@ -1831,6 +1928,14 @@ class ReActAgent:
             tool_call = self._parse_tool_call(decoded_response)
             if tool_call is None:
                 semantic_ir = self._extract_semantic_ir(decoded_response)
+                if hasattr(self._ros_node, "_emit_trace"):
+                    self._ros_node._emit_trace(
+                        "react_semantic_ir_generated",
+                        "reasoning",
+                        source="react",
+                        summary=str(semantic_ir.get("intent") or "")[:80],
+                        details_json=json.dumps(semantic_ir)
+                    )
                 ok, err = self._validate_semantic_ir(semantic_ir)
                 if not ok:
                     if counters.repair < self._budget.max_repair:
@@ -1868,6 +1973,17 @@ class ReActAgent:
                 result = tool.invoke(tool_call.args, context)
             except Exception as exc:
                 result = ToolResult(ok=False, error=str(exc))
+
+            if hasattr(self._ros_node, "_emit_trace"):
+                self._ros_node._emit_trace(
+                    "react_tool_call",
+                    "reasoning",
+                    source="react",
+                    tool=tool_call.name,
+                    args=json.dumps(tool_call.args)[:200],
+                    result_ok=result.ok,
+                    result_obs=result.to_observation()[:200]
+                )
 
             counters.record(tool)
             state = self._state_injector.snapshot()

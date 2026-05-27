@@ -23,6 +23,7 @@ export interface LogEntryView {
   time: string;
   level: LogLevel;
   message: string;
+  source?: string | null;
 }
 
 export interface ActionFeedbackView {

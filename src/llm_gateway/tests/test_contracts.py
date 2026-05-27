@@ -77,6 +77,7 @@ _INTENT_TO_PRIMITIVES = {
     "absolute_move_lin": {"LIN"},
     "circular_move": {"CIRC"},
     "move_joint": {"MOVE_JOINT"},
+    "move_joint_delta": {"MOVE_JOINT"},
     "move_joints": {"MOVE_JOINTS"},
     "io_set": {"IO_SET"},
     "draw_shape": {"PTP", "CARTESIAN_PATH", "BLENDED_SEQUENCE", "MACRO"},

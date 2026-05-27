@@ -222,6 +222,11 @@ class SupervisorSequenceMixin:
                 routed_payload = self._inject_return_to_start_joints(
                     structured_intent, start_joints_rad
                 )
+                routed_payload = (
+                    self._intent_resolution._prepare_semantic_ir_for_routing(
+                        routed_payload, self._current_joints()
+                    )
+                )
                 routed = IntentRouter(runtime_mode=mode.value).route(routed_payload)
                 if routed.route_type != "sequence":
                     return (
@@ -352,6 +357,19 @@ class SupervisorSequenceMixin:
         for step in parsed_steps:
             action = str(step.get("action") or "").strip().upper()
             if action not in _BLENDED_SEQUENCE_ELIGIBLE:
+                return False
+            norm_cmd = step.get("normalizedCommand") or {}
+            primitive = norm_cmd.get("primitive_type", action)
+            # execution_gate rejects GOAL_JOINTS and GOAL_NAMED in blended
+            # sequences; named poses and HOME resolve to those goal types.
+            if primitive == "HOME":
+                return False
+            if norm_cmd.get("joint_target"):
+                return False
+            if norm_cmd.get("named_target"):
+                return False
+            params = step.get("parameters") or {}
+            if params.get("joint_target"):
                 return False
         return True
 

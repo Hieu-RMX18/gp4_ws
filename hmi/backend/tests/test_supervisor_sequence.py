@@ -249,6 +249,52 @@ class ShouldEmitBlendedSequenceTests(unittest.TestCase):
             )
         )
 
+    def test_named_pose_with_joint_target_ineligible(self) -> None:
+        """Named poses resolve to joint_target; blending them creates GOAL_JOINTS rejected by execution_gate."""
+        steps = [
+            {
+                "action": "PTP",
+                "targetSummary": "A",
+                "normalizedCommand": {
+                    "primitive_type": "PTP",
+                    "joint_target": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+                },
+            },
+            {
+                "action": "PTP",
+                "targetSummary": "B",
+                "normalizedCommand": {
+                    "primitive_type": "PTP",
+                    "joint_target": [0.2, 0.3, 0.4, 0.5, 0.6, 0.7],
+                },
+            },
+        ]
+        self.assertFalse(
+            SupervisorSequenceMixin._should_emit_blended_sequence(steps, None)
+        )
+
+    def test_home_primitive_ineligible(self) -> None:
+        steps = [
+            {
+                "action": "LIN",
+                "targetSummary": "A",
+                "normalizedCommand": {
+                    "primitive_type": "LIN",
+                    "target_pose": {
+                        "position": {"x": 0.1, "y": 0.2, "z": 0.3},
+                    },
+                },
+            },
+            {
+                "action": "HOME",
+                "targetSummary": "HOME",
+                "normalizedCommand": {"primitive_type": "HOME"},
+            },
+        ]
+        self.assertFalse(
+            SupervisorSequenceMixin._should_emit_blended_sequence(steps, None)
+        )
+
 
 class BuildBlendedSequenceStepTests(unittest.TestCase):
     def test_two_pose_steps_collapsed(self) -> None:

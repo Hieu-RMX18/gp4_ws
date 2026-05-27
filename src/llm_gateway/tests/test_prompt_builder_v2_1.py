@@ -56,6 +56,7 @@ _EXPECTED_INTENTS = frozenset(
         "absolute_move_lin",
         "circular_move",
         "move_joint",
+        "move_joint_delta",
         "move_joints",
         "io_set",
         "draw_shape",
@@ -188,6 +189,13 @@ def test_prompt_move_relative_uses_delta_object(prompt: str):
     assert (
         '"delta":' in prompt
     ), "move_relative must use 'delta' slot matching IntentRouter._route_move_relative"
+
+
+def test_prompt_treats_delta_words_as_natural_language(prompt: str):
+    assert "move down 2 cm" in prompt
+    assert "move delta down 2 cm" in prompt
+    assert '"z": -0.02' in prompt
+    assert "relative move requires direction and distance" in prompt
 
 
 def test_prompt_non_si_examples_use_explicit_unit_fields(prompt: str):

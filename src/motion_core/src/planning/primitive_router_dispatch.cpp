@@ -759,16 +759,121 @@ PrimitiveRouterDispatch::plan_for_primitive(const PlanningRequest &request) {
         return result;
       }
       if (plan_result.status != PlanningStatus::kSuccess) {
-        RCLCPP_ERROR(logger_,
-                     "Pilz LIN planning failed for goal_seq=%lu primitive=LIN "
-                     "planner=%s: %s. "
-                     "No fallback. Caller must replan or retry with PTP.",
-                     static_cast<unsigned long>(request.goal_sequence),
-                     planner_selection.planner_id.c_str(),
-                     plan_result.reason.c_str());
-        result.reason =
-            std::string("Pilz LIN failed (no fallback): ") + plan_result.reason;
-        return result;
+        RCLCPP_WARN(logger_,
+                    "Pilz LIN planning failed for goal_seq=%lu primitive=%s "
+                    "planner=%s: %s. Trying computeCartesianPath fallback.",
+                    static_cast<unsigned long>(request.goal_sequence),
+                    effective_primitive.c_str(),
+                    planner_selection.planner_id.c_str(),
+                    plan_result.reason.c_str());
+
+        geometry_msgs::msg::PoseStamped current_stamped;
+        std::string current_pose_reason;
+        if (!read_current_tcp_pose_(current_stamped, current_pose_reason,
+                                   5.0)) {
+          result.reason =
+              std::string("Pilz LIN failed and computeCartesianPath fallback "
+                          "unavailable (no current pose): ") +
+              current_pose_reason;
+          return result;
+        }
+
+        std::vector<geometry_msgs::msg::Pose> fallback_waypoints;
+        fallback_waypoints.reserve(2);
+        fallback_waypoints.push_back(current_stamped.pose);
+        fallback_waypoints.push_back(normalized_pose);
+
+        cartesian_fraction = move_group->computeCartesianPath(
+            fallback_waypoints, kCartesianEefStep, kCartesianJumpThreshold,
+            planned_trajectory_msg, true);
+
+        if (cartesian_fraction < 0.0) {
+          RCLCPP_ERROR(logger_,
+                       "computeCartesianPath fallback also failed for "
+                       "goal_seq=%lu primitive=%s. Original Pilz error: %s",
+                       static_cast<unsigned long>(request.goal_sequence),
+                       effective_primitive.c_str(),
+                       plan_result.reason.c_str());
+          result.reason =
+              std::string("Pilz LIN failed and computeCartesianPath fallback "
+                          "also failed: ") +
+              plan_result.reason;
+          return result;
+        }
+
+        if (cartesian_fraction < QualityGate::kMinimumCartesianFraction) {
+          RCLCPP_WARN(
+              logger_,
+              "computeCartesianPath fraction %.3f below minimum %.3f. "
+              "Trying PTP as ultimate fallback for goal_seq=%lu.",
+              cartesian_fraction, QualityGate::kMinimumCartesianFraction,
+              static_cast<unsigned long>(request.goal_sequence));
+
+          std::vector<double> ptp_seed;
+          if (seed_manager_.get_seed_state("PTP", ptp_seed)) {
+            std::vector<double> ptp_ik;
+            std::string ptp_ik_reason;
+            if (ik_selector_.solve_ik(normalized_pose, ptp_seed, ptp_ik,
+                                      ptp_ik_reason)) {
+              const auto branch_result = choose_branch_preserved_joint_vector(
+                  request.active_joint_models, request.current_joint_positions,
+                  ptp_ik);
+              if (branch_result.success) {
+                const std::string ptp_planner_id =
+                    planner_router_.route_planner("PTP", false);
+                const PlannerSelection ptp_selection =
+                    resolve_planner_selection(
+                        ptp_planner_id.empty() ? "PILZ_PTP" : ptp_planner_id);
+                if (!ptp_selection.pipeline_id.empty()) {
+                  move_group->setPlanningPipelineId(
+                      ptp_selection.pipeline_id);
+                }
+                move_group->setPlannerId(ptp_selection.planner_id);
+                move_group->setJointValueTarget(
+                    branch_result.chosen_targets);
+
+                moveit::planning_interface::MoveGroupInterface::Plan ptp_plan;
+                const auto ptp_result = request.plan_with_interruption(
+                    ptp_plan, "PTP fallback planning");
+                if (ptp_result.status == PlanningStatus::kSuccess) {
+                  RCLCPP_WARN(
+                      logger_,
+                      "PTP fallback succeeded for goal_seq=%lu; "
+                      "points=%zu. Target reached via PTP.",
+                      static_cast<unsigned long>(request.goal_sequence),
+                      ptp_plan.trajectory_.joint_trajectory.points.size());
+                  planned_trajectory_msg = ptp_plan.trajectory_;
+                  plan_start_state_msg = ptp_plan.start_state_;
+                  has_plan_start_state = true;
+                  cartesian_fraction =
+                      QualityGate::kFractionNotApplicable;
+                } else if (ptp_result.status == PlanningStatus::kCanceled) {
+                  result.status = PlanningStatus::kCanceled;
+                  result.reason = ptp_result.reason;
+                  return result;
+                }
+              }
+            }
+          }
+
+          if (planned_trajectory_msg.joint_trajectory.points.empty()) {
+            RCLCPP_WARN(
+                logger_,
+                "PTP fallback unavailable or failed; using "
+                "computeCartesianPath result fraction=%.3f. "
+                "Quality gate may reject below-minimum fraction.",
+                cartesian_fraction);
+            has_plan_start_state = false;
+          }
+        } else {
+          RCLCPP_WARN(logger_,
+                      "computeCartesianPath fallback succeeded with "
+                      "fraction=%.3f, points=%zu for goal_seq=%lu",
+                      cartesian_fraction,
+                      planned_trajectory_msg.joint_trajectory.points.size(),
+                      static_cast<unsigned long>(request.goal_sequence));
+          has_plan_start_state = false;
+        }
       } else {
         planned_trajectory_msg = plan.trajectory_;
         plan_start_state_msg = plan.start_state_;

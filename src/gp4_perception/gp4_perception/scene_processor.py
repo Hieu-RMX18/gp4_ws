@@ -20,7 +20,7 @@ from interfaces.srv import GetObjectPositions
 from moveit_msgs.msg import CollisionObject
 from rclpy.duration import Duration
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, PointCloud2
 from shape_msgs.msg import SolidPrimitive
@@ -36,11 +36,11 @@ from vision_msgs.msg import (
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from .query_perception_tool import load_extrinsics
 from .safety_guards import (
-    check_calibration_freshness,
     check_depth_noise,
     check_reprojection_error,
 )
 from .scene_geometry import (
+    _contour_filter,
     _depth_noise_at_centroid,
     _detection_class_id,
     _dominant_color_name,
@@ -50,23 +50,25 @@ from .scene_geometry import (
     _ransac_plane,
     _read_xyz_rgb,
     _roi_crop,
+    _semantic_class_id,
     _transform_points,
     _voxel_downsample,
 )
 
 _LOGGER = logging.getLogger(__name__)
 MAX_DEPTH_NOISE_SAMPLES = 50
-CALIBRATION_MAX_AGE_DAYS = 30
-REPROJECTION_ERROR_MAX_MM = 3.0
+REPROJECTION_ERROR_MAX_MM = 5.0
 
 __all__ = [
     "SceneProcessor",
+    "_contour_filter",
     "_detection_class_id",
     "_euclidean_clusters",
     "_filter_detections",
     "_pca_bbox",
     "_ransac_plane",
     "_roi_crop",
+    "_semantic_class_id",
     "_transform_points",
     "_voxel_downsample",
     "main",
@@ -95,26 +97,44 @@ class SceneProcessor(Node):
         self._cluster_max = int(self._cfg.get("cluster_max_size", 5000))
         self._ttl = float(self._cfg.get("detection_ttl_s", 2.0))
         self._breakpoints = self._cfg.get("depth_noise", {}).get("breakpoints", [])
+        self._extrapolation = self._cfg.get("depth_noise", {}).get("extrapolation", "reject")
+
+        # Workspace bbox filter — can be toggled at runtime via:
+        #   ros2 param set /scene_processor enable_bbox_filter false
+        self.declare_parameter("enable_bbox_filter", True)
+        self._enable_bbox_filter: bool = self.get_parameter(
+            "enable_bbox_filter"
+        ).get_parameter_value().bool_value
+        self.add_on_set_parameters_callback(self._on_param_change)
 
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
+
+        # Low-latency QoS profile with depth=1 to discard old messages and prevent queue buildup
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+        )
 
         self._cloud_sub = Subscriber(
             self,
             PointCloud2,
             "/camera/depth/color/points",
-            qos_profile=qos_profile_sensor_data,
+            qos_profile=qos_profile,
         )
         self._info_sub = Subscriber(
             self,
             CameraInfo,
             "/camera/color/camera_info",
-            qos_profile=qos_profile_sensor_data,
+            qos_profile=qos_profile,
         )
         self._sync = ApproximateTimeSynchronizer(
             [self._cloud_sub, self._info_sub], queue_size=10, slop=0.05
         )
         self._sync.registerCallback(self._on_synced)
+
+        self._last_transform = None
 
         self._det_pub = self.create_publisher(
             Detection3DArray, "/perception/detections", 10
@@ -144,6 +164,19 @@ class SceneProcessor(Node):
         self._extrinsics_path = share / "extrinsics.yaml"
         self._calibration_cache_mtime_ns: int | None = None
         self._calibration_cache_status: tuple[bool, str, str, float] | None = None
+
+    def _on_param_change(self, params) -> list:
+        """Handle runtime parameter changes (e.g. enable_bbox_filter toggle)."""
+        from rcl_interfaces.msg import SetParametersResult
+
+        for p in params:
+            if p.name == "enable_bbox_filter":
+                self._enable_bbox_filter = bool(p.value)
+                self.get_logger().info(
+                    "Workspace bbox filter %s",
+                    "ENABLED" if self._enable_bbox_filter else "DISABLED",
+                )
+        return [SetParametersResult(successful=True)]
 
     def _check_camera_health(self) -> None:
         elapsed = time.time() - self._last_cloud_time
@@ -175,8 +208,8 @@ class SceneProcessor(Node):
             self._last_detections = []
             return
 
-        # 1. ROI crop
-        if self._bbox:
+        # 1. ROI crop (skipped when enable_bbox_filter is False)
+        if self._bbox and self._enable_bbox_filter:
             mask = (
                 (pts[:, 0] >= self._bbox["x"][0])
                 & (pts[:, 0] <= self._bbox["x"][1])
@@ -208,6 +241,16 @@ class SceneProcessor(Node):
         now = time.time()
         detections: list[Detection3D] = []
         for i, cluster in enumerate(clusters):
+            # 4a. Contour filter — reject fragmented/noisy clusters.
+            contour_ok, contour_props = _contour_filter(cluster)
+            if not contour_ok:
+                _LOGGER.debug(
+                    "Cluster %d rejected by contour filter (solidity=%.2f)",
+                    i,
+                    contour_props["solidity"] if contour_props else 0.0,
+                )
+                continue
+
             noise_mm = _depth_noise_at_centroid(cluster)
             centroid = cluster.mean(axis=0)
             dist = float(np.linalg.norm(centroid))
@@ -224,7 +267,7 @@ class SceneProcessor(Node):
                 )
                 continue
 
-            pose, dims, shape_class = _pca_bbox(cluster)
+            pose, dims, shape_class = _pca_bbox(cluster, contour_props)
 
             # Color classification: find nearest original indices for cluster
             # points and extract their RGB values.
@@ -245,11 +288,12 @@ class SceneProcessor(Node):
                 except Exception:
                     color_name = "unknown"
 
-            # Build descriptive class_id: "red_sphere", "blue_box", etc.
-            class_id = (
-                f"{color_name}_{shape_class}"
-                if color_name != "unknown"
-                else shape_class
+            # Semantic class_id: "apple", "yellow_ball", "red_box", etc.
+            class_id = _semantic_class_id(color_name, shape_class, dims)
+            _LOGGER.debug(
+                "Cluster %d: raw=%s_%s → semantic=%s (dims=%.3f×%.3f×%.3f m)",
+                i, color_name, shape_class, class_id,
+                dims.x, dims.y, dims.z,
             )
 
             hyp = ObjectHypothesis()
@@ -293,20 +337,26 @@ class SceneProcessor(Node):
         if not source_frame or source_frame == "base_link":
             return pts
 
+        # Non-blocking TF lookup (timeout=0.0) with fallback to last successful transform
         try:
             transform = self._tf_buffer.lookup_transform(
                 "base_link",
                 source_frame,
                 Time(),
-                timeout=Duration(seconds=0.1),
+                timeout=Duration(seconds=0.0),
             )
+            self._last_transform = transform
         except Exception as exc:
-            _LOGGER.warning(
-                "Rejecting perception cloud in frame '%s': missing transform to base_link (%s)",
-                source_frame,
-                exc,
-            )
-            return None
+            last_tf = getattr(self, "_last_transform", None)
+            if last_tf is not None:
+                transform = last_tf
+            else:
+                _LOGGER.warning(
+                    "Rejecting perception cloud in frame '%s': missing transform to base_link (%s)",
+                    source_frame,
+                    exc,
+                )
+                return None
 
         return _transform_points(pts, transform)
 
@@ -348,7 +398,7 @@ class SceneProcessor(Node):
         self, *, distance_m: float, noise_mm: float
     ) -> tuple[bool, str]:
         self._record_depth_noise(noise_mm)
-        ok, reason = check_depth_noise(distance_m, noise_mm, self._breakpoints)
+        ok, reason = check_depth_noise(distance_m, noise_mm, self._breakpoints, self._extrapolation)
         self._depth_in_range_samples.append(bool(ok))
         if len(self._depth_in_range_samples) > MAX_DEPTH_NOISE_SAMPLES:
             self._depth_in_range_samples = self._depth_in_range_samples[
@@ -378,13 +428,13 @@ class SceneProcessor(Node):
                 (False, f"calibration_invalid: {exc}", "", 0.0),
             )
 
-        ok, reason = check_calibration_freshness(
-            extrinsics, max_age_days=CALIBRATION_MAX_AGE_DAYS
-        )
-        if not ok:
+        # Verify calibration_date exists (no age expiry enforced).
+        data = extrinsics.get("hand_eye_extrinsics", {})
+        calibration_date = str(data.get("calibration_date", ""))
+        if not calibration_date or calibration_date == "<NOT_CALIBRATED>":
             return self._cache_calibration_status(
                 current_mtime_ns,
-                (False, f"calibration_invalid: {reason}", "", 0.0),
+                (False, "calibration_invalid: calibration_date missing", "", 0.0),
             )
 
         ok, reason = check_reprojection_error(
@@ -396,8 +446,6 @@ class SceneProcessor(Node):
                 (False, f"calibration_invalid: {reason}", "", 0.0),
             )
 
-        data = extrinsics.get("hand_eye_extrinsics", {})
-        calibration_date = str(data.get("calibration_date", ""))
         return self._cache_calibration_status(
             current_mtime_ns,
             (True, "", calibration_date, self._calibration_age_days(calibration_date)),

@@ -30,7 +30,7 @@ def test_import_does_not_write_board_file(
 ):
     _load_generator_module(tmp_path, monkeypatch)
 
-    assert not (tmp_path / "aruco_board_5x7.png").exists()
+    assert not (tmp_path / "charuco_board_10x11.png").exists()
 
 
 def test_loads_board_spec_from_fiducials_yaml(
@@ -40,10 +40,11 @@ def test_loads_board_spec_from_fiducials_yaml(
 
     board_spec = generator.load_board_spec(FIDUCIALS_PATH, dpi=300)
 
-    assert board_spec.rows == 5
-    assert board_spec.cols == 7
-    assert board_spec.marker_length_mm == pytest.approx(35.0)
-    assert board_spec.marker_separation_mm == pytest.approx(7.0)
+    assert board_spec.target_type == "charuco"
+    assert board_spec.rows == 10
+    assert board_spec.cols == 11
+    assert board_spec.square_length_mm == pytest.approx(20.0)
+    assert board_spec.marker_length_mm == pytest.approx(15.0)
     assert board_spec.dictionary_name == "DICT_5X5_100"
 
 
@@ -59,5 +60,5 @@ def test_generated_image_dimensions_follow_config(
         board_spec.height_px,
         board_spec.width_px,
     )
-    assert board_spec.marker_px == 350
-    assert board_spec.marker_sep_px == 70
+    assert board_spec.square_px == 200
+    assert board_spec.marker_px == 150

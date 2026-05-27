@@ -8,6 +8,7 @@
 #include <builtin_interfaces/msg/time.hpp>
 
 #include "motion_core/trajectory_post_processor.hpp"
+#include "motion_core/trajectory_validator.hpp"
 
 namespace motion_core {
 MotionPrimitiveExecutor::MotionPrimitiveExecutor(Dependencies dependencies)
@@ -134,6 +135,16 @@ MotionPrimitiveExecutor::Result MotionPrimitiveExecutor::execute(
       PrimitiveRouterDispatch::PlanningStatus::kSuccess) {
     result.status = Status::kAborted;
     result.message = planning_result.reason;
+    return result;
+  }
+
+  std::string noop_reason;
+  if (is_single_point_noop_trajectory(planning_result.trajectory,
+                                      current_joint_positions, 1e-6,
+                                      noop_reason)) {
+    result.status = Status::kSucceeded;
+    result.message = "no-op trajectory skipped; primitive=" + primitive +
+                     ", planner_id=" + planning_result.planner_id;
     return result;
   }
 

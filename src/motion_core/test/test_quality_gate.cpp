@@ -35,6 +35,18 @@ QualityGate make_quality_gate() {
                      JointPositionGuard{}, ManipulabilityGuard::disabled());
 }
 
+TEST(QualityGateTest, RejectsPlanWithFewerThanTwoPoints) {
+  const QualityGate gate = make_quality_gate();
+  auto traj = make_valid_trajectory(2);
+  traj.points.resize(1);
+  traj.points.front().time_from_start = rclcpp::Duration::from_seconds(1.0);
+
+  std::string reason;
+  EXPECT_FALSE(gate.validate_plan(traj, QualityGate::kFractionNotApplicable,
+                                  "PTP", reason));
+  EXPECT_EQ(reason, "trajectory must contain at least two points");
+}
+
 TEST(QualityGateTest, RejectsPlanWithMoreThanTwoHundredPoints) {
   const QualityGate gate = make_quality_gate();
   const auto traj = make_valid_trajectory(201);
@@ -75,6 +87,29 @@ TEST(QualityGateTest, RejectsCircWhenFractionBelowCircThreshold) {
   // 0.5 is below any sensible CIRC acceptance threshold.
   EXPECT_FALSE(gate.validate_plan(traj, 0.5, "CIRC", reason));
   EXPECT_EQ(reason, "cartesian fraction below minimum threshold for primitive");
+}
+
+TEST(QualityGateTest, AcceptsMoveRelWhenFractionAboveMoveRelThreshold) {
+  const QualityGate gate = make_quality_gate();
+  const auto traj = make_valid_trajectory(2);
+
+  std::string reason;
+  EXPECT_TRUE(gate.validate_plan(traj, 0.75, "MOVE_REL", reason));
+  EXPECT_TRUE(reason.empty());
+}
+
+TEST(QualityGateTest, RejectsMoveRelWhenFractionBelowMoveRelThreshold) {
+  const QualityGate gate = make_quality_gate();
+  const auto traj = make_valid_trajectory(2);
+
+  std::string reason;
+  EXPECT_FALSE(gate.validate_plan(traj, 0.65, "MOVE_REL", reason));
+  EXPECT_EQ(reason, "cartesian fraction below minimum threshold for primitive");
+}
+
+TEST(QualityGateTest, MoveRelDispatchReturnsCorrectThreshold) {
+  EXPECT_DOUBLE_EQ(
+      QualityGate::minimum_cartesian_fraction_for_primitive("MOVE_REL"), 0.70);
 }
 
 TEST(QualityGateTest, PrimitiveDispatchRoutesDifferentThresholds) {

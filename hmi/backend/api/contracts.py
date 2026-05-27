@@ -97,6 +97,7 @@ class ChatMessageModel(StrictModel):
     timestamp: str
     text: str
     tag: str | None = None
+    source: str | None = None
 
 
 class PlanMetricsModel(StrictModel):

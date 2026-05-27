@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a printable ArUco board from gp4_perception fiducials.yaml."""
+"""Generate a printable ArUco/Charuco board from gp4_perception fiducials.yaml."""
 
 from __future__ import annotations
 
@@ -30,9 +30,11 @@ ARUCO_DICTIONARIES = {
 
 @dataclass(frozen=True)
 class BoardSpec:
+    target_type: str
     dictionary_name: str
     rows: int
     cols: int
+    square_length_mm: float
     marker_length_mm: float
     marker_separation_mm: float
     margin_mm: float
@@ -47,6 +49,10 @@ class BoardSpec:
         return _mm_to_px(self.marker_length_mm, self.px_per_mm)
 
     @property
+    def square_px(self) -> int:
+        return _mm_to_px(self.square_length_mm, self.px_per_mm)
+
+    @property
     def marker_sep_px(self) -> int:
         return _mm_to_px(self.marker_separation_mm, self.px_per_mm)
 
@@ -56,6 +62,8 @@ class BoardSpec:
 
     @property
     def width_px(self) -> int:
+        if self.target_type == "charuco":
+            return self.cols * self.square_px + 2 * self.margin_px
         return (
             self.cols * self.marker_px
             + (self.cols - 1) * self.marker_sep_px
@@ -64,6 +72,8 @@ class BoardSpec:
 
     @property
     def height_px(self) -> int:
+        if self.target_type == "charuco":
+            return self.rows * self.square_px + 2 * self.margin_px
         return (
             self.rows * self.marker_px
             + (self.rows - 1) * self.marker_sep_px
@@ -72,6 +82,8 @@ class BoardSpec:
 
     @property
     def width_mm(self) -> float:
+        if self.target_type == "charuco":
+            return self.cols * self.square_length_mm + 2 * self.margin_mm
         return (
             self.cols * self.marker_length_mm
             + (self.cols - 1) * self.marker_separation_mm
@@ -80,6 +92,8 @@ class BoardSpec:
 
     @property
     def height_mm(self) -> float:
+        if self.target_type == "charuco":
+            return self.rows * self.square_length_mm + 2 * self.margin_mm
         return (
             self.rows * self.marker_length_mm
             + (self.rows - 1) * self.marker_separation_mm
@@ -122,10 +136,19 @@ def load_board_spec(
             f"Unsupported marker_dictionary {dictionary_name!r}; supported: {supported}"
         )
 
+    target_type = str(fiducials.get("target_type", "aruco")).lower()
+    if target_type not in {"aruco", "charuco"}:
+        raise ValueError("fiducials.target_type must be 'aruco' or 'charuco'")
+
     return BoardSpec(
+        target_type=target_type,
         dictionary_name=dictionary_name,
         rows=_positive_int(fiducials.get("board_rows"), "fiducials.board_rows"),
         cols=_positive_int(fiducials.get("board_columns"), "fiducials.board_columns"),
+        square_length_mm=_positive_mm_from_m(
+            fiducials.get("square_length_m", fiducials.get("marker_length_m")),
+            "fiducials.square_length_m",
+        ),
         marker_length_mm=_positive_mm_from_m(
             fiducials.get("marker_length_m"), "fiducials.marker_length_m"
         ),
@@ -152,10 +175,50 @@ def _draw_marker(aruco_dict, marker_id: int, marker_px: int):
         return cv2.aruco.generateImageMarker(aruco_dict, marker_id, marker_px)
 
 
+def _create_charuco_board(board_spec: BoardSpec, aruco_dict):
+    size = (board_spec.cols, board_spec.rows)
+    try:
+        return cv2.aruco.CharucoBoard_create(
+            board_spec.cols,
+            board_spec.rows,
+            board_spec.square_length_mm,
+            board_spec.marker_length_mm,
+            aruco_dict,
+        )
+    except AttributeError:
+        return cv2.aruco.CharucoBoard(
+            size,
+            board_spec.square_length_mm,
+            board_spec.marker_length_mm,
+            aruco_dict,
+        )
+
+
+def _draw_charuco_board(board_spec: BoardSpec, aruco_dict) -> np.ndarray:
+    board = _create_charuco_board(board_spec, aruco_dict)
+    inner_size = (
+        board_spec.cols * board_spec.square_px,
+        board_spec.rows * board_spec.square_px,
+    )
+    try:
+        inner = board.draw(inner_size)
+    except AttributeError:
+        inner = board.generateImage(inner_size)
+
+    image = np.full((board_spec.height_px, board_spec.width_px), 255, dtype=np.uint8)
+    y0 = board_spec.margin_px
+    x0 = board_spec.margin_px
+    image[y0 : y0 + inner.shape[0], x0 : x0 + inner.shape[1]] = inner
+    return image
+
+
 def generate_board_image(board_spec: BoardSpec) -> np.ndarray:
     """Return a white printable board image with marker IDs filled row-major."""
     image = np.full((board_spec.height_px, board_spec.width_px), 255, dtype=np.uint8)
     aruco_dict = _get_aruco_dictionary(board_spec.dictionary_name)
+
+    if board_spec.target_type == "charuco":
+        return _draw_charuco_board(board_spec, aruco_dict)
 
     marker_id = 0
     for row in range(board_spec.rows):
@@ -182,12 +245,17 @@ def write_board_image(output_path: Path, board_spec: BoardSpec) -> None:
 
 
 def _default_output_path(board_spec: BoardSpec) -> Path:
-    return Path(f"aruco_board_{board_spec.rows}x{board_spec.cols}.png")
+    return Path(
+        f"{board_spec.target_type}_board_{board_spec.rows}x{board_spec.cols}.png"
+    )
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Generate the printable ArUco board used for GP4 hand-eye calibration."
+        description=(
+            "Generate the printable ArUco/Charuco board used for "
+            "GP4 hand-eye calibration."
+        )
     )
     parser.add_argument(
         "--config",
@@ -199,7 +267,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=None,
-        help="Output PNG path. Defaults to aruco_board_<rows>x<cols>.png.",
+        help="Output PNG path. Defaults to <target>_board_<rows>x<cols>.png.",
     )
     parser.add_argument(
         "--dpi",
@@ -229,9 +297,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"({board_spec.width_mm:.0f}x{board_spec.height_mm:.0f} mm)"
     )
     print(
-        f"  Markers: {board_spec.rows}x{board_spec.cols} = "
-        f"{board_spec.rows * board_spec.cols}, "
-        f"each {board_spec.marker_length_mm:.0f} mm"
+        f"  Board: {board_spec.target_type} {board_spec.rows}x{board_spec.cols}, "
+        f"square {board_spec.square_length_mm:.0f} mm, "
+        f"marker {board_spec.marker_length_mm:.0f} mm"
     )
     print(f"  Dictionary: {board_spec.dictionary_name}")
     print(f"  Print at {board_spec.dpi} DPI for correct scale.")

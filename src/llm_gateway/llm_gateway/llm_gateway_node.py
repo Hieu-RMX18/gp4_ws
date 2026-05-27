@@ -4,12 +4,11 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 import json
 import math
 import os
-import re
-import threading
 import time
 from typing import Any, Dict, List
 
@@ -34,6 +33,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
 from llm_gateway.intent_engine import (
+    GP4_JOINT_NAMES,
     GoalMapper,
     IntentRouter,
     LLMParser,
@@ -41,9 +41,11 @@ from llm_gateway.intent_engine import (
     SchemaValidator,
     SemanticValidator,
     SequenceValidator,
+    load_srdf_named_poses as _load_srdf_named_poses,
     command_from_sanitized_json as _pipeline_command_from_sanitized_json,
     hydrate_draw_workplane as _pipeline_hydrate_draw_workplane,
     prepare_execution_command as _pipeline_prepare_execution_command,
+    prepare_semantic_ir_for_routing as _pipeline_prepare_semantic_ir_for_routing,
 )
 from llm_gateway.react_planner import (
     ComputeArcPointsTool,
@@ -67,37 +69,8 @@ from llm_gateway.semantic_ir_contract import validate_semantic_ir_contract
 
 EXECUTOR_SHUTDOWN_TIMEOUT_SEC = 2.0
 _DIRECT_STOP_REVIEW_TEXTS = {"stop", "stop motion", "cancel motion", "halt"}
-_DIRECT_GET_POSE_REVIEW_TEXTS = {
-    "get pose",
-    "current pose",
-    "where is robot",
-    "where is tcp",
-}
-_DIRECT_WAIT_REVIEW_RE = re.compile(
-    r"(?:wait|pause)\s+([+-]?\d+(?:\.\d+)?)\s*(?:s|sec|second|seconds)?"
-)
-_DIRECT_MOVE_REL_REVIEW_RE = re.compile(
-    r"(?:move|go)\s+"
-    r"(up|down|left|right|forward|back|backward)\s+"
-    r"([+-]?\d+(?:\.\d+)?)\s*(m|cm|mm)"
-)
-_DIRECT_MOVE_JOINT_REVIEW_RE = re.compile(
-    r"(?:move|jog)\s+joint\s+([1-6])\s+"
-    r"([+-]?\d+(?:\.\d+)?)\s*(deg|degree|degrees|rad|radian|radians)?"
-)
-_DIRECT_DRAW_CIRCLE_REVIEW_RE = re.compile(
-    r"draw\s+(?:a\s+)?circle(?:\s+(?:with\s+)?radius)?\s+"
-    r"([+]?\d+(?:\.\d+)?)\s*(m|cm|mm)"
-)
-_DIRECT_DRAW_TEXT_REVIEW_RE = re.compile(
-    r"(?:write|draw\s+text)\s+(.+)"
-)
-_DIRECT_VIETNAMESE_DRAW_TEXT_REVIEW_RE = re.compile(
-    r"(?:vẽ|ve)\s+(?:chữ|chu)\s+(.+)"
-)
-_DIRECT_SEQUENCE_SPLIT_RE = re.compile(
-    r"\s*(?:;|\n+|,|\b(?:and\s+then|then)\b)\s*", re.IGNORECASE
-)
+_REVIEW_CACHE_VERSION = "react_semantic_review_v1"
+_REVIEW_CACHE_MAX_ENTRIES = 128
 
 
 @dataclass
@@ -181,6 +154,10 @@ class LLMGatewayNode(Node):
             semantic_validator=self._semantic_validator,
         )
         self._latest_joint_positions_rad: List[float] = []
+        self._latest_joint_positions_by_name_rad: Dict[str, float] = {}
+        self._latest_pose_by_frame: Dict[str, Dict[str, Any]] = {}
+        self._current_pose_cache_ttl_sec = 5.0
+        self._semantic_review_cache: Dict[str, Dict[str, Any]] = {}
         llm_backend_config = load_llm_backend_config(llm_config_path)
         self._llm_client = llm_client or OpenAICompatibleLLMClient(
             llm_backend_config, self._schema_validator.schema_as_json()
@@ -189,6 +166,12 @@ class LLMGatewayNode(Node):
         # ── ReAct agent init (W3) ─────────────────────────────────────────────
         self._react_enabled = self._load_react_enabled()
         self._react_state_injector = StateInjector()
+        try:
+            self._react_state_injector.set_available_named_poses(
+                list(_load_srdf_named_poses().keys())
+            )
+        except Exception:
+            pass
         if self._react_enabled:
             tool_registry = (
                 ToolRegistry()
@@ -247,6 +230,13 @@ class LLMGatewayNode(Node):
         self._react_joint_state_subscriber = self.create_subscription(
             JointState,
             "/yaskawa/joint_states",
+            self._react_joint_state_callback,
+            qos_profile_sensor_data,
+            callback_group=callback_group,
+        )
+        self._react_joint_state_fallback_subscriber = self.create_subscription(
+            JointState,
+            "/joint_states",
             self._react_joint_state_callback,
             qos_profile_sensor_data,
             callback_group=callback_group,
@@ -410,160 +400,98 @@ class LLMGatewayNode(Node):
         allow_sequence: bool = True,
         runtime_mode: str = "",
     ) -> Dict[str, Any] | None:
+        _ = allow_sequence, runtime_mode
         normalized = " ".join(str(intent_text or "").strip().lower().split())
         normalized = normalized.strip(" .!?")
-        if allow_sequence:
-            sequence = LLMGatewayNode._direct_review_sequence_semantic_ir(
-                normalized, runtime_mode=runtime_mode
-            )
-            if sequence is not None:
-                return sequence
         if normalized in _DIRECT_STOP_REVIEW_TEXTS:
             return {"intent": "stop"}
-        if normalized in {"home", "go home", "return home"}:
-            return {"intent": "go_home"}
-        if normalized in _DIRECT_GET_POSE_REVIEW_TEXTS:
-            return {"intent": "get_pose", "reference_frame": "base_link"}
-
-        wait_match = _DIRECT_WAIT_REVIEW_RE.fullmatch(normalized)
-        if wait_match:
-            duration_sec = float(wait_match.group(1))
-            if duration_sec < 0.0:
-                return {
-                    "intent": "error",
-                    "error": "wait duration must be non-negative",
-                }
-            return {"intent": "wait", "wait_duration_sec": duration_sec}
-
-        move_relative = LLMGatewayNode._direct_review_move_relative(normalized)
-        if move_relative is not None:
-            return move_relative
-
-        move_joint = LLMGatewayNode._direct_review_move_joint(normalized)
-        if move_joint is not None:
-            return move_joint
-
-        draw = LLMGatewayNode._direct_review_draw_request(normalized)
-        if draw is not None:
-            return draw
         return None
 
     @staticmethod
-    def _direct_review_sequence_semantic_ir(
-        normalized: str, *, runtime_mode: str = ""
-    ) -> Dict[str, Any] | None:
-        parts = [
-            part.strip(" ,;")
-            for part in _DIRECT_SEQUENCE_SPLIT_RE.split(normalized)
-            if part.strip(" ,;")
-        ]
-        if len(parts) < 2:
-            return None
-        steps: list[dict[str, Any]] = []
-        for part in parts:
-            step = LLMGatewayNode._direct_review_semantic_ir(
-                part, allow_sequence=False, runtime_mode=runtime_mode
+    def _validate_draw_params(semantic_ir: Dict[str, Any]) -> str | None:
+        """Return an error string if required draw params are missing, None if valid."""
+        intent = str(semantic_ir.get("intent", "")).strip()
+        if intent == "draw_shape":
+            shape = str(semantic_ir.get("shape_type", "")).strip().lower()
+            params = semantic_ir.get("params") or {}
+            if not isinstance(params, dict):
+                return "draw_shape params must be an object."
+            if shape == "circle":
+                has_radius = any(k in params for k in ("radius", "radius_m"))
+                has_diameter = any(k in params for k in ("diameter", "diameter_m", "size", "size_m"))
+                if not has_radius and not has_diameter:
+                    return "draw_shape circle requires params.radius or params.diameter"
+            if shape in {"polygon", "polyline"}:
+                has_points = any(k in params for k in ("points", "vertices"))
+                has_size = any(
+                    k in params
+                    for k in ("n_sides", "sides", "radius", "radius_m", "side", "side_m", "side_m")
+                )
+                if not has_points and not has_size:
+                    return f"draw_shape {shape} requires params with size or points"
+                if shape == "polygon" and not has_points:
+                    has_n_sides = any(k in params for k in ("n_sides", "sides"))
+                    if not has_n_sides:
+                        return "draw_shape polygon requires params.n_sides"
+            if shape == "arc":
+                has_radius = any(k in params for k in ("radius", "radius_m"))
+                if not has_radius:
+                    return "draw_shape arc requires params.radius"
+            if shape in {"square", "rectangle", "triangle"}:
+                has_explicit = any(k in params for k in ("points", "vertices"))
+                if not has_explicit:
+                    if shape == "rectangle":
+                        has_width = any(k in params for k in ("width_m", "width"))
+                        has_height = any(k in params for k in ("height_m", "height"))
+                        if not has_width:
+                            return "draw_shape rectangle requires params.width"
+                        if not has_height:
+                            return "draw_shape rectangle requires params.height"
+                    else:
+                        side_keys = ("side_m", "side", "size_m", "size")
+                        has_side = any(k in params for k in side_keys)
+                        if not has_side:
+                            return f"draw_shape {shape} requires params.side or explicit points"
+        elif intent == "draw_text":
+            text = str(semantic_ir.get("text", "")).strip()
+            if not text:
+                return "draw_text requires a non-empty text string."
+            font = semantic_ir.get("font") or {}
+            if not isinstance(font, dict):
+                return "draw_text font must be an object."
+            height_keys = ("height_m", "height", "char_height_m")
+            has_height = any(k in semantic_ir for k in height_keys) or any(
+                k in font for k in height_keys
             )
-            if step is None:
-                return None
-            steps.append(step)
-        return {"intent": "sequence", "steps": steps}
-
-    @staticmethod
-    def _direct_review_move_relative(normalized: str) -> Dict[str, Any] | None:
-        match = _DIRECT_MOVE_REL_REVIEW_RE.fullmatch(normalized)
-        if not match:
-            return None
-        direction = match.group(1)
-        magnitude = float(match.group(2))
-        unit = match.group(3)
-        if magnitude < 0.0:
-            return {"intent": "error", "error": "relative move distance must be non-negative"}
-        scale = {"m": 1.0, "cm": 0.01, "mm": 0.001}[unit]
-        distance_m = magnitude * scale
-        axis_delta = {
-            "x": 0.0,
-            "y": 0.0,
-            "z": 0.0,
-        }
-        if direction == "up":
-            axis_delta["z"] = distance_m
-        elif direction == "down":
-            axis_delta["z"] = -distance_m
-        elif direction == "right":
-            axis_delta["y"] = -distance_m
-        elif direction == "left":
-            axis_delta["y"] = distance_m
-        elif direction == "forward":
-            axis_delta["x"] = distance_m
-        else:
-            axis_delta["x"] = -distance_m
-        reference_frame = (
-            "base_link" if direction in {"up", "down"} else "tool0"
-        )
-        return {
-            "intent": "move_relative",
-            "delta": axis_delta,
-            "reference_frame": reference_frame,
-        }
-
-    @staticmethod
-    def _direct_review_move_joint(normalized: str) -> Dict[str, Any] | None:
-        match = _DIRECT_MOVE_JOINT_REVIEW_RE.fullmatch(normalized)
-        if not match:
-            return None
-        joint_index = int(match.group(1)) - 1
-        angle = float(match.group(2))
-        unit = match.group(3) or "deg"
-        if unit in {"deg", "degree", "degrees"}:
-            angle = math.radians(angle)
-        elif unit not in {"rad", "radian", "radians"}:
-            return {"intent": "error", "error": "joint angle unit must be deg or rad"}
-        return {
-            "intent": "move_joint",
-            "joint_index": joint_index,
-            "joint_angle": angle,
-        }
-
-    @staticmethod
-    def _direct_review_draw_request(normalized: str) -> Dict[str, Any] | None:
-        circle = _DIRECT_DRAW_CIRCLE_REVIEW_RE.fullmatch(normalized)
-        if circle:
-            return {
-                "intent": "draw_shape",
-                "shape_type": "circle",
-                "units": circle.group(2),
-                "frame_id": "base_link",
-                "params": {"radius": float(circle.group(1))},
-            }
-
-        text_match = _DIRECT_DRAW_TEXT_REVIEW_RE.fullmatch(normalized)
-        if text_match is None:
-            text_match = _DIRECT_VIETNAMESE_DRAW_TEXT_REVIEW_RE.fullmatch(normalized)
-        if text_match is None:
-            return None
-        text = text_match.group(1).strip()
-        if not text:
-            return None
-        return {
-            "intent": "draw_text",
-            "text": text.upper(),
-            "units": "mm",
-            "frame_id": "base_link",
-            "font": {"type": "single_stroke_builtin", "height": 20},
-        }
+            if not has_height:
+                return "draw_text requires font.height."
+        return None
 
     def _generate_review_semantic_ir(self, intent_text: str) -> Dict[str, Any]:
+        cached_review = self._get_semantic_review_cache(intent_text)
+        if cached_review is not None:
+            return cached_review
+
         direct_review = self._direct_review_semantic_ir(
             intent_text, runtime_mode=self._runtime_mode
         )
         if direct_review is not None:
-            return self._resolve_tool_relative_review_move(direct_review)
+            self._emit_trace(
+                "direct_pre_parsed",
+                "parsing",
+                source="direct_fast_path",
+                summary=str(direct_review.get("intent") or "")[:80],
+            )
+            validated = dict(direct_review)
+            validated["_parse_source"] = "direct_fast_path"
+            return validated
 
         if self._react_enabled and self._react_agent is not None:
             react_result = self._react_agent.run(intent_text)
             if not react_result.get("_handoff"):
-                return react_result
+                enriched_result = dict(react_result)
+                enriched_result["_parse_source"] = "react"
+                return enriched_result
             reason = react_result.get("reason", "unknown")
             return {
                 "error": "REACT_HANDOFF",
@@ -571,21 +499,84 @@ class LLMGatewayNode(Node):
                 "hint": "Rephrase the command with clearer intent or check that all required parameters are provided.",
             }
 
-        self._emit_trace("llm_request_started", "reasoning")
+        self._emit_trace("llm_request_started", "reasoning", source="llm")
         llm_response = self._llm_client.generate_response(intent_text)
-        self._emit_trace("llm_response_received", "reasoning")
+        self._emit_trace("llm_response_received", "reasoning", source="llm")
         parsed = self._parser.parse(llm_response)
-        self._emit_trace("parsed", "parsing")
+        parsed["_parse_source"] = "llm"
+        self._emit_trace("parsed", "parsing", source="llm")
         return parsed
+
+    def _review_cache_key(self, intent_text: str) -> str:
+        normalized = " ".join(str(intent_text or "").strip().lower().split())
+        return f"{_REVIEW_CACHE_VERSION}|{self._runtime_mode}|{normalized}"
+
+    def _get_semantic_review_cache(self, intent_text: str) -> Dict[str, Any] | None:
+        cache = getattr(self, "_semantic_review_cache", None)
+        if not isinstance(cache, dict):
+            return None
+        cached = cache.get(self._review_cache_key(intent_text))
+        if not isinstance(cached, dict):
+            return None
+        result = deepcopy(cached)
+        result["_parse_source"] = "semantic_cache"
+        self._emit_trace(
+            "semantic_cache_hit",
+            "parsing",
+            source="semantic_cache",
+            summary=str(result.get("intent") or "")[:80],
+        )
+        return result
+
+    def _store_semantic_review_cache(
+        self, intent_text: str, semantic_ir: Dict[str, Any]
+    ) -> None:
+        if not self._semantic_ir_cacheable(semantic_ir):
+            return
+        cache = getattr(self, "_semantic_review_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._semantic_review_cache = cache
+        stored = self._strip_metadata_fields(semantic_ir)
+        cache[self._review_cache_key(intent_text)] = stored
+        while len(cache) > _REVIEW_CACHE_MAX_ENTRIES:
+            oldest_key = next(iter(cache))
+            cache.pop(oldest_key, None)
+
+    @staticmethod
+    def _semantic_ir_cacheable(payload: Any) -> bool:
+        if not isinstance(payload, dict) or "error" in payload:
+            return False
+        intent = str(payload.get("intent") or "").strip()
+        if intent in {"draw_shape", "draw_text"}:
+            return True
+        if intent == "sequence":
+            steps = payload.get("steps")
+            return isinstance(steps, list) and all(
+                LLMGatewayNode._semantic_ir_cacheable(step) for step in steps
+            )
+        return False
+
+    @staticmethod
+    def _strip_metadata_fields(payload: Any) -> Any:
+        if isinstance(payload, dict):
+            return {
+                key: LLMGatewayNode._strip_metadata_fields(value)
+                for key, value in payload.items()
+                if not str(key).startswith("_")
+            }
+        if isinstance(payload, list):
+            return [LLMGatewayNode._strip_metadata_fields(value) for value in payload]
+        return deepcopy(payload)
 
     def _resolve_tool_relative_review_move(
         self, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Convert direct fast-path tool0 nudges into base_link deltas.
+        """Convert tool0-relative Semantic IR nudges into base_link deltas.
 
         The safety and motion layers only accept MOVE_REL in base_link, so
-        operator words like forward/left/right/back must be grounded in the
-        current tool0 orientation before intent review succeeds.
+        tool-frame relative movement must be grounded in the current tool0
+        orientation before intent review succeeds.
         """
         intent = str(payload.get("intent", "")).strip()
         if intent == "sequence":
@@ -604,7 +595,11 @@ class LLMGatewayNode(Node):
         if intent != "move_relative" or payload.get("reference_frame") != "tool0":
             return payload
 
-        current_pose = self._request_current_pose_snapshot("base_link")
+        current_pose = self._get_cached_current_pose_snapshot("base_link")
+        if current_pose is None:
+            request_pose = getattr(self, "_request_current_pose_snapshot", None)
+            if callable(request_pose):
+                current_pose = request_pose("base_link")
         if current_pose is None:
             return {
                 "error": "CURRENT_POSE_UNAVAILABLE",
@@ -630,6 +625,60 @@ class LLMGatewayNode(Node):
         resolved["delta"] = base_delta
         resolved["reference_frame"] = "base_link"
         return resolved
+
+    def _resolve_move_joint_delta(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert move_joint_delta (relative) to move_joint (absolute) using current state."""
+        try:
+            return _pipeline_prepare_semantic_ir_for_routing(
+                payload,
+                current_joint_positions_rad=list(
+                    getattr(self, "_latest_joint_positions_rad", [])
+                ),
+                current_joint_positions_by_name=getattr(
+                    self, "_latest_joint_positions_by_name_rad", {}
+                ),
+            )
+        except ValueError as exc:
+            message = str(exc)
+            if "current joint positions unavailable" in message:
+                error = "CURRENT_JOINT_STATE_UNAVAILABLE"
+                hint = "Verify /yaskawa/joint_states or /joint_states is publishing."
+            else:
+                error = "MOVE_JOINT_DELTA_RESOLUTION_FAILED"
+                hint = "Verify joint index/alias and delta_angle are valid."
+            return {
+                "error": error,
+                "message": message,
+                "hint": hint,
+            }
+
+    def _prepare_review_semantic_ir(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        prepared = self._canonicalize_semantic_ir_aliases(payload)
+        if not isinstance(prepared, dict):
+            return prepared
+        prepared = self._resolve_tool_relative_review_move(prepared)
+        if isinstance(prepared, dict) and "error" in prepared:
+            return prepared
+        return self._resolve_move_joint_delta(prepared)
+
+    @staticmethod
+    def _review_error_message(payload: Dict[str, Any]) -> str:
+        if (
+            payload.get("error") == "MISSING_SLOT"
+            and payload.get("intent") == "move_relative"
+        ):
+            return "relative move requires direction and distance."
+        reason = str(payload.get("message") or payload.get("error") or "")
+        if reason == "move_relative requires delta.":
+            return "relative move requires direction and distance."
+        return reason
+
+    @staticmethod
+    def _review_exception_message(exc: Exception) -> str:
+        message = str(exc)
+        if message == "move_relative requires delta.":
+            return "relative move requires direction and distance."
+        return message
 
     @staticmethod
     def _rotate_tool_delta_to_base(
@@ -749,6 +798,7 @@ class LLMGatewayNode(Node):
             response.semantic_ir_json = ""
             return response
 
+        semantic_ir = self._prepare_review_semantic_ir(semantic_ir)
         contract = validate_semantic_ir_contract(semantic_ir)
         if not contract.valid:
             response.accepted = False
@@ -771,11 +821,21 @@ class LLMGatewayNode(Node):
         )
         if "error" in semantic_ir:
             response.accepted = False
-            response.error = str(semantic_ir.get("message") or semantic_ir["error"])
+            response.error = self._review_error_message(semantic_ir)
             return response
         if "intent" not in semantic_ir:
             response.accepted = False
             response.error = "review result must be Semantic IR with an intent field."
+            return response
+        draw_err = self._validate_draw_params(semantic_ir)
+        if draw_err:
+            response.accepted = False
+            response.error = draw_err
+            response.semantic_ir_json = json.dumps(
+                {"error": "SEMANTIC_IR_DRAW_PARAMS_MISSING", "reason": draw_err},
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
             return response
         if (
             not self._semantic_ir_contains_intent(semantic_ir, "return_to_start")
@@ -789,30 +849,66 @@ class LLMGatewayNode(Node):
                 )
             except Exception as exc:
                 response.accepted = False
-                response.error = str(exc)
+                response.error = self._review_exception_message(exc)
                 return response
             if routed.route_type == "error":
                 error_payload = routed.error_payload or {}
                 response.accepted = False
-                response.error = str(
-                    error_payload.get("message")
-                    or error_payload.get("error")
-                    or "review result was rejected by the intent router."
+                response.error = self._review_error_message(
+                    {
+                        "error": error_payload.get("error"),
+                        "message": (
+                            error_payload.get("message")
+                            or "review result was rejected by the intent router."
+                        ),
+                        "intent": error_payload.get("intent"),
+                    }
                 )
                 return response
 
         response.accepted = True
         response.error = ""
+        self._store_semantic_review_cache(intent_text, semantic_ir)
         return response
 
     def _react_joint_state_callback(self, msg: JointState) -> None:
-        self._latest_joint_positions_rad = [float(value) for value in msg.position]
+        raw_positions = [float(value) for value in msg.position]
+        by_name = {
+            str(name): raw_positions[index]
+            for index, name in enumerate(msg.name)
+            if index < len(raw_positions)
+        }
+        if all(joint_name in by_name for joint_name in GP4_JOINT_NAMES):
+            self._latest_joint_positions_rad = [
+                by_name[joint_name] for joint_name in GP4_JOINT_NAMES
+            ]
+        else:
+            self._latest_joint_positions_rad = raw_positions
+        self._latest_joint_positions_by_name_rad = dict(by_name)
         self._react_state_injector.update_joint_states(
             {
-                "name": list(msg.name),
+                "name": (
+                    list(GP4_JOINT_NAMES)
+                    if len(self._latest_joint_positions_rad) == len(GP4_JOINT_NAMES)
+                    else list(msg.name)
+                ),
                 "position": list(self._latest_joint_positions_rad),
             }
         )
+
+    @staticmethod
+    def _canonicalize_semantic_ir_aliases(payload: Any) -> Any:
+        if isinstance(payload, dict):
+            canonical = {
+                key: LLMGatewayNode._canonicalize_semantic_ir_aliases(value)
+                for key, value in payload.items()
+            }
+            if canonical.get("intent") == "move_to_named_pose":
+                canonical["intent"] = "move_named_pose"
+            return canonical
+        if isinstance(payload, list):
+            return [LLMGatewayNode._canonicalize_semantic_ir_aliases(value) for value in payload]
+        return payload
 
     @staticmethod
     def _semantic_ir_contains_intent(payload: Any, target_intent: str) -> bool:
@@ -893,12 +989,20 @@ class LLMGatewayNode(Node):
     def _tri_state_is_true(value: Any) -> bool:
         return int(getattr(value, "val", TriState.UNKNOWN)) == int(TriState.TRUE)
 
-    def _emit_trace(self, event: str, phase: str, level: str = "INFO",
-                    summary: str = "", command_id: str = "", **details) -> None:
+    def _emit_trace(
+        self,
+        event: str,
+        phase: str,
+        level: str = "INFO",
+        summary: str = "",
+        command_id: str = "",
+        source: str = "",
+        **details,
+    ) -> None:
         """Publish structured command trace event to /llm_debug."""
         import json
         import time
-        payload = json.dumps({
+        trace_payload = {
             "t": "command_trace",
             "ts": time.time(),
             "cmd_id": command_id or getattr(self, "_active_command_id", ""),
@@ -908,7 +1012,10 @@ class LLMGatewayNode(Node):
             "level": level,
             "summary": summary,
             "details": details if details else None,
-        })
+        }
+        if source:
+            trace_payload["source"] = source
+        payload = json.dumps(trace_payload)
         if hasattr(self, "_llm_debug_publisher") and self._llm_debug_publisher is not None:
             self._llm_debug_publisher.publish(String(data=payload))
 
@@ -958,7 +1065,11 @@ class LLMGatewayNode(Node):
     ) -> None:
         try:
             parsed_command = self._parser.parse(raw_payload)
-            self._emit_trace("parsed", "parsing")
+            self._emit_trace("parsed", "parsing",
+                             summary=f"intent={parsed_command.get('intent', '?')} raw_len={len(raw_payload)}",
+                             intent=str(parsed_command.get('intent', '')),
+                             primitive_type=str(parsed_command.get('primitive_type', '')),
+                             raw_preview=raw_payload[:120])
         except Exception as exc:
             self._reject(
                 "llm_parse_failed",
@@ -979,6 +1090,18 @@ class LLMGatewayNode(Node):
             )
             return
 
+        parsed_command = self._prepare_review_semantic_ir(parsed_command)
+        self._emit_trace("canonicalized", "parsing",
+                         summary=f"Aliases resolved → intent={parsed_command.get('intent', '?')}")
+        if isinstance(parsed_command, dict) and "error" in parsed_command:
+            self._reject(
+                "semantic_ir_preparation_failed",
+                self._review_error_message(parsed_command),
+                intent_text=intent_text,
+                hint=str(parsed_command.get("hint", "")),
+                parsed_command=parsed_command,
+            )
+            return
         if enforce_contract:
             contract = validate_semantic_ir_contract(parsed_command)
             if not contract.valid:
@@ -990,6 +1113,8 @@ class LLMGatewayNode(Node):
                     parsed_command=parsed_command,
                 )
                 return
+            self._emit_trace("contract_validated", "validation",
+                             summary="Semantic IR contract check PASSED")
 
         parsed_command = self._inject_return_to_start_joints(
             parsed_command, list(getattr(self, "_latest_joint_positions_rad", []))
@@ -1002,7 +1127,7 @@ class LLMGatewayNode(Node):
         except Exception as exc:
             self._reject(
                 "intent_routing_failed",
-                str(exc),
+                self._review_exception_message(exc),
                 intent_text=intent_text,
                 parsed_command=parsed_command,
             )
@@ -1018,9 +1143,16 @@ class LLMGatewayNode(Node):
                 or error_payload.get("error")
                 or "LLM returned an error payload."
             )
+            reason = self._review_error_message(
+                {
+                    "error": error_payload.get("error"),
+                    "message": reason,
+                    "intent": error_payload.get("intent"),
+                }
+            )
             self._reject(
                 "unsupported_or_ambiguous",
-                str(reason),
+                reason,
                 intent_text=intent_text,
                 parsed_command=parsed_command,
                 validated_command=error_payload,
@@ -1046,7 +1178,33 @@ class LLMGatewayNode(Node):
 
     def _normalize_and_validate(self, command: Dict[str, Any]) -> Dict[str, Any]:
         normalized_command = self._normalizer.normalize(command)
+        # Emit detailed normalization trace
+        prim = normalized_command.get('primitive_type', '?')
+        vel = normalized_command.get('velocity_scale', '?')
+        acc = normalized_command.get('acceleration_scale', '?')
+        frame = normalized_command.get('reference_frame', '?')
+        tp = normalized_command.get('target_pose', {})
+        pos_str = ""
+        if isinstance(tp, dict) and 'position' in tp:
+            p = tp['position']
+            pos_str = f"target=({p.get('x','?')}, {p.get('y','?')}, {p.get('z','?')})"
+        delta_str = ""
+        dx = normalized_command.get('delta_x')
+        if dx is not None:
+            dy = normalized_command.get('delta_y', 0)
+            dz = normalized_command.get('delta_z', 0)
+            delta_str = f"delta=({dx}, {dy}, {dz})"
+        self._emit_trace(
+            "normalized", "normalization",
+            summary=f"{prim} vel={vel} acc={acc} frame={frame} {pos_str}{delta_str}",
+            primitive_type=prim,
+            velocity_scale=str(vel),
+            acceleration_scale=str(acc),
+            reference_frame=str(frame),
+        )
         self._semantic_validator.validate(normalized_command)
+        self._emit_trace("semantic_validated", "validation",
+                         summary=f"Semantic checks PASSED for {prim} (units, frames, limits OK)")
         return normalized_command
 
     def _process_single_command(
@@ -1198,6 +1356,15 @@ class LLMGatewayNode(Node):
             return
 
         request = self._build_validate_request(normalized_command, command_payload)
+        prim = command_payload.get('primitive_type', '?')
+        self._emit_trace(
+            "safety_gate_request", "validation",
+            summary=f"Sending {prim} to /validate_command service",
+            source="safety",
+            primitive_type=prim,
+            velocity_scale=str(command_payload.get('velocity_scale', '')),
+            command_json_len=str(len(request.command_json)),
+        )
         if sequence_state is None:
             self.publish_status("safety_validation_requested")
         validation_future = self._validate_client.call_async(request)
@@ -1236,10 +1403,14 @@ class LLMGatewayNode(Node):
         self.publish_status("get_pose_requested")
         future = self._get_pose_client.call_async(request)
         future.add_done_callback(
-            lambda f, intent=intent_text: self._on_get_pose_done(f, intent)
+            lambda f, intent=intent_text, frame=request.reference_frame: self._on_get_pose_done(
+                f, intent, frame
+            )
         )
 
-    def _on_get_pose_done(self, future: Any, intent_text: str) -> None:
+    def _on_get_pose_done(
+        self, future: Any, intent_text: str, reference_frame: str = "base_link"
+    ) -> None:
         """Handle GetCurrentPose service response."""
         try:
             response = future.result()
@@ -1260,19 +1431,7 @@ class LLMGatewayNode(Node):
             return
 
         pose = response.current_pose
-        pose_data = {
-            "position": {
-                "x": float(pose.position.x),
-                "y": float(pose.position.y),
-                "z": float(pose.position.z),
-            },
-            "orientation": {
-                "x": float(pose.orientation.x),
-                "y": float(pose.orientation.y),
-                "z": float(pose.orientation.z),
-                "w": float(pose.orientation.w),
-            },
-        }
+        pose_data = self._cache_current_pose_snapshot(reference_frame, pose)
 
         self.get_logger().info(
             f"GET_POSE result: pos=({pose.position.x:.4f}, "
@@ -1344,6 +1503,20 @@ class LLMGatewayNode(Node):
                     validated_command=command_payload,
                 )
             return
+
+        self._emit_trace(
+            "safety_validated",
+            "validation",
+            source="safety",
+            summary="ValidateCommand accepted command",
+            primitive_type=str(command_payload.get("primitive_type") or ""),
+            has_sanitized_json=bool(getattr(response, "sanitized_json", "")),
+            sequence_step_index=(
+                sequence_state.current_step_index
+                if sequence_state is not None
+                else None
+            ),
+        )
 
         try:
             validated_command = self._command_from_sanitized_json(
@@ -1441,6 +1614,20 @@ class LLMGatewayNode(Node):
             return
 
         goal = self._goal_mapper.to_execute_motion_goal(execution_command)
+        prim = goal_payload.get('primitive_type', '?')
+        # Emit current pose at dispatch time for before/after comparison
+        cur_pose_str = ""
+        cached = self._get_cached_current_pose_snapshot("base_link")
+        if cached:
+            cp = cached
+            cur_pose_str = f"current_pos=({cp.get('position',{}).get('x','?')}, {cp.get('position',{}).get('y','?')}, {cp.get('position',{}).get('z','?')})"
+        self._emit_trace(
+            "goal_dispatched", "dispatch",
+            summary=f"Sending {prim} to ExecuteMotion action server {cur_pose_str}",
+            source="motion_core",
+            primitive_type=prim,
+            planner_id=str(goal_payload.get('planner_id', '')),
+        )
         send_future = self._execute_client.send_goal_async(goal)
         send_future.add_done_callback(
             lambda f,
@@ -1526,6 +1713,15 @@ class LLMGatewayNode(Node):
             return
         if wrapped.result and wrapped.result.success:
             result_message = wrapped.result.message or ""
+            self._emit_trace(
+                "execution_result",
+                "execution",
+                source="motion_core",
+                summary=result_message[:160],
+                primitive_type=str(goal_payload.get("primitive_type") or ""),
+                planner_id=str(goal_payload.get("planner_id") or ""),
+                success=True,
+            )
             self.get_logger().info(f"Execution succeeded: {result_message}")
             if sequence_state is None:
                 if "READY_FOR_CONFIRM" in result_message:
@@ -1547,6 +1743,16 @@ class LLMGatewayNode(Node):
             self._dispatch_sequence_step(sequence_state)
         else:
             msg = wrapped.result.message if wrapped.result else "no result"
+            self._emit_trace(
+                "execution_result",
+                "execution",
+                level="ERROR",
+                source="motion_core",
+                summary=msg[:160],
+                primitive_type=str(goal_payload.get("primitive_type") or ""),
+                planner_id=str(goal_payload.get("planner_id") or ""),
+                success=False,
+            )
             if sequence_state is None:
                 self._reject(
                     "execute_motion_failed",
@@ -2037,28 +2243,11 @@ class LLMGatewayNode(Node):
         response.dispatched_to_ros = False
         return response
 
-    def _request_current_pose_snapshot(
-        self, reference_frame: str
-    ) -> Dict[str, Any] | None:
-        if not self._get_pose_client.wait_for_service(
-            timeout_sec=self._safety_service_timeout_sec
-        ):
-            return None
-
-        request = GetCurrentPose.Request()
-        request.reference_frame = reference_frame
-        future = self._get_pose_client.call_async(request)
-        done, response = self._wait_for_future_without_spinning(
-            future, self._safety_service_timeout_sec
-        )
-
-        if not done:
-            return None
-        if response is None or not response.success:
-            return None
-
-        pose = response.current_pose
-        return {
+    def _cache_current_pose_snapshot(
+        self, reference_frame: str, pose: Any
+    ) -> Dict[str, Any]:
+        frame = str(reference_frame or "base_link")
+        pose_data = {
             "position": {
                 "x": float(pose.position.x),
                 "y": float(pose.position.y),
@@ -2071,6 +2260,74 @@ class LLMGatewayNode(Node):
                 "w": float(pose.orientation.w),
             },
         }
+        if not hasattr(self, "_latest_pose_by_frame"):
+            self._latest_pose_by_frame = {}
+        self._latest_pose_by_frame[frame] = {
+            "pose": pose_data,
+            "timestamp": time.monotonic(),
+        }
+        return pose_data
+
+    def _get_cached_current_pose_snapshot(
+        self, reference_frame: str
+    ) -> Dict[str, Any] | None:
+        frame = str(reference_frame or "base_link")
+        cache = getattr(self, "_latest_pose_by_frame", {})
+        entry = cache.get(frame) if isinstance(cache, dict) else None
+        if not isinstance(entry, dict):
+            return None
+        timestamp = entry.get("timestamp")
+        pose = entry.get("pose")
+        ttl = float(getattr(self, "_current_pose_cache_ttl_sec", 5.0))
+        if not isinstance(timestamp, (int, float)) or time.monotonic() - timestamp > ttl:
+            return None
+        if not isinstance(pose, dict):
+            return None
+        position = pose.get("position")
+        orientation = pose.get("orientation")
+        if not isinstance(position, dict) or not isinstance(orientation, dict):
+            return None
+        return {
+            "position": dict(position),
+            "orientation": dict(orientation),
+        }
+
+    def _request_current_pose_snapshot(
+        self, reference_frame: str
+    ) -> Dict[str, Any] | None:
+        cached_pose = self._get_cached_current_pose_snapshot(reference_frame)
+        if cached_pose is not None:
+            return cached_pose
+        if not self._get_pose_client.wait_for_service(
+            timeout_sec=self._safety_service_timeout_sec
+        ):
+            self.get_logger().error(
+                f"ReAct get_current_pose: service /get_current_pose "
+                f"not available within {self._safety_service_timeout_sec}s"
+            )
+            return None
+
+        request = GetCurrentPose.Request()
+        request.reference_frame = reference_frame
+        future = self._get_pose_client.call_async(request)
+        done, response = self._wait_for_future_without_spinning(
+            future, self._safety_service_timeout_sec
+        )
+
+        if not done:
+            self.get_logger().error(
+                f"ReAct get_current_pose: async call timed out "
+                f"after {self._safety_service_timeout_sec}s"
+            )
+            return None
+        if response is None or not response.success:
+            self.get_logger().error(
+                f"ReAct get_current_pose: response "
+                f"{'is None' if response is None else 'not success'}"
+            )
+            return None
+
+        return self._cache_current_pose_snapshot(reference_frame, response.current_pose)
 
 
 def main(args: Any = None) -> None:

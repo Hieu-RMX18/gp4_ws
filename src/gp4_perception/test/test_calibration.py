@@ -8,7 +8,6 @@ import cv2
 import numpy as np
 import yaml
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
 
 
 def _solve_synthetic_hand_eye(num_samples: int = 20):
@@ -131,11 +130,94 @@ class TestSyntheticCalibration:
         path.unlink()
 
 
-def test_calibration_service_uses_sensor_qos_for_realsense_topics(
+def _make_transform(rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
+    transform = np.eye(4)
+    transform[:3, :3] = rotation
+    transform[:3, 3] = np.asarray(translation).reshape(3)
+    return transform
+
+
+def test_pairwise_residual_uses_consistent_hand_eye_motion_order():
+    """Residual must compare robot and camera motions in the same frame."""
+    from gp4_perception import calibration
+    from scipy.spatial.transform import Rotation
+
+    rng = np.random.default_rng(seed=7)
+
+    def random_transform(translation_scale: float) -> np.ndarray:
+        rotation = Rotation.from_rotvec(rng.normal(size=3) * 0.5).as_matrix()
+        translation = rng.normal(size=3) * translation_scale
+        return _make_transform(rotation, translation)
+
+    base_from_color = random_transform(0.5)
+    gripper_from_target = random_transform(0.2)
+    samples = []
+    for _ in range(12):
+        gripper_from_base = random_transform(0.8)
+        color_from_target = (
+            np.linalg.inv(base_from_color)
+            @ np.linalg.inv(gripper_from_base)
+            @ gripper_from_target
+        )
+        samples.append(
+            (
+                gripper_from_base[:3, :3],
+                gripper_from_base[:3, 3].reshape(3, 1),
+                color_from_target[:3, :3],
+                color_from_target[:3, 3].reshape(3, 1),
+            )
+        )
+
+    residual_mm = calibration._pairwise_translation_residual_mm(
+        samples,
+        base_from_color[:3, :3],
+        base_from_color[:3, 3],
+    )
+
+    assert residual_mm < 1e-6
+
+
+def test_robot_pose_duplicate_gate_rejects_stationary_samples():
+    """Stationary duplicate samples must not satisfy hand-eye pose diversity."""
+    from gp4_perception import calibration
+
+    rotation = np.eye(3)
+    translation = np.array([[0.1], [0.2], [0.3]])
+    samples = [(rotation, translation, np.eye(3), np.zeros((3, 1)))]
+
+    duplicate, translation_delta_m, rotation_delta_rad = (
+        calibration._is_duplicate_robot_pose(samples, rotation, translation)
+    )
+
+    assert duplicate
+    assert translation_delta_m == 0.0
+    assert rotation_delta_rad == 0.0
+
+
+def test_base_to_camera_root_uses_realsense_internal_transform():
+    """Published extrinsic should attach base_link to camera_link, not optical frame."""
+    from gp4_perception import calibration
+
+    base_from_color = np.eye(4)
+    base_from_color[:3, 3] = [0.5, 0.0, 1.0]
+    root_from_color = np.eye(4)
+    root_from_color[:3, 3] = [0.02, 0.0, 0.0]
+
+    base_from_root = calibration._base_from_camera_root(
+        base_from_color,
+        root_from_color,
+    )
+
+    np.testing.assert_allclose(base_from_root[:3, 3], [0.48, 0.0, 1.0])
+
+
+def test_calibration_service_uses_reliable_qos_for_realsense_topics(
     monkeypatch, tmp_path
 ):
-    """RealSense image and camera-info subscriptions must match sensor QoS."""
+    """RealSense image and camera-info subscriptions must use RELIABLE QoS
+    to match RealSense v4.57.7 publisher defaults."""
     from gp4_perception import calibration
+    from rclpy.qos import ReliabilityPolicy
 
     captured_qos = []
 
@@ -146,12 +228,16 @@ def test_calibration_service_uses_sensor_qos_for_realsense_topics(
         lambda self, msg_type, topic, callback, qos: captured_qos.append(qos),
     )
     monkeypatch.setattr(Node, "create_service", lambda *args, **kwargs: object())
+    monkeypatch.setattr(Node, "create_publisher", lambda *args, **kwargs: object())
+    monkeypatch.setattr(Node, "create_timer", lambda *args, **kwargs: object())
     monkeypatch.setattr(calibration, "Buffer", lambda: object())
     monkeypatch.setattr(calibration, "TransformListener", lambda *args, **kwargs: None)
 
     calibration.CalibrationService(extrinsics_path=tmp_path / "extrinsics.yaml")
 
-    assert captured_qos == [qos_profile_sensor_data, qos_profile_sensor_data]
+    assert len(captured_qos) == 2
+    for qos in captured_qos:
+        assert qos.reliability == ReliabilityPolicy.RELIABLE
 
 
 def test_calibration_service_uses_marker_length_from_fiducials_yaml(
@@ -190,6 +276,11 @@ def test_calibration_service_uses_marker_length_from_fiducials_yaml(
     monkeypatch.setattr(Node, "__init__", lambda self, node_name: None)
     monkeypatch.setattr(Node, "create_subscription", lambda *args, **kwargs: object())
     monkeypatch.setattr(Node, "create_service", lambda *args, **kwargs: object())
+    monkeypatch.setattr(Node, "create_publisher", lambda *args, **kwargs: object())
+    monkeypatch.setattr(Node, "create_timer", lambda *args, **kwargs: object())
+    import logging as _logging
+    _test_logger = _logging.getLogger("test_calibration")
+    monkeypatch.setattr(Node, "get_logger", lambda self: _test_logger)
     monkeypatch.setattr(calibration, "CvBridge", lambda: FakeBridge())
     monkeypatch.setattr(calibration, "Buffer", lambda: FakeTfBuffer())
     monkeypatch.setattr(calibration, "TransformListener", lambda *args, **kwargs: None)
@@ -221,3 +312,215 @@ def test_calibration_service_uses_marker_length_from_fiducials_yaml(
     service._on_image(SimpleNamespace(header=SimpleNamespace(stamp=object())))
 
     assert captured_marker_lengths == [0.052]
+
+
+def test_duplicate_sample_warning_does_not_crash_with_rclpy_logger(
+    monkeypatch, tmp_path
+):
+    """Duplicate sample rejection must not crash the calibration node."""
+    from gp4_perception import calibration
+
+    fiducials_path = tmp_path / "fiducials.yaml"
+    fiducials_path.write_text("fiducials:\n  marker_length_m: 0.052\n")
+    warnings = []
+
+    class FakeLogger:
+        def info(self, message):
+            pass
+
+        def warning(self, message):
+            warnings.append(message)
+
+        def error(self, message):
+            pass
+
+        def debug(self, message):
+            warnings.append(message)
+
+    class FakeBridge:
+        def imgmsg_to_cv2(self, msg, desired_encoding):
+            return np.zeros((4, 4, 3), dtype=np.uint8)
+
+    class FakeTfBuffer:
+        def lookup_transform(self, target_frame, source_frame, stamp, timeout):
+            return SimpleNamespace(
+                transform=SimpleNamespace(
+                    translation=SimpleNamespace(x=0.1, y=0.2, z=0.3),
+                    rotation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0),
+                )
+            )
+
+    monkeypatch.setattr(Node, "__init__", lambda self, node_name: None)
+    monkeypatch.setattr(Node, "create_subscription", lambda *args, **kwargs: object())
+    monkeypatch.setattr(Node, "create_service", lambda *args, **kwargs: object())
+    monkeypatch.setattr(Node, "create_publisher", lambda *args, **kwargs: object())
+    monkeypatch.setattr(Node, "create_timer", lambda *args, **kwargs: object())
+    monkeypatch.setattr(Node, "get_logger", lambda self: FakeLogger())
+    monkeypatch.setattr(calibration, "CvBridge", lambda: FakeBridge())
+    monkeypatch.setattr(calibration, "Buffer", lambda: FakeTfBuffer())
+    monkeypatch.setattr(calibration, "TransformListener", lambda *args, **kwargs: None)
+    monkeypatch.setattr(calibration.cv2, "cvtColor", lambda image, code: image)
+    monkeypatch.setattr(
+        calibration.cv2.aruco,
+        "detectMarkers",
+        lambda image, dictionary, parameters: (
+            [np.zeros((4, 1, 2), dtype=np.float32)],
+            np.array([[1]], dtype=np.int32),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        calibration.cv2.aruco,
+        "estimatePoseSingleMarkers",
+        lambda corners, marker_length, camera_matrix, dist_coeffs: (
+            np.zeros((1, 1, 3), dtype=np.float64),
+            np.zeros((1, 1, 3), dtype=np.float64),
+            None,
+        ),
+    )
+
+    service = calibration.CalibrationService(
+        extrinsics_path=tmp_path / "extrinsics.yaml"
+    )
+    service._on_camera_info(
+        SimpleNamespace(
+            K=[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+            D=[0.0, 0.0, 0.0, 0.0, 0.0],
+        )
+    )
+    service._samples.append(
+        (np.eye(3), np.array([[0.1], [0.2], [0.3]]), np.eye(3), np.zeros((3, 1)))
+    )
+
+    service._on_image(SimpleNamespace(header=SimpleNamespace(stamp=object())))
+
+    assert len(service._samples) == 1
+    assert any("Rejected calibration sample" in message for message in warnings)
+
+
+def test_fiducial_config_loads_charuco_board_dimensions(tmp_path):
+    """Charuco pose estimation must use printed square and marker dimensions."""
+    from gp4_perception import calibration
+
+    fiducials_path = tmp_path / "fiducials.yaml"
+    fiducials_path.write_text(
+        "\n".join(
+            [
+                "fiducials:",
+                "  target_type: charuco",
+                "  marker_dictionary: DICT_5X5_100",
+                "  board_rows: 10",
+                "  board_columns: 11",
+                "  square_length_m: 0.020",
+                "  marker_length_m: 0.015",
+            ]
+        )
+    )
+
+    fiducials = calibration._load_fiducial_config(fiducials_path)
+
+    assert fiducials is not None
+    assert fiducials.target_type == "charuco"
+    assert fiducials.rows == 10
+    assert fiducials.cols == 11
+    assert fiducials.square_length_m == 0.020
+    assert fiducials.marker_length_m == 0.015
+
+
+def test_tf_publisher_rejects_invalid_reprojection_error(monkeypatch, tmp_path):
+    """Invalid calibration must not be broadcast into TF."""
+    from gp4_perception import calibration
+
+    extrinsics_path = tmp_path / "extrinsics.yaml"
+    extrinsics_path.write_text(
+        yaml.dump(
+            {
+                "hand_eye_extrinsics": {
+                    "parent_frame": "base_link",
+                    "child_frame": "camera_link",
+                    "translation": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "rotation_quat": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                    "calibration_date": "2026-05-23T00:00:00Z",
+                    "reprojection_error_mm": 111.0,
+                }
+            }
+        )
+    )
+    sent = []
+
+    class FakeBroadcaster:
+        def __init__(self, _node):
+            pass
+
+        def sendTransform(self, transform):
+            sent.append(transform)
+
+    class FakeClock:
+        def now(self):
+            from builtin_interfaces.msg import Time
+
+            return SimpleNamespace(to_msg=lambda: Time())
+
+    monkeypatch.setattr(Node, "__init__", lambda self, node_name: None)
+    monkeypatch.setattr(Node, "get_clock", lambda self: FakeClock())
+    monkeypatch.setattr(calibration, "StaticTransformBroadcaster", FakeBroadcaster)
+    logged_errors = []
+    monkeypatch.setattr(
+        calibration._LOGGER,
+        "error",
+        lambda message, *args: logged_errors.append(message % args),
+    )
+
+    calibration.TFPublisher(extrinsics_path=extrinsics_path)
+
+    assert sent == []
+    assert any("reprojection_error_mm" in message for message in logged_errors)
+
+def test_tf_publisher_rejects_legacy_optical_child_frame(monkeypatch, tmp_path):
+    """Calibration YAML must publish the ROS camera root, not the optical frame."""
+    from gp4_perception import calibration
+
+    extrinsics_path = tmp_path / "extrinsics.yaml"
+    extrinsics_path.write_text(
+        yaml.dump(
+            {
+                "hand_eye_extrinsics": {
+                    "parent_frame": "base_link",
+                    "child_frame": "camera_color_optical_frame",
+                    "translation": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "rotation_quat": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                    "calibration_date": "2026-05-23T00:00:00Z",
+                    "reprojection_error_mm": 1.0,
+                }
+            }
+        )
+    )
+    sent = []
+
+    class FakeBroadcaster:
+        def __init__(self, _node):
+            pass
+
+        def sendTransform(self, transform):
+            sent.append(transform)
+
+    class FakeClock:
+        def now(self):
+            from builtin_interfaces.msg import Time
+
+            return SimpleNamespace(to_msg=lambda: Time())
+
+    monkeypatch.setattr(Node, "__init__", lambda self, node_name: None)
+    monkeypatch.setattr(Node, "get_clock", lambda self: FakeClock())
+    monkeypatch.setattr(calibration, "StaticTransformBroadcaster", FakeBroadcaster)
+    logged_errors = []
+    monkeypatch.setattr(
+        calibration._LOGGER,
+        "error",
+        lambda message, *args: logged_errors.append(message % args),
+    )
+
+    calibration.TFPublisher(extrinsics_path=extrinsics_path)
+
+    assert sent == []
+    assert any("child_frame" in message for message in logged_errors)

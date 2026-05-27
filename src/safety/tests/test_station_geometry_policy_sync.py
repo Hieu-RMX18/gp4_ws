@@ -167,7 +167,7 @@ def test_workspace_and_keepout_policy_stays_conservative_against_current_mesh():
     assert ws["x_max"] <= 0.45
     assert ws["y_min"] >= bounds["y_min"] + margin - 0.005
     assert ws["y_max"] <= 0.52
-    assert ws["z_min"] >= 0.23
+    assert ws["z_min"] >= 0.15
     assert ws["z_max"] <= 0.65
 
     zones = {zone["name"]: zone for zone in safety_rules["forbidden_zones"]}

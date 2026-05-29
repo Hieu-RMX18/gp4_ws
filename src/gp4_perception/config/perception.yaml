@@ -35,3 +35,57 @@ perception:
       - {distance_m: 0.50, noise_mm_max: 8.0}
       - {distance_m: 0.80, noise_mm_max: 15.0}
     extrapolation: "clamp"    # outside breakpoints -> use nearest breakpoint
+  # ---- RGB-first detector (detection_visualizer.py owns /perception/detections) ----
+  rgb_detector:
+    color_topic: /camera/color/image_raw
+    depth_topic: /camera/aligned_depth_to_color/image_raw
+    camera_info_topic: /camera/color/camera_info
+    depth_scale_m: 0.001          # 16UC1 raw units -> metres
+    sync_slop_s: 0.05
+    sync_queue: 10
+    base_frame: base_link
+    camera_optical_frame: camera_color_optical_frame
+    bbox_thickness_z_m: 0.03      # nominal Z extent (single deprojected point has none)
+  visualization:
+    show_depth_panel: true
+    output_width_px: 960          # combined image downscaled to this width before publish
+  # HSV mask source of truth for the 2D path. Ranges are [h_min,s_min,v_min,h_max,s_max,v_max]
+  # in OpenCV HSV (H 0-179). Red wraps 0/179 so it carries two ranges.
+  color_classes:
+    - class_id: red_box
+      enabled: true
+      hsv_ranges:
+        - [0, 90, 60, 10, 255, 255]
+        - [170, 90, 60, 179, 255, 255]
+      min_area_px: 400
+      morph_kernel: 3
+      require_border: null
+    - class_id: yellow_ball
+      enabled: true
+      hsv_ranges:
+        - [22, 90, 80, 35, 255, 255]
+      min_area_px: 300
+      morph_kernel: 3
+      require_border: null
+    - class_id: apple
+      enabled: true
+      hsv_ranges:
+        - [0, 90, 60, 10, 255, 255]
+        - [170, 90, 60, 179, 255, 255]
+      min_area_px: 300
+      morph_kernel: 3
+      require_border: null
+    - class_id: orange
+      enabled: true
+      hsv_ranges:
+        - [10, 110, 90, 22, 255, 255]
+      min_area_px: 300
+      morph_kernel: 3
+      require_border: null
+    - class_id: white_workpiece
+      enabled: false              # needs blue-border validation; enable after tuning
+      hsv_ranges:
+        - [0, 0, 180, 179, 40, 255]
+      min_area_px: 500
+      morph_kernel: 5
+      require_border: blue

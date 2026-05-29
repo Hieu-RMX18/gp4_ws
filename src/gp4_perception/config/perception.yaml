@@ -13,6 +13,12 @@ perception:
   ransac_plane_normal_z_min: 0.85
   # Minimum multi-factor confidence (colour vote + geometry + depth) to publish.
   min_publish_confidence: 0.55
+  # Two-tier depth quality. Clusters whose depth noise exceeds the calibrated
+  # (safe) breakpoint threshold but stay within this ceiling are published as
+  # DEGRADED_DEPTH for visualization only — never executable. Above it: rejected.
+  # Set allow_degraded_depth_detections: false to reject instead of degrade.
+  depth_noise_degraded_mm_max: 15.0
+  allow_degraded_depth_detections: true
   # Temporal voting: publish only detections stable across frames.
   temporal_window_frames: 5
   temporal_min_hits: 3

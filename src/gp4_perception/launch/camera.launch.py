@@ -28,6 +28,9 @@ def generate_launch_description() -> LaunchDescription:
     temporal_filter = ParameterValue(
         LaunchConfiguration("temporal_filter"), value_type=bool
     )
+    hole_filling_filter = ParameterValue(
+        LaunchConfiguration("hole_filling_filter"), value_type=bool
+    )
 
     return LaunchDescription(
         [
@@ -72,6 +75,11 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="true",
                 description="Enable temporal consistency filter",
             ),
+            DeclareLaunchArgument(
+                "hole_filling_filter",
+                default_value="true",
+                description="Enable hole-filling filter (reduces depth dropouts/noise)",
+            ),
             # --- RealSense camera node ---
             Node(
                 package="realsense2_camera",
@@ -108,6 +116,7 @@ def generate_launch_description() -> LaunchDescription:
                         # Post-processing filters
                         "spatial_filter.enable": spatial_filter,
                         "temporal_filter.enable": temporal_filter,
+                        "hole_filling_filter.enable": hole_filling_filter,
                         # TF - publish internal camera frame TFs as static
                         "publish_tf": True,
                         "tf_publish_rate": 0.0,

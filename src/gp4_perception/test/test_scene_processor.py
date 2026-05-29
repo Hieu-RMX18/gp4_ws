@@ -137,6 +137,7 @@ class TestFrameTransform:
         processor._collision_pub = type(
             "Publisher", (), {"publish": lambda *_args: None}
         )()
+        processor.get_logger = lambda: __import__("logging").getLogger("test")
         processor._calibration_status = lambda: (True, "", "2026-05-09T00:00:00Z", 1.0)
         processor._tf_buffer = type(
             "TfBuffer",

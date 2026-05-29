@@ -114,3 +114,45 @@ def check_depth_noise(
             f"at {detection_distance_m:.2f} m",
         )
     return True, ""
+
+
+def classify_depth_quality(
+    detection_distance_m: float,
+    observed_noise_mm: float,
+    breakpoints: list[dict[str, Any]],
+    degraded_max_mm: float,
+    extrapolation: str = "clamp",
+) -> tuple[str, float | None, str]:
+    """Classify a cluster's depth noise into one of three tiers.
+
+    Returns ``(quality, threshold_used_mm, reason)`` where *quality* is:
+      - ``"OK"``            — noise within the calibrated (safe) threshold;
+                              executable.
+      - ``"DEGRADED_DEPTH"``— noise above the safe threshold but within
+                              *degraded_max_mm*; publish for visualization only,
+                              never executable.
+      - ``"REJECT"``        — noise above *degraded_max_mm*, or distance outside
+                              the calibrated breakpoints; dropped.
+    """
+    threshold = _interpolate_threshold(detection_distance_m, breakpoints, extrapolation)
+    if threshold is None:
+        return (
+            "REJECT",
+            None,
+            f"distance {detection_distance_m:.2f} m outside calibrated breakpoints",
+        )
+    if observed_noise_mm <= threshold:
+        return "OK", threshold, ""
+    if observed_noise_mm <= degraded_max_mm:
+        return (
+            "DEGRADED_DEPTH",
+            threshold,
+            f"depth_noise {observed_noise_mm:.2f} mm > default {threshold:.2f} mm "
+            f"at {detection_distance_m:.2f} m (degraded, viz only)",
+        )
+    return (
+        "REJECT",
+        threshold,
+        f"depth_noise {observed_noise_mm:.2f} mm > degraded_max {degraded_max_mm:.2f} mm "
+        f"at {detection_distance_m:.2f} m",
+    )

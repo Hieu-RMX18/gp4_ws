@@ -38,6 +38,7 @@ from .query_perception_tool import load_extrinsics
 from .safety_guards import (
     check_depth_noise,
     check_reprojection_error,
+    classify_depth_quality,
 )
 from .temporal_tracker import TemporalTracker
 from .scene_geometry import (
@@ -114,6 +115,15 @@ class SceneProcessor(Node):
         self._ttl = float(self._cfg.get("detection_ttl_s", 2.0))
         self._breakpoints = self._cfg.get("depth_noise", {}).get("breakpoints", [])
         self._extrapolation = self._cfg.get("depth_noise", {}).get("extrapolation", "reject")
+        # Two-tier depth: noise above the calibrated (safe) threshold but within
+        # this ceiling is published for visualization only (DEGRADED_DEPTH),
+        # never executable. Above the ceiling → rejected.
+        self._depth_degraded_max_mm = float(
+            self._cfg.get("depth_noise_degraded_mm_max", 0.0)
+        )
+        self._allow_degraded_depth = bool(
+            self._cfg.get("allow_degraded_depth_detections", False)
+        )
 
         # Workspace bbox filter — can be toggled at runtime via:
         #   ros2 param set /scene_processor enable_bbox_filter false
@@ -213,11 +223,14 @@ class SceneProcessor(Node):
             _LOGGER.info("No points read from PointCloud2")
             return
 
-        _LOGGER.info(f"_on_synced: received {len(xyz_all)} points from camera")
+        pts_raw = len(xyz_all)
 
         pts = self._points_in_base_link(xyz_all, cloud)
         if pts is None or len(pts) == 0:
-            _LOGGER.info("No points after transforming to base_link")
+            self.get_logger().info(
+                f"[perception] pts_raw={pts_raw} pts_base_link=0 "
+                "(no transform to base_link)"
+            )
             self._remove_published_collision_objects()
             self._last_detections = []
             return
@@ -225,7 +238,8 @@ class SceneProcessor(Node):
         # RGB stays index-aligned with pts (transform preserves point order),
         # so we slice rgb with the same indices at every pipeline step.
         rgb = rgb_all
-        _LOGGER.info(f"Points in base_link: {len(pts)}")
+        # All read points have valid depth (read_points skips NaNs).
+        pts_valid_depth = pts_raw
 
         # 1. ROI crop (skipped when enable_bbox_filter is False)
         if self._bbox and self._enable_bbox_filter:
@@ -240,9 +254,12 @@ class SceneProcessor(Node):
             pts = pts[mask]
             if rgb is not None:
                 rgb = rgb[mask]
-
-        _LOGGER.info(f"Points after ROI crop: {len(pts)} (bbox: {self._bbox})")
-        if len(pts) == 0:
+        pts_roi = len(pts)
+        if pts_roi == 0:
+            self.get_logger().info(
+                f"[perception] pts_raw={pts_raw} pts_valid_depth={pts_valid_depth} "
+                "pts_roi=0 (empty after ROI crop)"
+            )
             return
 
         # 2. Voxel downsample (carry RGB by index)
@@ -250,7 +267,7 @@ class SceneProcessor(Node):
         pts = pts[keep]
         if rgb is not None:
             rgb = rgb[keep]
-        _LOGGER.info(f"Points after voxel downsample: {len(pts)}")
+        pts_after_voxel = len(pts)
 
         # 3. RANSAC plane removal — only remove near-vertical-normal planes
         #    (table/floor); keep vertical object faces.
@@ -260,15 +277,23 @@ class SceneProcessor(Node):
         pts = pts[out_idx]
         if rgb is not None:
             rgb = rgb[out_idx]
-        _LOGGER.info(f"Points after RANSAC plane removal: {len(pts)}")
-        if len(pts) == 0:
+        pts_after_plane = len(pts)
+        if pts_after_plane == 0:
+            self.get_logger().info(
+                f"[perception] pts_raw={pts_raw} pts_roi={pts_roi} "
+                f"pts_after_voxel={pts_after_voxel} pts_after_plane=0"
+            )
             return
 
         # 4. Euclidean clustering (index arrays so RGB stays aligned)
         cluster_indices = _euclidean_cluster_indices(
             pts, self._cluster_tol, self._cluster_min, self._cluster_max
         )
-        _LOGGER.info(f"Number of clusters found: {len(cluster_indices)}")
+        self.get_logger().info(
+            f"[perception] pts_raw={pts_raw} pts_valid_depth={pts_valid_depth} "
+            f"pts_roi={pts_roi} pts_after_voxel={pts_after_voxel} "
+            f"pts_after_plane={pts_after_plane} clusters={len(cluster_indices)}"
+        )
         if not cluster_indices:
             return
 
@@ -281,8 +306,9 @@ class SceneProcessor(Node):
             # 4a. Contour filter — reject fragmented/noisy clusters.
             contour_ok, contour_props = _contour_filter(cluster)
             if not contour_ok:
-                _LOGGER.info(
-                    f"Cluster {i} rejected by contour filter (solidity={(contour_props['solidity'] if contour_props else 0.0):.2f})"
+                self.get_logger().info(
+                    f"[perception] cluster[{i}] rejected reject_reason=contour "
+                    f"solidity={(contour_props['solidity'] if contour_props else 0.0):.2f}"
                 )
                 continue
 
@@ -290,13 +316,23 @@ class SceneProcessor(Node):
             centroid = cluster.mean(axis=0)
             dist = float(np.linalg.norm(centroid))
 
-            depth_ok, depth_reason = self._record_depth_quality(
-                distance_m=dist,
-                noise_mm=noise_mm,
+            # Two-tier depth: OK (executable) / DEGRADED_DEPTH (viz only) / REJECT.
+            depth_quality, threshold_used, depth_reason = classify_depth_quality(
+                dist,
+                noise_mm,
+                self._breakpoints,
+                degraded_max_mm=self._depth_degraded_max_mm,
+                extrapolation=self._extrapolation,
             )
-            if not depth_ok:
-                _LOGGER.info(
-                    f"Cluster {i} rejected: {depth_reason} (measured noise: {noise_mm:.2f} mm, distance: {dist:.2f} m)"
+            if depth_quality == "DEGRADED_DEPTH" and not self._allow_degraded_depth:
+                depth_quality = "REJECT"
+            self._record_depth_tier(noise_mm, depth_quality)
+            thr_str = f"{threshold_used:.2f}" if threshold_used is not None else "n/a"
+            if depth_quality == "REJECT":
+                self.get_logger().info(
+                    f"[perception] cluster[{i}] rejected reject_reason=depth "
+                    f"depth_noise_mm={noise_mm:.2f} threshold_used={thr_str} "
+                    f"dist={dist:.2f} ({depth_reason})"
                 )
                 continue
 
@@ -309,24 +345,25 @@ class SceneProcessor(Node):
             class_id = _semantic_class_id(color_name, shape_class, dims)
 
             # Multi-factor confidence: colour vote + contour solidity + depth
-            # quality. Temporal term is added in Wave 2.
+            # quality. Temporal term is added by the tracker below.
             geometry_conf = (
                 float(contour_props["solidity"]) if contour_props else 0.5
             )
             depth_conf = float(np.clip(1.0 - noise_mm / 15.0, 0.0, 1.0))
             score = _confidence_score(color_conf, geometry_conf, depth_conf)
-            _LOGGER.debug(
-                "Cluster %d: raw=%s_%s → semantic=%s score=%.2f "
-                "(color=%.2f geom=%.2f depth=%.2f, dims=%.3f×%.3f×%.3f m)",
-                i, color_name, shape_class, class_id, score,
-                color_conf, geometry_conf, depth_conf,
-                dims.x, dims.y, dims.z,
+            self.get_logger().info(
+                f"[perception] cluster[{i}] points={len(cluster)} "
+                f"color={color_name} color_score={color_conf:.2f} "
+                f"geometry_score={geometry_conf:.2f} depth_score={depth_conf:.2f} "
+                f"depth_noise_mm={noise_mm:.2f} threshold_used={thr_str} "
+                f"quality={depth_quality} total={score:.2f} class_id={class_id}"
             )
 
             if score < self._min_publish_confidence:
-                _LOGGER.info(
-                    f"Cluster {i} rejected: confidence {score:.2f} < "
-                    f"{self._min_publish_confidence:.2f} (color={color_name})"
+                self.get_logger().info(
+                    f"[perception] cluster[{i}] rejected reject_reason=confidence "
+                    f"total={score:.2f} < min={self._min_publish_confidence:.2f} "
+                    f"color={color_name}"
                 )
                 continue
 
@@ -337,6 +374,9 @@ class SceneProcessor(Node):
             pose_with_covariance.pose = pose
             det = Detection3D()
             det.header = Header(stamp=cloud.header.stamp, frame_id="base_link")
+            # Tag degraded-depth detections so the execution path (service) can
+            # exclude them; visualization still shows them on the topic.
+            det.id = "" if depth_quality == "OK" else depth_quality
             det.results.append(
                 ObjectHypothesisWithPose(
                     hypothesis=hyp,
@@ -443,6 +483,16 @@ class SceneProcessor(Node):
         self._depth_noise_samples_mm.append(float(noise_mm))
         if len(self._depth_noise_samples_mm) > MAX_DEPTH_NOISE_SAMPLES:
             self._depth_noise_samples_mm = self._depth_noise_samples_mm[
+                -MAX_DEPTH_NOISE_SAMPLES:
+            ]
+
+    def _record_depth_tier(self, noise_mm: float, quality: str) -> None:
+        """Record a sample for stats: p95 over all noise, but only OK-tier
+        counts toward depth_in_range (degraded must not enable execution)."""
+        self._record_depth_noise(noise_mm)
+        self._depth_in_range_samples.append(quality == "OK")
+        if len(self._depth_in_range_samples) > MAX_DEPTH_NOISE_SAMPLES:
+            self._depth_in_range_samples = self._depth_in_range_samples[
                 -MAX_DEPTH_NOISE_SAMPLES:
             ]
 
@@ -584,10 +634,14 @@ class SceneProcessor(Node):
         self._last_detections = [
             (t, d) for t, d in self._last_detections if (now - t) < self._ttl
         ]
-        response.detections = _filter_detections(
-            [d for _, d in self._last_detections],
-            request.class_filter,
-        )
+        # Execution path: exclude DEGRADED_DEPTH detections (defense-in-depth;
+        # the global depth gate above already blocks degraded frames).
+        executable = [
+            d
+            for _, d in self._last_detections
+            if str(getattr(d, "id", "")) != "DEGRADED_DEPTH"
+        ]
+        response.detections = _filter_detections(executable, request.class_filter)
         response.ok = True
         response.failure_reason = ""
         return response

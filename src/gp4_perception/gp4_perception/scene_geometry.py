@@ -219,37 +219,6 @@ def _contour_filter(cluster: np.ndarray) -> tuple[bool, dict | None]:
 
 
 
-def _dominant_color_name(
-    rgb_all: np.ndarray | None,
-    cluster_indices: np.ndarray | None,
-) -> str:
-    """Determine the dominant color name for a cluster from RGB values."""
-    if rgb_all is None or cluster_indices is None or len(cluster_indices) == 0:
-        return "unknown"
-
-    cluster_rgb = rgb_all[cluster_indices]
-    if cluster_rgb.size == 0:
-        return "unknown"
-
-    mean_rgb = cluster_rgb.mean(axis=0).astype(np.uint8).reshape(1, 1, 3)
-    try:
-        import cv2
-
-        mean_hsv = cv2.cvtColor(mean_rgb, cv2.COLOR_RGB2HSV)[0, 0]
-    except Exception:
-        return "unknown"
-
-    h, s, v = int(mean_hsv[0]), int(mean_hsv[1]), int(mean_hsv[2])
-    if s < 40:
-        return "white" if v > 180 else ("gray" if v > 60 else "black")
-
-    for name, h_min, h_max, s_min, v_min in _COLOR_RANGES:
-        if h_min <= h <= h_max and s >= s_min and v >= v_min:
-            return name
-
-    return "unknown"
-
-
 # Minimum chromatic vote ratio to prefer a colour over an achromatic majority.
 # Lets a white object with a thin coloured border (e.g. blue_rectangle) classify
 # by its border colour instead of the white interior.

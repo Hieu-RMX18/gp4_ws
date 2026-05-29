@@ -66,13 +66,16 @@ _DUPLICATE_TRANSLATION_MAX_M = 0.010
 _DUPLICATE_ROTATION_MAX_RAD = np.deg2rad(2.0)
 
 # All OpenCV hand-eye solver methods, ordered by typical robustness.
+# Two solvers only: PARK is the stable SE(3) primary; DANIILIDIS (dual
+# quaternion) is an independent cross-check. Running all five added noise when
+# a weak solver produced a falsely low residual.
 _HAND_EYE_METHODS = [
-    ("DANIILIDIS", cv2.CALIB_HAND_EYE_DANIILIDIS),
-    ("HORAUD", cv2.CALIB_HAND_EYE_HORAUD),
     ("PARK", cv2.CALIB_HAND_EYE_PARK),
-    ("TSAI", cv2.CALIB_HAND_EYE_TSAI),
-    ("ANDREFF", cv2.CALIB_HAND_EYE_ANDREFF),
+    ("DANIILIDIS", cv2.CALIB_HAND_EYE_DANIILIDIS),
 ]
+
+# Cross-check tolerance: warn when PARK and DANIILIDIS residuals diverge.
+_SOLVER_DISAGREEMENT_MAX_MM = 2.0
 
 
 @dataclass(frozen=True)
@@ -291,35 +294,71 @@ def _pairwise_translation_residual_mm(
     return float(np.median(errors)) * 1000.0 if errors else 0.0
 
 
-def _solve_best_method(
+def _run_solver(
+    name: str,
+    method: int,
     R_gripper: np.ndarray,
     t_gripper: np.ndarray,
     R_target: np.ndarray,
     t_target: np.ndarray,
     samples: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
 ) -> tuple[str, np.ndarray, np.ndarray, float] | None:
-    """Try all OpenCV hand-eye solvers and return the one with lowest residual.
+    """Run a single hand-eye solver; return (name, R, t, residual_mm) or None."""
+    try:
+        R_est, t_est = cv2.calibrateHandEye(
+            R_gripper, t_gripper, R_target, t_target, method=method,
+        )
+        R_est = np.asarray(R_est)
+        t_est = np.asarray(t_est).reshape(3)
+        residual = _pairwise_translation_residual_mm(samples, R_est, t_est)
+        _LOGGER.info("Solver %s: residual=%.2f mm", name, residual)
+        return name, R_est, t_est, residual
+    except Exception as exc:
+        _LOGGER.warning("Solver %s failed: %s", name, exc)
+        return None
 
-    Returns (solver_name, R_cam2base, t_cam2base, residual_mm) or None if
-    every solver fails.
+
+def _solve_park_with_crosscheck(
+    R_gripper: np.ndarray,
+    t_gripper: np.ndarray,
+    R_target: np.ndarray,
+    t_target: np.ndarray,
+    samples: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
+) -> tuple[str, np.ndarray, np.ndarray, float] | None:
+    """Solve with PARK (primary) and cross-check against DANIILIDIS.
+
+    Always returns the PARK result, or None if PARK fails. Logs a warning when
+    the two solvers' residuals diverge by more than
+    ``_SOLVER_DISAGREEMENT_MAX_MM`` (a sign of noisy sample data).
+
+    Returns (solver_name, R_cam2base, t_cam2base, residual_mm).
     """
-    best: tuple[str, np.ndarray, np.ndarray, float] | None = None
-    for name, method in _HAND_EYE_METHODS:
-        try:
-            R_est, t_est = cv2.calibrateHandEye(
-                R_gripper, t_gripper, R_target, t_target, method=method,
+    by_name = dict(_HAND_EYE_METHODS)
+    park = _run_solver(
+        "PARK", by_name["PARK"], R_gripper, t_gripper, R_target, t_target, samples
+    )
+    if park is None:
+        _LOGGER.error("Primary solver PARK failed; calibration aborted.")
+        return None
+
+    crosscheck = _run_solver(
+        "DANIILIDIS", by_name["DANIILIDIS"],
+        R_gripper, t_gripper, R_target, t_target, samples,
+    )
+    if crosscheck is None:
+        _LOGGER.warning(
+            "Cross-check solver DANIILIDIS failed; using PARK without validation."
+        )
+    else:
+        diff = abs(park[3] - crosscheck[3])
+        if diff > _SOLVER_DISAGREEMENT_MAX_MM:
+            _LOGGER.warning(
+                "Hand-eye solvers disagree (PARK=%.2f mm, DANIILIDIS=%.2f mm, "
+                "diff=%.2f mm > %.2f mm) — data may be noisy.",
+                park[3], crosscheck[3], diff, _SOLVER_DISAGREEMENT_MAX_MM,
             )
-            R_est = np.asarray(R_est)
-            t_est = np.asarray(t_est).reshape(3)
-            residual = _pairwise_translation_residual_mm(samples, R_est, t_est)
-            _LOGGER.info(
-                "Solver %s: residual=%.2f mm", name, residual,
-            )
-            if best is None or residual < best[3]:
-                best = (name, R_est, t_est, residual)
-        except Exception as exc:
-            _LOGGER.warning("Solver %s failed: %s", name, exc)
-    return best
+
+    return park
 
 
 def _reject_outlier_samples(
@@ -752,21 +791,21 @@ class CalibrationService(Node):
         R_target2cam = np.array(R_target2cam_list)
         t_target2cam = np.array(t_target2cam_list).reshape(-1, 3, 1)
 
-        # --- Multi-solver consensus: try all 5 methods, pick lowest residual ---
-        best_result = _solve_best_method(
+        # --- PARK primary + DANIILIDIS cross-check ---
+        best_result = _solve_park_with_crosscheck(
             R_base2gripper_arr, t_base2gripper_arr,
             R_target2cam, t_target2cam,
             samples,
         )
         if best_result is None:
             response.success = False
-            response.failure_reason = "All calibrateHandEye solvers failed."
+            response.failure_reason = "Primary hand-eye solver (PARK) failed."
             response.n_samples_collected = n
             return response
 
         solver_name, R_cam2base, t_cam2base, reproj_mm = best_result
         self.get_logger().info(
-            "Best solver: %s (residual=%.2f mm)", solver_name, reproj_mm,
+            "Solver: %s (residual=%.2f mm)", solver_name, reproj_mm,
         )
 
         if not np.isfinite(reproj_mm) or reproj_mm > _REPROJECTION_ERROR_MAX_MM:

@@ -37,7 +37,6 @@ from vision_msgs.msg import (
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 from .query_perception_tool import load_extrinsics
 from .safety_guards import (
-    check_depth_noise,
     check_reprojection_error,
     classify_depth_quality,
 )
@@ -174,9 +173,7 @@ class SceneProcessor(Node):
 
         self._last_transform = None
 
-        self._det_pub = self.create_publisher(
-            Detection3DArray, "/perception/detections", 10
-        )
+        # Detection3DArray is now published by detection_visualizer node.
         self._collision_pub = self.create_publisher(
             CollisionObject, "/collision_object", 10
         )
@@ -192,6 +189,7 @@ class SceneProcessor(Node):
         self._depth_in_range_samples: list[bool] = []
         self._last_stamp = Header()
         self._last_cloud_time = time.time()
+        self._logged_cloud_fields = False
         self._health_timer = self.create_timer(2.0, self._check_camera_health)
         self._status_timer = self.create_timer(1.0, self._publish_status)
         self._status_pub = self.create_publisher(
@@ -234,6 +232,16 @@ class SceneProcessor(Node):
 
         # Read XYZ + optional RGB for color classification.
         xyz_all, rgb_all = _read_xyz_rgb(cloud)
+        if not getattr(self, "_logged_cloud_fields", False):
+            self._logged_cloud_fields = True
+            field_desc = [
+                f"{f.name}:off={f.offset}:type={f.datatype}:count={f.count}"
+                for f in cloud.fields
+            ]
+            self.get_logger().info(
+                f"[perception] cloud_fields={field_desc} point_step={cloud.point_step} "
+                f"bigendian={cloud.is_bigendian} rgb_decoded={rgb_all is not None}"
+            )
         if xyz_all is None or len(xyz_all) == 0:
             _LOGGER.info("No points read from PointCloud2")
             return
@@ -382,7 +390,7 @@ class SceneProcessor(Node):
                 )
 
             # Semantic class_id: "apple", "yellow_ball", "red_box", etc.
-            class_id = _semantic_class_id(color_name, shape_class, dims)
+            class_id = _semantic_class_id(color_name, shape_class, dims, rgb_pixels=cluster_rgb, cluster=cluster)
 
             # Multi-factor confidence: colour vote + contour solidity + depth
             # quality. Temporal term is added by the tracker below.
@@ -573,17 +581,14 @@ class SceneProcessor(Node):
         ]
         if not self._last_detections:
             return
-        arr = Detection3DArray()
-        arr.header = Header(stamp=self.get_clock().now().to_msg(), frame_id="base_link")
-        arr.detections = [d for _, d in self._last_detections]
-        self._det_pub.publish(arr)
+        arr_header = Header(stamp=self.get_clock().now().to_msg(), frame_id="base_link")
         # Remove stale collision objects
         for i in range(20):
             if not any(
                 d for _, d in self._last_detections if f"cluster_{i}" in str(d.results)
             ):
                 co = CollisionObject()
-                co.header = arr.header
+                co.header = arr_header
                 co.id = f"perception_obj_{i}"
                 co.operation = CollisionObject.REMOVE
                 self._collision_pub.publish(co)
@@ -605,18 +610,6 @@ class SceneProcessor(Node):
             self._depth_in_range_samples = self._depth_in_range_samples[
                 -MAX_DEPTH_NOISE_SAMPLES:
             ]
-
-    def _record_depth_quality(
-        self, *, distance_m: float, noise_mm: float
-    ) -> tuple[bool, str]:
-        self._record_depth_noise(noise_mm)
-        ok, reason = check_depth_noise(distance_m, noise_mm, self._breakpoints, self._extrapolation)
-        self._depth_in_range_samples.append(bool(ok))
-        if len(self._depth_in_range_samples) > MAX_DEPTH_NOISE_SAMPLES:
-            self._depth_in_range_samples = self._depth_in_range_samples[
-                -MAX_DEPTH_NOISE_SAMPLES:
-            ]
-        return ok, reason
 
     def _calibration_status(self) -> tuple[bool, str, str, float]:
         cache_mtime_ns = getattr(self, "_calibration_cache_mtime_ns", None)

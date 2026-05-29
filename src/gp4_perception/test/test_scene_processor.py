@@ -169,7 +169,10 @@ class TestFrameTransform:
                     "Header",
                     (),
                     {"frame_id": "camera_color_optical_frame", "stamp": object()},
-                )()
+                )(),
+                "fields": [],
+                "point_step": 0,
+                "is_bigendian": False,
             },
         )()
         processor._on_synced(fake_cloud, object())
@@ -212,17 +215,12 @@ class TestPerceptionContracts:
 
         assert processor._depth_in_range() is False
 
-    def test_depth_quality_records_out_of_range_sample(self):
+    def test_depth_tier_records_degraded_as_not_in_range(self):
         processor = object.__new__(SceneProcessor)
         processor._depth_noise_samples_mm = []
         processor._depth_in_range_samples = []
-        processor._breakpoints = [
-            {"distance_m": 0.3, "noise_mm_max": 2.0},
-            {"distance_m": 0.8, "noise_mm_max": 3.0},
-        ]
-        processor._extrapolation = "reject"
 
-        processor._record_depth_quality(distance_m=0.5, noise_mm=8.0)
+        processor._record_depth_tier(noise_mm=8.0, quality="DEGRADED_DEPTH")
 
         assert processor._depth_noise_p95() == 8.0
         assert processor._depth_in_range() is False
@@ -249,13 +247,12 @@ class TestPerceptionContracts:
     def test_uncalibrated_publish_clears_cached_scene(self):
         class FailingPublisher:
             def publish(self, _msg):
-                raise AssertionError("uncalibrated detections must not be published")
+                raise AssertionError("uncalibrated data must not be published")
 
         processor = object.__new__(SceneProcessor)
         processor._last_detections = [(time.time(), object())]
         processor._published_collision_ids = set()
         processor._ttl = 2.0
-        processor._det_pub = FailingPublisher()
         processor._collision_pub = FailingPublisher()
         processor._calibration_status = lambda: (False, "calibration_invalid", "", 0.0)
 
@@ -266,10 +263,6 @@ class TestPerceptionContracts:
     def test_uncalibrated_publish_removes_advertised_collision_objects(self):
         published = []
 
-        class FailingDetectionPublisher:
-            def publish(self, _msg):
-                raise AssertionError("uncalibrated detections must not be published")
-
         class CollisionPublisher:
             def publish(self, msg):
                 published.append(msg)
@@ -278,7 +271,6 @@ class TestPerceptionContracts:
         processor._last_detections = [(time.time(), object())]
         processor._published_collision_ids = {"perception_obj_0", "perception_obj_2"}
         processor._ttl = 2.0
-        processor._det_pub = FailingDetectionPublisher()
         processor._collision_pub = CollisionPublisher()
         processor._calibration_status = lambda: (False, "calibration_invalid", "", 0.0)
 

@@ -39,6 +39,7 @@ from .safety_guards import (
     check_depth_noise,
     check_reprojection_error,
 )
+from .temporal_tracker import TemporalTracker
 from .scene_geometry import (
     _confidence_score,
     _contour_filter,
@@ -104,6 +105,11 @@ class SceneProcessor(Node):
         )
         self._min_publish_confidence = float(
             self._cfg.get("min_publish_confidence", 0.0)
+        )
+        self._tracker = TemporalTracker(
+            window_frames=int(self._cfg.get("temporal_window_frames", 5)),
+            min_hits=int(self._cfg.get("temporal_min_hits", 3)),
+            jitter_max_mm=float(self._cfg.get("centroid_jitter_max_mm", 15.0)),
         )
         self._ttl = float(self._cfg.get("detection_ttl_s", 2.0))
         self._breakpoints = self._cfg.get("depth_noise", {}).get("breakpoints", [])
@@ -268,6 +274,7 @@ class SceneProcessor(Node):
 
         now = time.time()
         detections: list[Detection3D] = []
+        det_factors: dict[int, tuple[float, float, float]] = {}
         for i, cluster_idx in enumerate(cluster_indices):
             cluster = pts[cluster_idx]
             cluster_rgb = rgb[cluster_idx] if rgb is not None else None
@@ -338,21 +345,39 @@ class SceneProcessor(Node):
             )
             det.bbox.size = dims
             detections.append(det)
+            # Stash factors to recompute score with the temporal term once the
+            # tracker confirms stability.
+            det_factors[id(det)] = (color_conf, geometry_conf, depth_conf)
 
-            # Publish collision object
+        # 5. Temporal voting — keep only detections stable across frames and
+        #    fold the temporal score into the published confidence.
+        stable = self._tracker.update(detections)
+        published: list[Detection3D] = []
+        for obj_i, (det, temporal_score) in enumerate(stable):
+            color_conf, geometry_conf, depth_conf = det_factors[id(det)]
+            det.results[0].hypothesis.score = _confidence_score(
+                color_conf, geometry_conf, depth_conf, temporal_score
+            )
+            published.append(det)
+
+            # Publish collision object only for confirmed detections.
             co = CollisionObject()
             co.header = det.header
-            co.id = f"perception_obj_{i}"
+            co.id = f"perception_obj_{obj_i}"
             co.operation = CollisionObject.ADD
             box = SolidPrimitive()
             box.type = SolidPrimitive.BOX
-            box.dimensions = [dims.x, dims.y, dims.z]
+            box.dimensions = [
+                det.bbox.size.x,
+                det.bbox.size.y,
+                det.bbox.size.z,
+            ]
             co.primitives.append(box)
-            co.primitive_poses.append(pose)
+            co.primitive_poses.append(det.results[0].pose.pose)
             self._collision_pub.publish(co)
             self._published_collision_ids.add(co.id)
 
-        self._last_detections = [(now, d) for d in detections]
+        self._last_detections = [(now, d) for d in published]
         self._last_stamp = cloud.header
 
     def _points_in_base_link(

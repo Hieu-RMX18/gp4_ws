@@ -25,6 +25,10 @@ Panels:
         Name: Detections
         Topic: /perception/detection_markers
         Reliability: Reliable
+      - Class: rviz_default_plugins/MarkerArray
+        Name: Debug Clusters
+        Topic: /perception/debug_clusters
+        Reliability: Reliable
       - Class: rviz_default_plugins/PlanningScene
         Name: PlanningScene
         Topic: /monitored_planning_scene

@@ -18,6 +18,7 @@ from geometry_msgs.msg import PoseWithCovariance
 from interfaces.msg import PerceptionStatus
 from interfaces.srv import GetObjectPositions
 from moveit_msgs.msg import CollisionObject
+from visualization_msgs.msg import Marker, MarkerArray
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
@@ -42,6 +43,7 @@ from .safety_guards import (
 )
 from .temporal_tracker import TemporalTracker
 from .scene_geometry import (
+    _color_diagnostics,
     _confidence_score,
     _contour_filter,
     _depth_noise_at_centroid,
@@ -64,6 +66,15 @@ from .scene_geometry import (
 _LOGGER = logging.getLogger(__name__)
 MAX_DEPTH_NOISE_SAMPLES = 50
 REPROJECTION_ERROR_MAX_MM = 5.0
+
+# Debug cluster overlay colours (RGBA) by outcome.
+_DEBUG_MARKER_COLORS = {
+    "accepted": (0.0, 1.0, 0.0, 0.8),
+    "rejected_color_unknown": (1.0, 0.0, 1.0, 0.6),
+    "rejected_confidence": (1.0, 0.5, 0.0, 0.6),
+    "rejected_depth": (1.0, 0.0, 0.0, 0.6),
+    "rejected_contour": (0.5, 0.5, 0.5, 0.5),
+}
 
 __all__ = [
     "SceneProcessor",
@@ -124,6 +135,7 @@ class SceneProcessor(Node):
         self._allow_degraded_depth = bool(
             self._cfg.get("allow_degraded_depth_detections", False)
         )
+        self._debug_color = bool(self._cfg.get("debug_color_diagnostics", True))
 
         # Workspace bbox filter — can be toggled at runtime via:
         #   ros2 param set /scene_processor enable_bbox_filter false
@@ -167,6 +179,9 @@ class SceneProcessor(Node):
         )
         self._collision_pub = self.create_publisher(
             CollisionObject, "/collision_object", 10
+        )
+        self._debug_marker_pub = self.create_publisher(
+            MarkerArray, "/perception/debug_clusters", 10
         )
         self._timer = self.create_timer(0.2, self._publish_detections)  # 5 Hz
         self._last_detections: list[
@@ -300,9 +315,14 @@ class SceneProcessor(Node):
         now = time.time()
         detections: list[Detection3D] = []
         det_factors: dict[int, tuple[float, float, float]] = {}
+        debug_records: list[dict] = []
         for i, cluster_idx in enumerate(cluster_indices):
             cluster = pts[cluster_idx]
             cluster_rgb = rgb[cluster_idx] if rgb is not None else None
+            aabb_min = cluster.min(axis=0)
+            aabb_max = cluster.max(axis=0)
+            aabb_center = (aabb_min + aabb_max) / 2.0
+            aabb_size = np.maximum(aabb_max - aabb_min, 1e-3)
             # 4a. Contour filter — reject fragmented/noisy clusters.
             contour_ok, contour_props = _contour_filter(cluster)
             if not contour_ok:
@@ -310,6 +330,11 @@ class SceneProcessor(Node):
                     f"[perception] cluster[{i}] rejected reject_reason=contour "
                     f"solidity={(contour_props['solidity'] if contour_props else 0.0):.2f}"
                 )
+                debug_records.append({
+                    "id": i, "center": aabb_center, "size": aabb_size,
+                    "status": "rejected_contour", "color": "-",
+                    "color_score": 0.0, "total": 0.0, "reason": "contour",
+                })
                 continue
 
             noise_mm = _depth_noise_at_centroid(cluster)
@@ -334,12 +359,27 @@ class SceneProcessor(Node):
                     f"depth_noise_mm={noise_mm:.2f} threshold_used={thr_str} "
                     f"dist={dist:.2f} ({depth_reason})"
                 )
+                debug_records.append({
+                    "id": i, "center": aabb_center, "size": aabb_size,
+                    "status": "rejected_depth", "color": "-",
+                    "color_score": 0.0, "total": 0.0,
+                    "reason": f"depth>{thr_str}",
+                })
                 continue
 
             pose, dims, shape_class = _pca_bbox(cluster, contour_props)
 
             # Color classification: exact per-cluster RGB → HSV pixel voting.
             color_name, color_conf = _dominant_color_voting(cluster_rgb)
+            if self._debug_color:
+                diag = _color_diagnostics(cluster_rgb)
+                self.get_logger().info(
+                    f"[perception] cluster[{i}] diag n={diag.get('n')} "
+                    f"rgb_min={diag.get('rgb_min')} rgb_max={diag.get('rgb_max')} "
+                    f"rgb_mean={diag.get('rgb_mean')} "
+                    f"vote_rgb={diag.get('vote_rgb')} vote_bgr={diag.get('vote_bgr')} "
+                    f"sample={diag.get('sample')}"
+                )
 
             # Semantic class_id: "apple", "yellow_ball", "red_box", etc.
             class_id = _semantic_class_id(color_name, shape_class, dims)
@@ -360,12 +400,30 @@ class SceneProcessor(Node):
             )
 
             if score < self._min_publish_confidence:
+                reason = "color_unknown" if color_name == "unknown" else "confidence"
+                status = (
+                    "rejected_color_unknown"
+                    if color_name == "unknown"
+                    else "rejected_confidence"
+                )
                 self.get_logger().info(
-                    f"[perception] cluster[{i}] rejected reject_reason=confidence "
+                    f"[perception] cluster[{i}] rejected reject_reason={reason} "
                     f"total={score:.2f} < min={self._min_publish_confidence:.2f} "
                     f"color={color_name}"
                 )
+                debug_records.append({
+                    "id": i, "center": aabb_center, "size": aabb_size,
+                    "status": status, "color": color_name,
+                    "color_score": color_conf, "total": score, "reason": reason,
+                })
                 continue
+
+            debug_records.append({
+                "id": i, "center": aabb_center, "size": aabb_size,
+                "status": "accepted", "color": color_name,
+                "color_score": color_conf, "total": score,
+                "reason": depth_quality,
+            })
 
             hyp = ObjectHypothesis()
             hyp.class_id = class_id
@@ -419,6 +477,58 @@ class SceneProcessor(Node):
 
         self._last_detections = [(now, d) for d in published]
         self._last_stamp = cloud.header
+
+        # Debug overlay: publish every cluster (accepted + rejected) colour-coded.
+        self._publish_debug_markers(debug_records, cloud.header.stamp)
+
+    def _publish_debug_markers(self, records: list[dict], stamp) -> None:
+        """Publish a MarkerArray on /perception/debug_clusters: a translucent
+        CUBE plus a TEXT label per cluster, coloured by accept/reject outcome."""
+        arr = MarkerArray()
+        clear = Marker()
+        clear.header = Header(stamp=stamp, frame_id="base_link")
+        clear.action = Marker.DELETEALL
+        arr.markers.append(clear)
+        for rec in records:
+            r, g, b, a = _DEBUG_MARKER_COLORS.get(
+                rec["status"], (1.0, 1.0, 1.0, 0.5)
+            )
+            center = rec["center"]
+            size = rec["size"]
+            cube = Marker()
+            cube.header = Header(stamp=stamp, frame_id="base_link")
+            cube.ns = "debug_clusters"
+            cube.id = rec["id"] * 2
+            cube.type = Marker.CUBE
+            cube.action = Marker.ADD
+            cube.pose.position.x = float(center[0])
+            cube.pose.position.y = float(center[1])
+            cube.pose.position.z = float(center[2])
+            cube.pose.orientation.w = 1.0
+            cube.scale.x = float(size[0])
+            cube.scale.y = float(size[1])
+            cube.scale.z = float(size[2])
+            cube.color.r, cube.color.g, cube.color.b, cube.color.a = r, g, b, a
+            arr.markers.append(cube)
+
+            text = Marker()
+            text.header = Header(stamp=stamp, frame_id="base_link")
+            text.ns = "debug_clusters_text"
+            text.id = rec["id"] * 2 + 1
+            text.type = Marker.TEXT_VIEW_FACING
+            text.action = Marker.ADD
+            text.pose.position.x = float(center[0])
+            text.pose.position.y = float(center[1])
+            text.pose.position.z = float(center[2] + size[2] / 2 + 0.03)
+            text.pose.orientation.w = 1.0
+            text.scale.z = 0.03
+            text.color.r, text.color.g, text.color.b, text.color.a = r, g, b, 1.0
+            text.text = (
+                f"c{rec['id']} {rec['status']} {rec['color']} "
+                f"cs={rec['color_score']:.2f} t={rec['total']:.2f} {rec['reason']}"
+            )
+            arr.markers.append(text)
+        self._debug_marker_pub.publish(arr)
 
     def _points_in_base_link(
         self,

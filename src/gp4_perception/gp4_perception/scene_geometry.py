@@ -46,15 +46,46 @@ def _read_xyz(cloud: PointCloud2) -> np.ndarray | None:
         return None
 
 
+def _unpack_packed_rgb(
+    arr: np.ndarray, field: str
+) -> tuple[np.ndarray, np.ndarray]:
+    """Decode a structured point array with a packed ``rgb``/``rgba`` field.
+
+    RealSense (and PCL) pack colour into a single 32-bit value ``0x00RRGGBB``
+    (``rgb``) or ``0xAARRGGBB`` (``rgba``), commonly stored as a ``float32``
+    whose bit pattern is the integer. Extraction via integer shifts is
+    endian-safe because ``read_points`` already produces the host-order value.
+
+    Returns ``(xyz Nx3 float32, rgb Nx3 uint8)`` in R, G, B order.
+    """
+    arr = np.asarray(arr)
+    xyz = np.column_stack(
+        [arr["x"], arr["y"], arr["z"]]
+    ).astype(np.float32)
+    packed = arr[field]
+    if packed.dtype.kind == "f":
+        u32 = np.ascontiguousarray(packed, dtype=np.float32).view(np.uint32)
+    else:
+        u32 = packed.astype(np.uint32)
+    r = ((u32 >> 16) & 0xFF).astype(np.uint8)
+    g = ((u32 >> 8) & 0xFF).astype(np.uint8)
+    b = (u32 & 0xFF).astype(np.uint8)
+    rgb = np.column_stack([r, g, b])
+    return xyz, rgb
+
+
 def _read_xyz_rgb(cloud: PointCloud2) -> tuple[np.ndarray | None, np.ndarray | None]:
-    """Read XYZ plus RGB from PointCloud2."""
+    """Read XYZ plus RGB from PointCloud2.
+
+    Handles both layouts: separate ``r``/``g``/``b`` uint8 fields, and the
+    RealSense/PCL packed ``rgb``/``rgba`` 32-bit field.
+    """
     try:
         from sensor_msgs_py.point_cloud2 import read_points
 
-        field_names_available = {f.name for f in cloud.fields}
-        has_rgb = "rgb" in field_names_available or "r" in field_names_available
+        names = {f.name for f in cloud.fields}
 
-        if has_rgb and "r" in field_names_available:
+        if {"r", "g", "b"} <= names:
             pts = list(
                 read_points(
                     cloud, field_names=("x", "y", "z", "r", "g", "b"), skip_nans=True
@@ -66,6 +97,19 @@ def _read_xyz_rgb(cloud: PointCloud2) -> tuple[np.ndarray | None, np.ndarray | N
             rgb = np.array([(p[3], p[4], p[5]) for p in pts], dtype=np.uint8)
             return xyz, rgb
 
+        rgb_field = "rgb" if "rgb" in names else ("rgba" if "rgba" in names else None)
+        if rgb_field is not None:
+            arr = np.asarray(
+                read_points(
+                    cloud,
+                    field_names=("x", "y", "z", rgb_field),
+                    skip_nans=True,
+                )
+            )
+            if arr.size == 0:
+                return None, None
+            return _unpack_packed_rgb(arr, rgb_field)
+
         pts = list(read_points(cloud, field_names=("x", "y", "z"), skip_nans=True))
         if not pts:
             return None, None
@@ -75,6 +119,28 @@ def _read_xyz_rgb(cloud: PointCloud2) -> tuple[np.ndarray | None, np.ndarray | N
         _LOGGER.debug("point_cloud2 rgb read failed (non-fatal): %s", exc)
         xyz = _read_xyz(cloud)
         return xyz, None
+
+
+def _color_diagnostics(cluster_rgb: np.ndarray | None) -> dict:
+    """Per-cluster colour diagnostics for debugging the 3D colour path.
+
+    Returns rgb stats, a small sample, and the winning vote interpreting the
+    data as RGB and (A/B) as BGR — to detect a channel-order mistake.
+    """
+    if cluster_rgb is None or len(cluster_rgb) == 0:
+        return {"n": 0}
+    a = np.asarray(cluster_rgb, dtype=np.uint8)
+    name_rgb, conf_rgb = _dominant_color_voting(a)
+    name_bgr, conf_bgr = _dominant_color_voting(a[:, ::-1])  # data-as-BGR
+    return {
+        "n": int(len(a)),
+        "rgb_min": a.min(axis=0).tolist(),
+        "rgb_max": a.max(axis=0).tolist(),
+        "rgb_mean": a.mean(axis=0).round(1).tolist(),
+        "sample": a[:10].tolist(),
+        "vote_rgb": (name_rgb, round(float(conf_rgb), 2)),
+        "vote_bgr": (name_bgr, round(float(conf_bgr), 2)),
+    }
 
 def _classify_shape(eigvals: np.ndarray, contour_props: dict | None = None) -> str:
     """Classify object shape from PCA eigenvalues sorted descending.

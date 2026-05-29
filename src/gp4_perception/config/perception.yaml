@@ -19,6 +19,8 @@ perception:
   # Set allow_degraded_depth_detections: false to reject instead of degrade.
   depth_noise_degraded_mm_max: 15.0
   allow_degraded_depth_detections: true
+  # Per-cluster RGB/HSV diagnostics in logs + /perception/debug_clusters overlay.
+  debug_color_diagnostics: true
   # Temporal voting: publish only detections stable across frames.
   temporal_window_frames: 5
   temporal_min_hits: 3

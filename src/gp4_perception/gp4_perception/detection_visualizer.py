@@ -61,6 +61,186 @@ def _color_for_class(class_id: str) -> tuple[int, int, int]:
     return _DEFAULT_COLOR
 
 
+def _deproject_pixel(
+    u: float, v: float, z_m: float, fx: float, fy: float, cx: float, cy: float
+) -> tuple[float, float, float]:
+    """Pinhole deprojection of one pixel to camera_color_optical_frame metres."""
+    x = (u - cx) * z_m / fx
+    y = (v - cy) * z_m / fy
+    return (x, y, z_m)
+
+
+def _median_depth_m(
+    depth_raw: np.ndarray | None,
+    mask: np.ndarray | None,
+    depth_scale: float = 0.001,
+) -> float | None:
+    """Median depth in metres over masked, nonzero pixels.
+
+    Returns None when no valid (masked & nonzero) pixel exists.
+    """
+    if depth_raw is None or mask is None:
+        return None
+    valid = (mask > 0) & (depth_raw > 0)
+    sel = depth_raw[valid]
+    if sel.size == 0:
+        return None
+    return float(np.median(sel)) * depth_scale
+
+
+def _bbox_size_m(
+    w_px: float, h_px: float, z_m: float, fx: float, fy: float
+) -> tuple[float, float]:
+    """Estimate metric bbox width/height from pixel extent at depth z."""
+    return (w_px * z_m / fx, h_px * z_m / fy)
+
+
+# ---------------------------------------------------------------------------
+# HSV multi-range contour detection (Task 3)
+# ---------------------------------------------------------------------------
+
+def detect_color_objects(
+    rgb_image: np.ndarray,
+    color_classes: list[dict],
+) -> list[dict]:
+    """Detect objects via HSV masking per configured color class.
+
+    Args:
+        rgb_image: H×W×3 uint8 RGB image.
+        color_classes: List of class configs from perception.yaml color_classes.
+
+    Returns:
+        List of dicts with keys: class_id, bbox (x,y,w,h), mask, contour,
+        center_uv, confidence.
+    """
+    results: list[dict] = []
+    hsv = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2HSV)
+    for cls in color_classes:
+        if not cls.get("enabled", True):
+            continue
+        class_id = cls["class_id"]
+        ranges = cls.get("hsv_ranges", [])
+        min_area = cls.get("min_area_px", 300)
+        kern_sz = cls.get("morph_kernel", 3)
+
+        # Union of all HSV ranges for this class.
+        combined_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+        for rng in ranges:
+            lo = np.array(rng[:3], dtype=np.uint8)
+            hi = np.array(rng[3:], dtype=np.uint8)
+            combined_mask |= cv2.inRange(hsv, lo, hi)
+
+        # Morphology cleanup.
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kern_sz, kern_sz))
+        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
+        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
+
+        contours, _ = cv2.findContours(
+            combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < min_area:
+                continue
+            x, y, w, h = cv2.boundingRect(cnt)
+            # Build per-object mask.
+            obj_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+            cv2.drawContours(obj_mask, [cnt], -1, 255, -1)
+            # Border-hue gate.
+            if cls.get("require_border"):
+                if not validate_border_hue(
+                    rgb_image, obj_mask, (x, y, w, h), cls["require_border"]
+                ):
+                    continue
+            # Confidence from mask fill ratio (solidity).
+            hull = cv2.convexHull(cnt)
+            hull_area = cv2.contourArea(hull)
+            confidence = area / hull_area if hull_area > 0 else 0.0
+            cx = x + w // 2
+            cy = y + h // 2
+            results.append({
+                "class_id": class_id,
+                "bbox": (x, y, w, h),
+                "mask": obj_mask,
+                "contour": cnt,
+                "center_uv": (cx, cy),
+                "confidence": float(confidence),
+            })
+    return results
+
+
+# ---------------------------------------------------------------------------
+# 2D border-hue validation (Task 4)
+# ---------------------------------------------------------------------------
+
+# HSV ranges for border colour validation (OpenCV HSV: H 0-179).
+_BORDER_HSV_RANGES: dict[str, list[tuple[int, ...]]] = {
+    "blue": [(100, 80, 40, 130, 255, 255)],
+    "red": [(0, 80, 50, 10, 255, 255), (170, 80, 50, 179, 255, 255)],
+    "green": [(35, 60, 40, 85, 255, 255)],
+}
+
+
+def validate_border_hue(
+    rgb_image: np.ndarray,
+    mask: np.ndarray,
+    bbox: tuple[int, int, int, int],
+    required_border: str | None,
+) -> bool:
+    """Check if the border pixels of a detected object match the required hue.
+
+    Uses morphological erosion to isolate a border ring, then HSV-votes
+    the border pixels for the required colour.
+
+    Args:
+        rgb_image: Full H×W×3 uint8 RGB image.
+        mask: H×W uint8 object mask (255 = object).
+        bbox: (x, y, w, h) bounding box.
+        required_border: Colour name ("blue", "red", "green") or None.
+
+    Returns:
+        True if no border required, or if ≥25% of border pixels match.
+    """
+    if required_border is None:
+        return True
+
+    x, y, w, h = bbox
+    roi_mask = mask[y:y + h, x:x + w]
+    if roi_mask.sum() == 0:
+        return False
+
+    # Erode to get interior, subtract to get border ring.
+    # borderValue=0 ensures edge pixels are excluded from interior.
+    kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    interior = cv2.erode(
+        roi_mask, kern, iterations=2,
+        borderType=cv2.BORDER_CONSTANT, borderValue=0,
+    )
+    border_ring = cv2.subtract(roi_mask, interior)
+    if cv2.countNonZero(border_ring) < 10:
+        return False
+
+    roi_rgb = rgb_image[y:y + h, x:x + w]
+    border_pixels = roi_rgb[border_ring > 0]
+
+    ranges = _BORDER_HSV_RANGES.get(required_border.lower(), [])
+    if not ranges:
+        return False
+
+    hsv_pixels = cv2.cvtColor(
+        border_pixels.reshape(-1, 1, 3), cv2.COLOR_RGB2HSV
+    ).reshape(-1, 3)
+    match_count = 0
+    for rng in ranges:
+        lo = np.array(rng[:3], dtype=np.uint8)
+        hi = np.array(rng[3:], dtype=np.uint8)
+        match_count += int(np.count_nonzero(
+            cv2.inRange(hsv_pixels.reshape(-1, 1, 3), lo, hi)
+        ))
+    ratio = match_count / len(hsv_pixels)
+    return ratio >= 0.25
+
+
 def _build_3d_bbox_corners(pose, dims) -> np.ndarray:
     """Build 8 corners of a 3D oriented bounding box.
 

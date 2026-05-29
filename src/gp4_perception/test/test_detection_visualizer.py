@@ -116,3 +116,100 @@ class TestMedianDepthEdgeCases:
         depth = np.array([[500, 0], [0, 0]], dtype=np.uint16)
         mask = np.array([[255, 0], [0, 0]], dtype=np.uint8)
         assert _median_depth_m(depth, mask) == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# Task 3: HSV multi-range contour detection
+# ---------------------------------------------------------------------------
+def _make_red_rect_image():
+    """Create 480x640 black image with a 100x80 red rectangle at center."""
+    img = np.zeros((480, 640, 3), dtype=np.uint8)
+    # Red in RGB
+    img[200:280, 270:370] = [220, 30, 30]
+    return img
+
+
+def _red_box_config():
+    return {
+        "class_id": "red_box",
+        "enabled": True,
+        "hsv_ranges": [[0, 90, 60, 10, 255, 255], [170, 90, 60, 179, 255, 255]],
+        "min_area_px": 400,
+        "morph_kernel": 3,
+        "require_border": None,
+    }
+
+
+class TestDetectColorObjects:
+    def test_detects_red_rectangle(self):
+        from gp4_perception.detection_visualizer import detect_color_objects
+
+        img = _make_red_rect_image()
+        results = detect_color_objects(img, [_red_box_config()])
+        assert len(results) == 1
+        r = results[0]
+        assert r["class_id"] == "red_box"
+        assert r["bbox"][2] > 50  # width
+        assert r["bbox"][3] > 50  # height
+        assert r["mask"] is not None
+
+    def test_no_detection_on_empty_image(self):
+        from gp4_perception.detection_visualizer import detect_color_objects
+
+        img = np.zeros((480, 640, 3), dtype=np.uint8)
+        results = detect_color_objects(img, [_red_box_config()])
+        assert results == []
+
+    def test_disabled_class_is_skipped(self):
+        from gp4_perception.detection_visualizer import detect_color_objects
+
+        cfg = _red_box_config()
+        cfg["enabled"] = False
+        img = _make_red_rect_image()
+        results = detect_color_objects(img, [cfg])
+        assert results == []
+
+    def test_small_blobs_below_min_area_are_rejected(self):
+        from gp4_perception.detection_visualizer import detect_color_objects
+
+        img = np.zeros((480, 640, 3), dtype=np.uint8)
+        # Tiny 5x5 red patch — below 400px min_area
+        img[200:205, 300:305] = [220, 30, 30]
+        results = detect_color_objects(img, [_red_box_config()])
+        assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Task 4: 2D border-hue validation
+# ---------------------------------------------------------------------------
+class TestBorderHueValidation:
+    def test_blue_border_passes_validation(self):
+        from gp4_perception.detection_visualizer import validate_border_hue
+
+        # White interior with blue border ring — 10px thick to survive erosion.
+        img = np.full((100, 100, 3), 240, dtype=np.uint8)  # white RGB
+        # Blue border (10px thick) — RGB order
+        img[:10, :] = [30, 40, 220]
+        img[-10:, :] = [30, 40, 220]
+        img[:, :10] = [30, 40, 220]
+        img[:, -10:] = [30, 40, 220]
+        mask = np.full((100, 100), 255, dtype=np.uint8)
+        bbox = (0, 0, 100, 100)
+        assert validate_border_hue(img, mask, bbox, "blue") is True
+
+    def test_no_border_fails_validation(self):
+        from gp4_perception.detection_visualizer import validate_border_hue
+
+        img = np.full((100, 100, 3), 240, dtype=np.uint8)  # pure white
+        mask = np.full((100, 100), 255, dtype=np.uint8)
+        bbox = (0, 0, 100, 100)
+        assert validate_border_hue(img, mask, bbox, "blue") is False
+
+    def test_none_border_always_passes(self):
+        from gp4_perception.detection_visualizer import validate_border_hue
+
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        mask = np.full((100, 100), 255, dtype=np.uint8)
+        bbox = (0, 0, 100, 100)
+        assert validate_border_hue(img, mask, bbox, None) is True
+

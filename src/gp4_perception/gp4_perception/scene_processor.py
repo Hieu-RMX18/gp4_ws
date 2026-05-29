@@ -40,19 +40,23 @@ from .safety_guards import (
     check_reprojection_error,
 )
 from .scene_geometry import (
+    _confidence_score,
     _contour_filter,
     _depth_noise_at_centroid,
     _detection_class_id,
-    _dominant_color_name,
+    _dominant_color_voting,
+    _euclidean_cluster_indices,
     _euclidean_clusters,
     _filter_detections,
     _pca_bbox,
     _ransac_plane,
+    _ransac_plane_fit,
     _read_xyz_rgb,
     _roi_crop,
     _semantic_class_id,
     _transform_points,
     _voxel_downsample,
+    _voxel_downsample_indices,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -95,6 +99,12 @@ class SceneProcessor(Node):
         self._cluster_tol = float(self._cfg.get("cluster_tolerance_m", 0.02))
         self._cluster_min = int(self._cfg.get("cluster_min_size", 50))
         self._cluster_max = int(self._cfg.get("cluster_max_size", 5000))
+        self._ransac_normal_z_min = float(
+            self._cfg.get("ransac_plane_normal_z_min", 0.0)
+        )
+        self._min_publish_confidence = float(
+            self._cfg.get("min_publish_confidence", 0.0)
+        )
         self._ttl = float(self._cfg.get("detection_ttl_s", 2.0))
         self._breakpoints = self._cfg.get("depth_noise", {}).get("breakpoints", [])
         self._extrapolation = self._cfg.get("depth_noise", {}).get("extrapolation", "reject")
@@ -194,19 +204,22 @@ class SceneProcessor(Node):
         # Read XYZ + optional RGB for color classification.
         xyz_all, rgb_all = _read_xyz_rgb(cloud)
         if xyz_all is None or len(xyz_all) == 0:
+            _LOGGER.info("No points read from PointCloud2")
             return
 
-        # Build index map for RGB lookup after transform/crop/downsample.
-        # We track original indices through the pipeline so we can map
-        # cluster points back to their RGB values.
-        n_original = len(xyz_all)
-        indices = np.arange(n_original, dtype=np.int32)
+        _LOGGER.info(f"_on_synced: received {len(xyz_all)} points from camera")
 
         pts = self._points_in_base_link(xyz_all, cloud)
         if pts is None or len(pts) == 0:
+            _LOGGER.info("No points after transforming to base_link")
             self._remove_published_collision_objects()
             self._last_detections = []
             return
+
+        # RGB stays index-aligned with pts (transform preserves point order),
+        # so we slice rgb with the same indices at every pipeline step.
+        rgb = rgb_all
+        _LOGGER.info(f"Points in base_link: {len(pts)}")
 
         # 1. ROI crop (skipped when enable_bbox_filter is False)
         if self._bbox and self._enable_bbox_filter:
@@ -219,35 +232,50 @@ class SceneProcessor(Node):
                 & (pts[:, 2] <= self._bbox["z"][1])
             )
             pts = pts[mask]
-            indices = indices[mask] if len(indices) == len(mask) else indices
+            if rgb is not None:
+                rgb = rgb[mask]
+
+        _LOGGER.info(f"Points after ROI crop: {len(pts)} (bbox: {self._bbox})")
         if len(pts) == 0:
             return
 
-        # 2. Voxel downsample
-        pts = _voxel_downsample(pts, self._voxel)
+        # 2. Voxel downsample (carry RGB by index)
+        keep = _voxel_downsample_indices(pts, self._voxel)
+        pts = pts[keep]
+        if rgb is not None:
+            rgb = rgb[keep]
+        _LOGGER.info(f"Points after voxel downsample: {len(pts)}")
 
-        # 3. RANSAC plane removal
-        _, pts = _ransac_plane(pts, self._ransac_thresh)
+        # 3. RANSAC plane removal — only remove near-vertical-normal planes
+        #    (table/floor); keep vertical object faces.
+        _, out_idx, _ = _ransac_plane_fit(
+            pts, self._ransac_thresh, normal_z_min=self._ransac_normal_z_min
+        )
+        pts = pts[out_idx]
+        if rgb is not None:
+            rgb = rgb[out_idx]
+        _LOGGER.info(f"Points after RANSAC plane removal: {len(pts)}")
         if len(pts) == 0:
             return
 
-        # 4. Euclidean clustering
-        clusters = _euclidean_clusters(
+        # 4. Euclidean clustering (index arrays so RGB stays aligned)
+        cluster_indices = _euclidean_cluster_indices(
             pts, self._cluster_tol, self._cluster_min, self._cluster_max
         )
-        if not clusters:
+        _LOGGER.info(f"Number of clusters found: {len(cluster_indices)}")
+        if not cluster_indices:
             return
 
         now = time.time()
         detections: list[Detection3D] = []
-        for i, cluster in enumerate(clusters):
+        for i, cluster_idx in enumerate(cluster_indices):
+            cluster = pts[cluster_idx]
+            cluster_rgb = rgb[cluster_idx] if rgb is not None else None
             # 4a. Contour filter — reject fragmented/noisy clusters.
             contour_ok, contour_props = _contour_filter(cluster)
             if not contour_ok:
-                _LOGGER.debug(
-                    "Cluster %d rejected by contour filter (solidity=%.2f)",
-                    i,
-                    contour_props["solidity"] if contour_props else 0.0,
+                _LOGGER.info(
+                    f"Cluster {i} rejected by contour filter (solidity={(contour_props['solidity'] if contour_props else 0.0):.2f})"
                 )
                 continue
 
@@ -260,45 +288,44 @@ class SceneProcessor(Node):
                 noise_mm=noise_mm,
             )
             if not depth_ok:
-                _LOGGER.debug(
-                    "Cluster %d rejected: %s",
-                    i,
-                    depth_reason,
+                _LOGGER.info(
+                    f"Cluster {i} rejected: {depth_reason} (measured noise: {noise_mm:.2f} mm, distance: {dist:.2f} m)"
                 )
                 continue
 
             pose, dims, shape_class = _pca_bbox(cluster, contour_props)
 
-            # Color classification: find nearest original indices for cluster
-            # points and extract their RGB values.
-            color_name = "unknown"
-            if rgb_all is not None and n_original > 0:
-                try:
-                    # Map cluster points back to original cloud via nearest
-                    # neighbor in the original XYZ (approximate after transform).
-                    cluster_indices_approx = None
-                    if len(indices) > 0:
-                        from scipy.spatial import cKDTree as _cKDTree
-
-                        tree = _cKDTree(xyz_all)
-                        _, cluster_indices_approx = tree.query(
-                            cluster[: min(200, len(cluster))]
-                        )
-                    color_name = _dominant_color_name(rgb_all, cluster_indices_approx)
-                except Exception:
-                    color_name = "unknown"
+            # Color classification: exact per-cluster RGB → HSV pixel voting.
+            color_name, color_conf = _dominant_color_voting(cluster_rgb)
 
             # Semantic class_id: "apple", "yellow_ball", "red_box", etc.
             class_id = _semantic_class_id(color_name, shape_class, dims)
+
+            # Multi-factor confidence: colour vote + contour solidity + depth
+            # quality. Temporal term is added in Wave 2.
+            geometry_conf = (
+                float(contour_props["solidity"]) if contour_props else 0.5
+            )
+            depth_conf = float(np.clip(1.0 - noise_mm / 15.0, 0.0, 1.0))
+            score = _confidence_score(color_conf, geometry_conf, depth_conf)
             _LOGGER.debug(
-                "Cluster %d: raw=%s_%s → semantic=%s (dims=%.3f×%.3f×%.3f m)",
-                i, color_name, shape_class, class_id,
+                "Cluster %d: raw=%s_%s → semantic=%s score=%.2f "
+                "(color=%.2f geom=%.2f depth=%.2f, dims=%.3f×%.3f×%.3f m)",
+                i, color_name, shape_class, class_id, score,
+                color_conf, geometry_conf, depth_conf,
                 dims.x, dims.y, dims.z,
             )
 
+            if score < self._min_publish_confidence:
+                _LOGGER.info(
+                    f"Cluster {i} rejected: confidence {score:.2f} < "
+                    f"{self._min_publish_confidence:.2f} (color={color_name})"
+                )
+                continue
+
             hyp = ObjectHypothesis()
             hyp.class_id = class_id
-            hyp.score = 1.0
+            hyp.score = float(score)
             pose_with_covariance = PoseWithCovariance()
             pose_with_covariance.pose = pose
             det = Detection3D()

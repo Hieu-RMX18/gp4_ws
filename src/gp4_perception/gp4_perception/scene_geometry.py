@@ -250,6 +250,97 @@ def _dominant_color_name(
     return "unknown"
 
 
+# Minimum chromatic vote ratio to prefer a colour over an achromatic majority.
+# Lets a white object with a thin coloured border (e.g. blue_rectangle) classify
+# by its border colour instead of the white interior.
+_CHROMATIC_MIN_RATIO = 0.12
+
+
+def _dominant_color_voting(rgb_pixels: np.ndarray | None) -> tuple[str, float]:
+    """Classify cluster colour by per-pixel HSV voting instead of the mean.
+
+    Returns ``(color_name, confidence)`` where confidence is the winning vote
+    ratio (0..1). Chromatic colours win over an achromatic majority when their
+    ratio exceeds ``_CHROMATIC_MIN_RATIO``. Voting is robust to multi-colour
+    surfaces (logos/text) that would pollute a mean.
+    """
+    if rgb_pixels is None or len(rgb_pixels) == 0:
+        return "unknown", 0.0
+    try:
+        import cv2
+
+        hsv = cv2.cvtColor(
+            rgb_pixels.reshape(-1, 1, 3).astype(np.uint8), cv2.COLOR_RGB2HSV
+        ).reshape(-1, 3)
+    except Exception:
+        return "unknown", 0.0
+
+    h = hsv[:, 0].astype(np.int32)
+    s = hsv[:, 1].astype(np.int32)
+    v = hsv[:, 2].astype(np.int32)
+    total = len(hsv)
+
+    chromatic: dict[str, int] = {}
+    for name, h_min, h_max, s_min, v_min in _COLOR_RANGES:
+        match = (h >= h_min) & (h <= h_max) & (s >= s_min) & (v >= v_min)
+        count = int(np.count_nonzero(match))
+        if count:
+            chromatic[name] = chromatic.get(name, 0) + count
+
+    achromatic: dict[str, int] = {}
+    achro_mask = s < 40
+    if np.any(achro_mask):
+        av = v[achro_mask]
+        achromatic["white"] = int(np.count_nonzero(av > 180))
+        achromatic["gray"] = int(np.count_nonzero((av > 60) & (av <= 180)))
+        achromatic["black"] = int(np.count_nonzero(av <= 60))
+
+    best_chromatic = max(chromatic.items(), key=lambda kv: kv[1], default=None)
+    if best_chromatic is not None:
+        name, count = best_chromatic
+        ratio = count / total
+        if ratio >= _CHROMATIC_MIN_RATIO:
+            return name, float(ratio)
+
+    best_achromatic = max(achromatic.items(), key=lambda kv: kv[1], default=None)
+    if best_achromatic is not None and best_achromatic[1] > 0:
+        if best_chromatic is not None and best_chromatic[1] >= best_achromatic[1]:
+            return best_chromatic[0], float(best_chromatic[1] / total)
+        return best_achromatic[0], float(best_achromatic[1] / total)
+    if best_chromatic is not None:
+        return best_chromatic[0], float(best_chromatic[1] / total)
+    return "unknown", 0.0
+
+
+# Multi-factor confidence weights. Temporal weight is folded in only when a
+# temporal score is supplied (Wave 2); otherwise the remaining weights are
+# renormalised so a perfect color/geometry/depth detection scores 1.0.
+_CONF_WEIGHTS = {"color": 0.35, "geometry": 0.25, "depth": 0.20, "temporal": 0.20}
+
+
+def _confidence_score(
+    color_conf: float,
+    geometry_conf: float,
+    depth_conf: float,
+    temporal_conf: float | None = None,
+) -> float:
+    """Weighted detection confidence in [0, 1].
+
+    When *temporal_conf* is None the temporal term is dropped and the other
+    weights are renormalised to sum to 1.
+    """
+    terms = {
+        "color": float(np.clip(color_conf, 0.0, 1.0)),
+        "geometry": float(np.clip(geometry_conf, 0.0, 1.0)),
+        "depth": float(np.clip(depth_conf, 0.0, 1.0)),
+    }
+    if temporal_conf is not None:
+        terms["temporal"] = float(np.clip(temporal_conf, 0.0, 1.0))
+    weight_sum = sum(_CONF_WEIGHTS[k] for k in terms)
+    score = sum(_CONF_WEIGHTS[k] * terms[k] for k in terms) / weight_sum
+    return float(np.clip(score, 0.0, 1.0))
+
+
 # ---------------------------------------------------------------------------
 #  Semantic class mapping — human/LLM-friendly object names
 # ---------------------------------------------------------------------------
@@ -328,22 +419,44 @@ def _roi_crop(pts: np.ndarray, bbox: dict) -> np.ndarray:
     return pts[mask]
 
 
+def _voxel_downsample_indices(pts: np.ndarray, voxel_size: float) -> np.ndarray:
+    """Return indices of the points kept by grid-bin downsampling.
+
+    Carrying indices (instead of points) lets callers slice an aligned RGB
+    array through the same step without losing colour correspondence.
+    """
+    if pts.size == 0:
+        return np.empty((0,), dtype=np.int64)
+    coords = np.floor(pts / voxel_size).astype(np.int32)
+    _, idx = np.unique(coords, axis=0, return_index=True)
+    return idx
+
+
 def _voxel_downsample(pts: np.ndarray, voxel_size: float) -> np.ndarray:
     """Simple grid-bin downsample."""
     if pts.size == 0:
         return pts
-    coords = np.floor(pts / voxel_size).astype(np.int32)
-    _, idx = np.unique(coords, axis=0, return_index=True)
-    return pts[idx]
+    return pts[_voxel_downsample_indices(pts, voxel_size)]
 
 
-def _ransac_plane(
-    pts: np.ndarray, threshold: float, max_iter: int = 100
-) -> tuple[np.ndarray, np.ndarray]:
-    """Return (inliers, outliers) for largest plane."""
+def _ransac_plane_fit(
+    pts: np.ndarray,
+    threshold: float,
+    max_iter: int = 100,
+    normal_z_min: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Fit the largest plane and return ``(inlier_idx, outlier_idx, normal)``.
+
+    When ``normal_z_min > 0`` the plane is only treated as removable if its
+    normal is close to vertical (``abs(normal_z) >= normal_z_min``), i.e. a
+    table/floor. A near-vertical object face is kept: ``inlier_idx`` is empty
+    and every point is returned as an outlier so it survives plane removal.
+    """
+    all_idx = np.arange(len(pts), dtype=np.int64)
     if len(pts) < 10:
-        return pts, np.empty((0, 3), dtype=np.float32)
-    best_inliers = np.array([], dtype=int)
+        return np.empty((0,), dtype=np.int64), all_idx, np.array([0.0, 0.0, 1.0])
+    best_inliers = np.array([], dtype=np.int64)
+    best_normal = np.array([0.0, 0.0, 1.0])
     for _ in range(max_iter):
         sample = pts[np.random.choice(len(pts), 3, replace=False)]
         p1, p2, p3 = sample
@@ -359,47 +472,63 @@ def _ransac_plane(
         inliers = np.where(dists < threshold)[0]
         if len(inliers) > len(best_inliers):
             best_inliers = inliers
-    if len(best_inliers) == 0:
-        return pts, np.empty((0, 3), dtype=np.float32)
+            best_normal = normal
+    # Reject the plane when its normal is not vertical enough (object face).
+    if len(best_inliers) == 0 or abs(float(best_normal[2])) < normal_z_min:
+        return np.empty((0,), dtype=np.int64), all_idx, best_normal
     mask = np.ones(len(pts), dtype=bool)
     mask[best_inliers] = False
-    return pts[best_inliers], pts[mask]
+    return best_inliers.astype(np.int64), all_idx[mask], best_normal
+
+
+def _ransac_plane(
+    pts: np.ndarray, threshold: float, max_iter: int = 100
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (inliers, outliers) for largest plane (back-compat wrapper)."""
+    in_idx, out_idx, _ = _ransac_plane_fit(pts, threshold, max_iter, normal_z_min=0.0)
+    return pts[in_idx], pts[out_idx]
+
+
+def _euclidean_cluster_indices(
+    pts: np.ndarray, tolerance: float, min_size: int, max_size: int
+) -> list[np.ndarray]:
+    """Euclidean clustering — returns per-cluster index arrays (PCL style).
+
+    Returning indices lets the caller slice both the XYZ and the aligned RGB
+    arrays with the same indices, preserving colour correspondence.
+    """
+    if len(pts) == 0:
+        return []
+    tree = cKDTree(pts)
+    visited = np.zeros(len(pts), dtype=bool)
+    clusters: list[np.ndarray] = []
+    for i in range(len(pts)):
+        if visited[i]:
+            continue
+        # Start a new cluster
+        cluster = []
+        queue = [i]
+        visited[i] = True
+        q_idx = 0
+        while q_idx < len(queue):
+            idx = queue[q_idx]
+            q_idx += 1
+            cluster.append(idx)
+            neighbors = tree.query_ball_point(pts[idx], tolerance)
+            for n in neighbors:
+                if not visited[n]:
+                    visited[n] = True
+                    queue.append(n)
+        if min_size <= len(cluster) <= max_size:
+            clusters.append(np.asarray(cluster, dtype=np.int64))
+    return clusters
 
 
 def _euclidean_clusters(
     pts: np.ndarray, tolerance: float, min_size: int, max_size: int
 ) -> list[np.ndarray]:
-    """DBSCAN-like clustering with cKDTree."""
-    if len(pts) == 0:
-        return []
-    tree = cKDTree(pts)
-    visited = np.zeros(len(pts), dtype=bool)
-    clusters: list[list[int]] = []
-    for i in range(len(pts)):
-        if visited[i]:
-            continue
-        neighbors = tree.query_ball_point(pts[i], tolerance)
-        if len(neighbors) < min_size:
-            visited[neighbors] = True
-            continue
-        cluster = set(neighbors)
-        queue = list(neighbors)
-        while queue:
-            j = queue.pop()
-            if visited[j]:
-                continue
-            visited[j] = True
-            nn = tree.query_ball_point(pts[j], tolerance)
-            for k in nn:
-                if k not in cluster:
-                    cluster.add(k)
-                    queue.append(k)
-        clusters.append(list(cluster))
-    result = []
-    for cluster in clusters:
-        if min_size <= len(cluster) <= max_size:
-            result.append(pts[cluster])
-    return result
+    """Euclidean clustering returning point arrays (back-compat wrapper)."""
+    return [pts[idx] for idx in _euclidean_cluster_indices(pts, tolerance, min_size, max_size)]
 
 
 def _pca_bbox(

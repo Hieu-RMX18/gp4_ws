@@ -8,6 +8,11 @@ perception:
   cluster_tolerance_m: 0.025
   cluster_min_size: 200
   cluster_max_size: 10000
+  # Plane removal: only remove planes whose normal is near-vertical (table/floor).
+  # cos(~32deg) ~= 0.85. Keeps vertical object faces (e.g. red_box side) intact.
+  ransac_plane_normal_z_min: 0.85
+  # Minimum multi-factor confidence (colour vote + geometry + depth) to publish.
+  min_publish_confidence: 0.55
   detection_ttl_s: 2.0
   depth_noise:
     # Range-aware threshold. D435i noise grows with distance; one flat number is wrong.

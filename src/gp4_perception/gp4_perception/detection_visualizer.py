@@ -1,11 +1,12 @@
-"""Detection visualizer — overlay 3D detections on the 2D camera image.
+"""RGB + aligned-depth object detection and visualization node.
 
 Subscribes to:
-    /perception/detections  (Detection3DArray in base_link frame)
     /camera/color/image_raw (Image)
+    /camera/aligned_depth_to_color/image_raw (Image, 16UC1)
     /camera/color/camera_info (CameraInfo)
 
 Publishes:
+    /perception/detections (Detection3DArray)
     /perception/annotated_image (Image with bounding boxes + labels)
 
 Entry point: ros2 run gp4_perception detection_visualizer
@@ -24,17 +25,12 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.time import Time
-from rcl_interfaces.msg import Parameter as ParameterMsg, ParameterValue, ParameterType
-from rcl_interfaces.srv import SetParameters
 from sensor_msgs.msg import CameraInfo, Image
 from tf2_ros import Buffer, TransformListener
 from vision_msgs.msg import Detection3DArray
 
-from scipy.spatial.transform import Rotation
-
-_WINDOW_NAME = "GP4 Perception"
-
 _LOGGER = logging.getLogger(__name__)
+
 
 # Color palette for different class labels (BGR for OpenCV).
 _COLORS = {
@@ -241,332 +237,294 @@ def validate_border_hue(
     return ratio >= 0.25
 
 
-def _build_3d_bbox_corners(pose, dims) -> np.ndarray:
-    """Build 8 corners of a 3D oriented bounding box.
-
-    Args:
-        pose: geometry_msgs/Pose (centroid + orientation)
-        dims: geometry_msgs/Vector3 (size x, y, z)
-
-    Returns:
-        (8, 3) float64 array of corner positions in the detection frame.
-    """
-    dx, dy, dz = dims.x / 2.0, dims.y / 2.0, dims.z / 2.0
-
-    # 8 corners of the box in local frame (centered at origin).
-    corners_local = np.array(
-        [
-            [-dx, -dy, -dz],
-            [+dx, -dy, -dz],
-            [+dx, +dy, -dz],
-            [-dx, +dy, -dz],
-            [-dx, -dy, +dz],
-            [+dx, -dy, +dz],
-            [+dx, +dy, +dz],
-            [-dx, +dy, +dz],
-        ],
-        dtype=np.float64,
-    )
-
-    # Rotate corners by the bounding box orientation.
-    q = pose.orientation
-    rot = Rotation.from_quat([q.x, q.y, q.z, q.w])
-    corners_world = rot.apply(corners_local)
-
-    # Translate to centroid.
-    p = pose.position
-    corners_world += np.array([p.x, p.y, p.z], dtype=np.float64)
-
-    return corners_world
-
-
-def _project_points_to_image(
-    points_3d: np.ndarray,
-    tf_base_to_optical: object,
-    camera_matrix: np.ndarray,
-) -> np.ndarray | None:
-    """Project Nx3 points (in base_link) onto the image plane.
-
-    Args:
-        points_3d: (N, 3) in base_link frame.
-        tf_base_to_optical: TF TransformStamped from base_link to camera_color_optical_frame.
-        camera_matrix: 3x3 intrinsic matrix.
-
-    Returns:
-        (N, 2) pixel coordinates or None if transform fails.
-    """
-    t = tf_base_to_optical.transform.translation
-    r = tf_base_to_optical.transform.rotation
-    rot = Rotation.from_quat([r.x, r.y, r.z, r.w])
-    offset = np.array([t.x, t.y, t.z], dtype=np.float64)
-
-    # lookupTransform("camera_color_optical_frame", "base_link") returns
-    # R, T such that P_optical = R * P_base + T.
-    pts_optical = rot.apply(points_3d) + offset
-
-    # Filter points behind the camera (z <= 0).
-    if np.any(pts_optical[:, 2] <= 0):
-        # Some corners behind camera — still try to project what we can.
-        pass
-
-    # Project: pixel = K @ [x/z, y/z, 1]
-    z = pts_optical[:, 2].copy()
-    z[z <= 0.01] = 0.01  # avoid division by zero
-    x_norm = pts_optical[:, 0] / z
-    y_norm = pts_optical[:, 1] / z
-
-    fx = camera_matrix[0, 0]
-    fy = camera_matrix[1, 1]
-    cx = camera_matrix[0, 2]
-    cy = camera_matrix[1, 2]
-
-    pixels = np.stack(
-        [
-            fx * x_norm + cx,
-            fy * y_norm + cy,
-        ],
-        axis=1,
-    )
-
-    return pixels
-
-
 class DetectionVisualizer(Node):
-    """Overlay 3D detection bounding boxes on the 2D camera image."""
+    """RGB + aligned-depth object detection and visualization node.
+
+    Subscribes to:
+        /camera/color/image_raw (Image)
+        /camera/aligned_depth_to_color/image_raw (Image, 16UC1)
+        /camera/color/camera_info (CameraInfo)
+
+    Publishes:
+        /perception/detections (Detection3DArray)
+        /perception/annotated_image (Image with bounding boxes + labels)
+    """
 
     def __init__(self) -> None:
         super().__init__("detection_visualizer")
 
+        # Load config.
+        try:
+            from pathlib import Path
+            from ament_index_python.packages import get_package_share_directory
+            share = Path(get_package_share_directory("gp4_perception")) / "config"
+        except Exception:
+            from pathlib import Path
+            share = Path(__file__).resolve().parents[1] / "config"
+
+        import yaml
+        with open(share / "perception.yaml") as f:
+            cfg = yaml.safe_load(f) or {}
+        pcfg = cfg.get("perception", {})
+        self._color_classes: list[dict] = pcfg.get("color_classes", [])
+        rgb_cfg = pcfg.get("rgb_detector", {})
+        viz_cfg = pcfg.get("visualization", {})
+
+        self._depth_scale = float(rgb_cfg.get("depth_scale_m", 0.001))
+        self._base_frame = str(rgb_cfg.get("base_frame", "base_link"))
+        self._camera_frame = str(rgb_cfg.get("camera_optical_frame",
+                                              "camera_color_optical_frame"))
+        self._bbox_z = float(rgb_cfg.get("bbox_thickness_z_m", 0.03))
+        self._sync_slop = float(rgb_cfg.get("sync_slop_s", 0.05))
+        self._sync_queue = int(rgb_cfg.get("sync_queue", 10))
+        self._show_depth_panel = bool(viz_cfg.get("show_depth_panel", True))
+        self._output_width = int(viz_cfg.get("output_width_px", 960))
+
+        color_topic = str(rgb_cfg.get("color_topic", "/camera/color/image_raw"))
+        depth_topic = str(rgb_cfg.get("depth_topic",
+                                       "/camera/aligned_depth_to_color/image_raw"))
+        info_topic = str(rgb_cfg.get("camera_info_topic",
+                                      "/camera/color/camera_info"))
+
         self._bridge = CvBridge()
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
+        self._last_tf = None
 
-        # Camera intrinsic matrix (populated from CameraInfo).
-        self._camera_matrix: np.ndarray | None = None
-        self._img_w = 640
-        self._img_h = 480
+        # Camera intrinsics (populated from CameraInfo).
+        self._fx: float | None = None
+        self._fy: float | None = None
+        self._cx: float | None = None
+        self._cy: float | None = None
 
-        # Latest detections cache.
-        self._latest_detections: Detection3DArray | None = None
-
-        # --- OpenCV live window with bbox-filter toggle ---
-        cv2.namedWindow(_WINDOW_NAME, cv2.WINDOW_AUTOSIZE)
-        cv2.createTrackbar(
-            "BBox Filter", _WINDOW_NAME, 1, 1, self._on_bbox_trackbar
-        )
-        self._param_client = self.create_client(
-            SetParameters, "/scene_processor/set_parameters"
-        )
-
-        # Low-latency QoS profile with depth=1 to discard old messages and prevent queue buildup
-        qos_profile = QoSProfile(
+        # Low-latency QoS.
+        qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
 
-        # Subscribers.
-        self.create_subscription(
-            CameraInfo,
-            "/camera/color/camera_info",
-            self._on_camera_info,
-            qos_profile,
-        )
-        self.create_subscription(
-            Image,
-            "/camera/color/image_raw",
-            self._on_image,
-            qos_profile,
-        )
-        self.create_subscription(
-            Detection3DArray,
-            "/perception/detections",
-            self._on_detections,
-            10,
-        )
+        # CameraInfo subscriber — cached intrinsics, not time-synced.
+        self.create_subscription(CameraInfo, info_topic,
+                                 self._on_camera_info, qos)
 
-        # Publisher.
+        # Synchronized color + depth.
+        from message_filters import ApproximateTimeSynchronizer, Subscriber
+        self._color_sub = Subscriber(self, Image, color_topic, qos_profile=qos)
+        self._depth_sub = Subscriber(self, Image, depth_topic, qos_profile=qos)
+        self._sync = ApproximateTimeSynchronizer(
+            [self._color_sub, self._depth_sub],
+            queue_size=self._sync_queue,
+            slop=self._sync_slop,
+        )
+        self._sync.registerCallback(self._on_synced_rgbd)
+
+        # Publishers.
+        self._det_pub = self.create_publisher(
+            Detection3DArray, "/perception/detections", 10
+        )
         self._annotated_pub = self.create_publisher(
             Image, "/perception/annotated_image", 10
         )
 
-        self._last_tf = None
-
-        self.get_logger().info("DetectionVisualizer node started.")
-
-    def _on_bbox_trackbar(self, val: int) -> None:
-        """Toggle workspace bbox filter on scene_processor via ROS2 param."""
-        if not self._param_client.wait_for_service(timeout_sec=0.5):
-            self.get_logger().warn("scene_processor param service not available")
-            return
-        req = SetParameters.Request()
-        param = ParameterMsg()
-        param.name = "enable_bbox_filter"
-        param.value = ParameterValue(
-            type=ParameterType.PARAMETER_BOOL, bool_value=bool(val)
-        )
-        req.parameters = [param]
-        self._param_client.call_async(req)
         self.get_logger().info(
-            "BBox filter %s", "ON" if val else "OFF"
+            "DetectionVisualizer node started (RGB+depth path, %d color classes).",
+            len(self._color_classes),
         )
+
+    # ------------------------------------------------------------------
+    # Callbacks
+    # ------------------------------------------------------------------
 
     def _on_camera_info(self, msg: CameraInfo) -> None:
-        """Cache camera intrinsic matrix from CameraInfo."""
+        """Cache camera intrinsics from CameraInfo."""
         k = msg.k  # 9-element row-major
-        self._camera_matrix = np.array(k, dtype=np.float64).reshape(3, 3)
-        self._img_w = msg.width
-        self._img_h = msg.height
+        self._fx = float(k[0])
+        self._fy = float(k[4])
+        self._cx = float(k[2])
+        self._cy = float(k[5])
 
-    def _on_detections(self, msg: Detection3DArray) -> None:
-        """Cache latest detections."""
-        self._latest_detections = msg
+    def _on_synced_rgbd(self, color_msg: Image, depth_msg: Image) -> None:
+        """Process synchronized color + aligned-depth frame."""
+        if self._fx is None:
+            return  # no intrinsics yet
 
-    def _on_image(self, msg: Image) -> None:
-        """Receive camera image, overlay detections, publish annotated image."""
-        if self._camera_matrix is None:
-            return
-
+        # Decode images.
         try:
-            cv_image = self._bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+            rgb = self._bridge.imgmsg_to_cv2(color_msg, desired_encoding="rgb8")
         except Exception as exc:
-            self.get_logger().warn(f"CvBridge conversion failed: {exc}")
+            self.get_logger().warn(f"CvBridge color conversion failed: {exc}")
+            return
+        try:
+            depth_raw = self._bridge.imgmsg_to_cv2(depth_msg,
+                                                    desired_encoding="passthrough")
+        except Exception as exc:
+            self.get_logger().warn(f"CvBridge depth conversion failed: {exc}")
             return
 
-        # Look up TF: base_link → camera_color_optical_frame without blocking.
-        tf_base_to_optical = None
+        # 2D detection.
+        objects = detect_color_objects(rgb, self._color_classes)
+
+        # TF: camera_color_optical_frame → base_link (non-blocking).
+        tf_cam_to_base = None
         try:
-            tf_base_to_optical = self._tf_buffer.lookup_transform(
-                "camera_color_optical_frame",
-                "base_link",
+            tf_cam_to_base = self._tf_buffer.lookup_transform(
+                self._base_frame,
+                self._camera_frame,
                 Time(),
                 timeout=Duration(seconds=0.0),
             )
-            self._last_tf = tf_base_to_optical
+            self._last_tf = tf_cam_to_base
         except Exception:
-            last_tf = getattr(self, "_last_tf", None)
-            if last_tf is not None:
-                tf_base_to_optical = last_tf
+            if self._last_tf is not None:
+                tf_cam_to_base = self._last_tf
 
-        if tf_base_to_optical is None:
-            # No TF yet — just publish the raw image with a status label.
-            cv2.putText(
-                cv_image,
-                "Waiting for TF: base_link -> camera_color_optical_frame",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (0, 0, 255),
-                1,
+        # Build Detection3DArray.
+        det_arr = Detection3DArray()
+        overlay_rgb = rgb.copy()  # annotate on a copy
+        n_published = 0
+
+        for obj in objects:
+            class_id = obj["class_id"]
+            x, y, w, h = obj["bbox"]
+            mask = obj["mask"]
+            cx_px, cy_px = obj["center_uv"]
+            confidence = obj["confidence"]
+
+            # Median depth over mask within bbox.
+            depth_roi = depth_raw[y:y + h, x:x + w]
+            mask_roi = mask[y:y + h, x:x + w]
+            z_m = _median_depth_m(depth_roi, mask_roi,
+                                   depth_scale=self._depth_scale)
+
+            # Overlay colour.
+            color_bgr = _color_for_class(class_id)
+
+            # Draw 2D bounding box on overlay (BGR).
+            cv2.rectangle(overlay_rgb, (x, y), (x + w, y + h), color_bgr, 2)
+
+            if z_m is None or z_m <= 0.0:
+                # Depth invalid — draw bbox but don't publish detection.
+                label = f"{class_id} XYZ_INVALID"
+                cv2.putText(overlay_rgb, label, (x, max(y - 8, 15)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, color_bgr, 1)
+                continue
+
+            # Deproject center to camera XYZ.
+            cam_x, cam_y, cam_z = _deproject_pixel(
+                float(cx_px), float(cy_px), z_m,
+                self._fx, self._fy, self._cx, self._cy,
             )
-            self._publish_annotated(cv_image, msg.header)
-            # Show in OpenCV window + process GUI events.
-            cv2.imshow(_WINDOW_NAME, cv_image)
-            cv2.waitKey(1)
-            return
+            distance_m = z_m
 
-        detections = self._latest_detections
-        n_detections = 0
+            # Transform to base_link.
+            base_xyz_str = "TF_UNAVAILABLE"
+            frame_id = self._camera_frame
+            det_x, det_y, det_z = cam_x, cam_y, cam_z
 
-        if detections and detections.detections:
-            for det in detections.detections:
-                if not det.results:
-                    continue
+            if tf_cam_to_base is not None:
+                try:
+                    from geometry_msgs.msg import PointStamped
+                    pt = PointStamped()
+                    pt.header.frame_id = self._camera_frame
+                    pt.header.stamp = color_msg.header.stamp
+                    pt.point.x = cam_x
+                    pt.point.y = cam_y
+                    pt.point.z = cam_z
+                    # Manual transform using the cached TF.
+                    from scipy.spatial.transform import Rotation
+                    t = tf_cam_to_base.transform.translation
+                    r = tf_cam_to_base.transform.rotation
+                    rot = Rotation.from_quat([r.x, r.y, r.z, r.w])
+                    cam_pt = np.array([cam_x, cam_y, cam_z])
+                    base_pt = rot.apply(cam_pt) + np.array([t.x, t.y, t.z])
+                    det_x, det_y, det_z = float(base_pt[0]), float(base_pt[1]), float(base_pt[2])
+                    frame_id = self._base_frame
+                    base_xyz_str = f"({det_x:.3f},{det_y:.3f},{det_z:.3f})"
+                except Exception as exc:
+                    self.get_logger().debug(f"TF transform failed: {exc}")
 
-                hyp = det.results[0]
-                class_id = str(hyp.hypothesis.class_id)
-                pose = hyp.pose.pose
-                dims = det.bbox.size
+            # Build Detection3D.
+            from geometry_msgs.msg import Pose, Point, Quaternion, Vector3
+            from geometry_msgs.msg import PoseWithCovariance
+            from vision_msgs.msg import (
+                Detection3D, ObjectHypothesis, ObjectHypothesisWithPose,
+            )
+            from std_msgs.msg import Header
 
-                # Skip tiny bounding boxes (likely noise).
-                max_dim = max(dims.x, dims.y, dims.z)
-                if max_dim < 0.005:
-                    continue
+            det = Detection3D()
+            det.header = Header(
+                stamp=color_msg.header.stamp,
+                frame_id=frame_id,
+            )
+            pose = Pose()
+            pose.position = Point(x=det_x, y=det_y, z=det_z)
+            pose.orientation = Quaternion(x=0.0, y=0.0, z=0.0, w=1.0)
+            hyp = ObjectHypothesis()
+            hyp.class_id = class_id
+            hyp.score = float(confidence)
+            det.results.append(ObjectHypothesisWithPose(
+                hypothesis=hyp,
+                pose=PoseWithCovariance(pose=pose),
+            ))
+            # Bbox size from pixel extent at depth.
+            sx, sy = _bbox_size_m(float(w), float(h), z_m,
+                                   self._fx, self._fy)
+            det.bbox.size = Vector3(x=sx, y=sy, z=self._bbox_z)
+            det_arr.detections.append(det)
+            n_published += 1
 
-                color = _color_for_class(class_id)
+            # Overlay label.
+            cam_xyz_str = f"({cam_x:.3f},{cam_y:.3f},{cam_z:.3f})"
+            lines = [
+                f"{class_id} conf={confidence:.2f}",
+                f"d={distance_m:.3f}m cam={cam_xyz_str}",
+                f"base={base_xyz_str}",
+            ]
+            for li, line in enumerate(lines):
+                label_y = max(y - 8 - (len(lines) - 1 - li) * 14, 15)
+                cv2.putText(overlay_rgb, line, (x, label_y),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, color_bgr, 1)
 
-                # Build 3D bbox corners and project to image.
-                corners_3d = _build_3d_bbox_corners(pose, dims)
-                pixels = _project_points_to_image(
-                    corners_3d, tf_base_to_optical, self._camera_matrix
-                )
-                if pixels is None:
-                    continue
+        # Status bar.
+        cv2.putText(overlay_rgb, f"Detections: {n_published}",
+                     (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
-                # Get 2D bounding rect from projected corners.
-                px_int = pixels.astype(int)
-                x_min = max(0, int(px_int[:, 0].min()))
-                y_min = max(0, int(px_int[:, 1].min()))
-                x_max = min(self._img_w - 1, int(px_int[:, 0].max()))
-                y_max = min(self._img_h - 1, int(px_int[:, 1].max()))
-
-                # Skip if projected box is outside image.
-                if x_min >= x_max or y_min >= y_max:
-                    continue
-
-                # Draw 2D bounding box.
-                cv2.rectangle(cv_image, (x_min, y_min), (x_max, y_max), color, 2)
-
-                # Draw 3D wireframe edges (bottom face, top face, verticals).
-                edges = [
-                    # Bottom face.
-                    (0, 1), (1, 2), (2, 3), (3, 0),
-                    # Top face.
-                    (4, 5), (5, 6), (6, 7), (7, 4),
-                    # Vertical edges.
-                    (0, 4), (1, 5), (2, 6), (3, 7),
-                ]
-                for i0, i1 in edges:
-                    pt1 = (int(pixels[i0, 0]), int(pixels[i0, 1]))
-                    pt2 = (int(pixels[i1, 0]), int(pixels[i1, 1]))
-                    # Clip to image bounds roughly.
-                    if (
-                        -500 < pt1[0] < self._img_w + 500
-                        and -500 < pt1[1] < self._img_h + 500
-                        and -500 < pt2[0] < self._img_w + 500
-                        and -500 < pt2[1] < self._img_h + 500
-                    ):
-                        cv2.line(cv_image, pt1, pt2, color, 1)
-
-                # Label with class_id and position.
-                pos = pose.position
-                label = f"{class_id} ({pos.x:.3f},{pos.y:.3f},{pos.z:.3f})"
-                label_y = max(y_min - 8, 15)
-                cv2.putText(
-                    cv_image,
-                    label,
-                    (x_min, label_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.45,
-                    color,
-                    1,
-                )
-
-                n_detections += 1
-
-        # Status bar at top.
-        status = f"Detections: {n_detections}"
-        cv2.putText(
-            cv_image,
-            status,
-            (10, 20),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (0, 255, 0),
-            1,
+        # Publish Detection3DArray.
+        det_arr.header = Header(
+            stamp=color_msg.header.stamp,
+            frame_id=self._base_frame if tf_cam_to_base else self._camera_frame,
         )
+        self._det_pub.publish(det_arr)
 
-        self._publish_annotated(cv_image, msg.header)
+        # Build annotated image (optionally with depth panel).
+        if self._show_depth_panel:
+            # Colourmap the aligned depth.
+            depth_vis = cv2.normalize(depth_raw, None, 0, 255,
+                                       cv2.NORM_MINMAX, dtype=cv2.CV_8U)
+            depth_color = cv2.applyColorMap(depth_vis, cv2.COLORMAP_JET)
+            # depth_color is BGR; overlay_rgb is RGB — convert for consistency.
+            depth_color_rgb = cv2.cvtColor(depth_color, cv2.COLOR_BGR2RGB)
+            # Resize depth to match colour image height.
+            if depth_color_rgb.shape[0] != overlay_rgb.shape[0]:
+                scale = overlay_rgb.shape[0] / depth_color_rgb.shape[0]
+                new_w = int(depth_color_rgb.shape[1] * scale)
+                depth_color_rgb = cv2.resize(depth_color_rgb, (new_w, overlay_rgb.shape[0]))
+            combined = np.hstack([overlay_rgb, depth_color_rgb])
+        else:
+            combined = overlay_rgb
 
-        # Show in OpenCV window + process GUI events.
-        cv2.imshow(_WINDOW_NAME, cv_image)
-        cv2.waitKey(1)
+        # Scale to output width.
+        if combined.shape[1] != self._output_width:
+            scale = self._output_width / combined.shape[1]
+            new_h = int(combined.shape[0] * scale)
+            combined = cv2.resize(combined, (self._output_width, new_h))
 
-    def _publish_annotated(self, cv_image, header) -> None:
-        """Publish annotated image."""
+        # Publish annotated image (convert RGB → BGR for standard encoding).
         try:
-            annotated_msg = self._bridge.cv2_to_imgmsg(cv_image, encoding="bgr8")
-            annotated_msg.header = header
+            bgr = cv2.cvtColor(combined, cv2.COLOR_RGB2BGR)
+            annotated_msg = self._bridge.cv2_to_imgmsg(bgr, encoding="bgr8")
+            annotated_msg.header = color_msg.header
             self._annotated_pub.publish(annotated_msg)
         except Exception as exc:
             self.get_logger().warn(f"Failed to publish annotated image: {exc}")
@@ -580,11 +538,12 @@ def main(args: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        cv2.destroyAllWindows()
         node.destroy_node()
         rclpy.shutdown()
     return 0
 
 
+
 if __name__ == "__main__":
     sys.exit(main())
+

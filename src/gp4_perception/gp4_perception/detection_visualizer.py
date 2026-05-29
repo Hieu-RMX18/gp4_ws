@@ -328,8 +328,7 @@ class DetectionVisualizer(Node):
         )
 
         self.get_logger().info(
-            "DetectionVisualizer node started (RGB+depth path, %d color classes).",
-            len(self._color_classes),
+            f"DetectionVisualizer node started (RGB+depth path, {len(self._color_classes)} color classes)."
         )
 
     # ------------------------------------------------------------------
@@ -535,11 +534,12 @@ def main(args: list[str] | None = None) -> int:
     node = DetectionVisualizer()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
     return 0
 
 

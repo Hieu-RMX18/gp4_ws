@@ -1,4 +1,4 @@
-"""Wave 3: hand-eye solver reduced to PARK (primary) + DANIILIDIS (cross-check)."""
+"""Hand-eye solver reduced to PARK (primary) + DANIILIDIS (cross-check)."""
 
 import cv2
 import numpy as np

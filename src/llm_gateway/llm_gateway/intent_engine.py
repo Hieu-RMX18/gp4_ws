@@ -2618,7 +2618,7 @@ class DrawRouterMixin:
         start_pose = payload.get("start_pose")
         if not isinstance(start_pose, dict):
             raise ValueError(
-                f"{macro_name} requires start_pose; current-pose-aware macros are not implemented."
+                f"{macro_name} requires start_pose (legacy path; use draw_shape/draw_text with workplane.mode=tool for auto-pose)."
             )
         return self._resolve_target_pose(
             target_pose=start_pose,

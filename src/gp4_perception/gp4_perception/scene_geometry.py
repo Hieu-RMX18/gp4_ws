@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 
 import numpy as np
 from geometry_msgs.msg import Point, Pose, Quaternion, Vector3
@@ -46,6 +47,40 @@ def _read_xyz(cloud: PointCloud2) -> np.ndarray | None:
         return None
 
 
+def _pointcloud2_to_array(cloud: PointCloud2, fields: tuple[str, ...]) -> np.ndarray:
+    """Read PointCloud2 into a structured array without filtering fields.
+
+    This mirrors ``sensor_msgs_py.point_cloud2.read_points`` but keeps the
+    packed RGB field untouched so its float bit-pattern is not interpreted as a
+    numeric value for NaN filtering.
+    """
+    from sensor_msgs_py.point_cloud2 import dtype_from_fields
+
+    try:
+        dtype = dtype_from_fields(cloud.fields, point_step=cloud.point_step)
+    except TypeError:
+        # Compatibility with older sensor_msgs_py versions that did not expose
+        # the point_step keyword. Preserve PointCloud2 padding explicitly so
+        # each record advances by cloud.point_step bytes.
+        base_dtype = dtype_from_fields(cloud.fields)
+        dtype = np.dtype(
+            {
+                "names": base_dtype.names,
+                "formats": [base_dtype.fields[name][0] for name in base_dtype.names],
+                "offsets": [base_dtype.fields[name][1] for name in base_dtype.names],
+                "itemsize": cloud.point_step,
+            }
+        )
+    points = np.ndarray(
+        shape=(cloud.width * cloud.height,),
+        dtype=dtype,
+        buffer=cloud.data,
+    )
+    if bool(sys.byteorder != "little") != bool(cloud.is_bigendian):
+        points = points.byteswap(inplace=False)
+    return points[list(fields)].copy()
+
+
 def _unpack_packed_rgb(
     arr: np.ndarray, field: str
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -53,15 +88,17 @@ def _unpack_packed_rgb(
 
     RealSense (and PCL) pack colour into a single 32-bit value ``0x00RRGGBB``
     (``rgb``) or ``0xAARRGGBB`` (``rgba``), commonly stored as a ``float32``
-    whose bit pattern is the integer. Extraction via integer shifts is
-    endian-safe because ``read_points`` already produces the host-order value.
+    whose bit pattern is the integer.
+
+    Important: do **not** ask ``read_points(..., skip_nans=True)`` to filter this
+    field. Many valid packed colour bit-patterns are NaN when interpreted as a
+    float32, so filtering all fields silently drops valid coloured points. Mask
+    NaNs on XYZ only after decoding.
 
     Returns ``(xyz Nx3 float32, rgb Nx3 uint8)`` in R, G, B order.
     """
     arr = np.asarray(arr)
-    xyz = np.column_stack(
-        [arr["x"], arr["y"], arr["z"]]
-    ).astype(np.float32)
+    xyz = np.column_stack([arr["x"], arr["y"], arr["z"]]).astype(np.float32)
     packed = arr[field]
     if packed.dtype.kind == "f":
         u32 = np.ascontiguousarray(packed, dtype=np.float32).view(np.uint32)
@@ -71,7 +108,8 @@ def _unpack_packed_rgb(
     g = ((u32 >> 8) & 0xFF).astype(np.uint8)
     b = (u32 & 0xFF).astype(np.uint8)
     rgb = np.column_stack([r, g, b])
-    return xyz, rgb
+    valid_xyz = np.isfinite(xyz).all(axis=1)
+    return xyz[valid_xyz], rgb[valid_xyz]
 
 
 def _read_xyz_rgb(cloud: PointCloud2) -> tuple[np.ndarray | None, np.ndarray | None]:
@@ -99,13 +137,7 @@ def _read_xyz_rgb(cloud: PointCloud2) -> tuple[np.ndarray | None, np.ndarray | N
 
         rgb_field = "rgb" if "rgb" in names else ("rgba" if "rgba" in names else None)
         if rgb_field is not None:
-            arr = np.asarray(
-                read_points(
-                    cloud,
-                    field_names=("x", "y", "z", rgb_field),
-                    skip_nans=True,
-                )
-            )
+            arr = _pointcloud2_to_array(cloud, ("x", "y", "z", rgb_field))
             if arr.size == 0:
                 return None, None
             return _unpack_packed_rgb(arr, rgb_field)
@@ -116,7 +148,11 @@ def _read_xyz_rgb(cloud: PointCloud2) -> tuple[np.ndarray | None, np.ndarray | N
         xyz = np.array([(p[0], p[1], p[2]) for p in pts], dtype=np.float32)
         return xyz, None
     except Exception as exc:
-        _LOGGER.debug("point_cloud2 rgb read failed (non-fatal): %s", exc)
+        _LOGGER.warning(
+            "point_cloud2 XYZ/RGB decode failed; falling back to XYZ-only: %s",
+            exc,
+            exc_info=True,
+        )
         xyz = _read_xyz(cloud)
         return xyz, None
 
@@ -307,7 +343,8 @@ def _dominant_color_voting(rgb_pixels: np.ndarray | None) -> tuple[str, float]:
         hsv = cv2.cvtColor(
             rgb_pixels.reshape(-1, 1, 3).astype(np.uint8), cv2.COLOR_RGB2HSV
         ).reshape(-1, 3)
-    except Exception:
+    except Exception as exc:
+        _LOGGER.warning("HSV color voting failed: %s", exc, exc_info=True)
         return "unknown", 0.0
 
     h = hsv[:, 0].astype(np.int32)
@@ -347,9 +384,10 @@ def _dominant_color_voting(rgb_pixels: np.ndarray | None) -> tuple[str, float]:
     return "unknown", 0.0
 
 
-# Multi-factor confidence weights. Temporal weight is folded in only when a
-# temporal score is supplied (Wave 2); otherwise the remaining weights are
-# renormalised so a perfect color/geometry/depth detection scores 1.0.
+# Multi-factor confidence weights. The temporal term is supplied by
+# TemporalTracker (see scene_processor.py); when omitted the remaining
+# weights are renormalised so a perfect color/geometry/depth detection
+# scores 1.0.
 _CONF_WEIGHTS = {"color": 0.35, "geometry": 0.25, "depth": 0.20, "temporal": 0.20}
 
 
@@ -388,12 +426,69 @@ def _max_dim_m(dims) -> float:
     return max(float(dims.x), float(dims.y), float(dims.z))
 
 
-def _semantic_class_id(color: str, shape: str, dims) -> str:
+def _has_chromatic_border(
+    rgb_pixels: np.ndarray | None,
+    cluster: np.ndarray | None = None,
+    border_fraction: float = 0.20,
+    min_ratio: float = 0.25,
+) -> tuple[str | None, float]:
+    """Detect whether a cluster's border pixels carry a chromatic colour.
+
+    When a white/achromatic object has a coloured border (e.g. blue-bordered
+    rectangle), the overall dominant-colour vote returns "white" because the
+    interior pixels overwhelm the border.  This helper isolates *edge* pixels
+    and runs HSV voting on them alone.
+
+    Returns ``(color_name, ratio)`` of the strongest chromatic border colour,
+    or ``(None, 0.0)`` if no significant chromatic border is found.
+    """
+    if rgb_pixels is None or len(rgb_pixels) < 10:
+        return None, 0.0
+
+    # If no 3D cluster is provided, use an index-based edge heuristic.
+    if cluster is not None and len(cluster) == len(rgb_pixels):
+        centroid = cluster.mean(axis=0)
+        dists = np.linalg.norm(cluster - centroid, axis=1)
+        if dists.max() < 1e-9:
+            return None, 0.0
+        # Border = outermost `border_fraction` of points by distance.
+        threshold = np.quantile(dists, 1.0 - border_fraction)
+        border_mask = dists >= threshold
+    else:
+        # Fallback: use first and last border_fraction of pixel indices.
+        n = len(rgb_pixels)
+        k = max(1, int(n * border_fraction / 2))
+        border_mask = np.zeros(n, dtype=bool)
+        border_mask[:k] = True
+        border_mask[-k:] = True
+
+    border_rgb = rgb_pixels[border_mask]
+    if len(border_rgb) < 5:
+        return None, 0.0
+
+    # Run HSV voting on border pixels only.
+    border_color, border_conf = _dominant_color_voting(border_rgb)
+    if border_color in {"unknown", "white", "gray", "black"}:
+        return None, 0.0
+    if border_conf >= min_ratio:
+        return border_color, border_conf
+    return None, 0.0
+
+
+def _semantic_class_id(
+    color: str,
+    shape: str,
+    dims,
+    rgb_pixels: np.ndarray | None = None,
+    cluster: np.ndarray | None = None,
+) -> str:
     """Map raw perception attributes to human/LLM-friendly semantic class_id.
 
-    Deadline policy:
+    Policy:
     - Use *color* as the primary discriminator for the known fixed object set.
     - Use *shape* to avoid mapping red boxes as apples (sphere vs non-sphere).
+    - When *color* is achromatic (white/gray) and *shape* is non-sphere,
+      check border pixels for a chromatic colour (dual-color analysis).
     - Keep *dims* available for later refinement but do not depend on size yet.
     """
     color = (color or "unknown").lower()
@@ -413,10 +508,16 @@ def _semantic_class_id(color: str, shape: str, dims) -> str:
         return "red_box"
 
     # -- Non-sphere blue objects → blue_rectangle -----------------------
-    # TODO: if dominant color is *white* but cluster contains blue border
-    #       pixels, map to blue_rectangle via dual-color analysis.
     if color == "blue" and shape in {"box", "flat", "unknown"}:
         return "blue_rectangle"
+
+    # -- White/gray non-sphere: check for chromatic border (dual-color) --
+    if color in {"white", "gray"} and shape in {"box", "flat", "unknown"}:
+        border_color, _ = _has_chromatic_border(rgb_pixels, cluster)
+        if border_color == "blue":
+            return "blue_rectangle"
+        if border_color is not None:
+            return f"{border_color}_{shape}"
 
     # -- Fallback: colour_shape -----------------------------------------
     if color != "unknown":

@@ -1,4 +1,4 @@
-"""Wave 1 RGB-D detection fix: color voting, RANSAC normal gate,
+"""RGB-D detection: color voting, RANSAC normal gate,
 index-tracking downsample/cluster, multi-factor confidence."""
 
 import numpy as np
@@ -8,8 +8,10 @@ from gp4_perception.scene_geometry import (
     _dominant_color_voting,
     _euclidean_cluster_indices,
     _euclidean_clusters,
+    _has_chromatic_border,
     _ransac_plane,
     _ransac_plane_fit,
+    _semantic_class_id,
     _voxel_downsample,
     _voxel_downsample_indices,
 )
@@ -142,3 +144,68 @@ class TestConfidenceScore:
     def test_bounded_unit_interval(self):
         assert 0.0 <= _confidence_score(0.0, 0.0, 0.0) <= 1.0
         assert 0.0 <= _confidence_score(0.5, 0.7, 0.3, 0.6) <= 1.0
+
+
+class TestDualColorBorderAnalysis:
+    """Blue-bordered white objects should be identified as blue_rectangle."""
+
+    def test_white_interior_blue_border_maps_to_blue_rectangle(self):
+        # Simulate a white box with blue border: 80% white, 20% blue.
+        # Arrange points so blue pixels are on the edge (outermost).
+        n_white = 80
+        n_blue = 20
+        cluster = np.zeros((n_white + n_blue, 3), dtype=np.float32)
+        # Interior white points: near center
+        cluster[:n_white] = np.random.rand(n_white, 3).astype(np.float32) * 0.01
+        # Border blue points: further from center
+        cluster[n_white:] = (
+            np.random.rand(n_blue, 3).astype(np.float32) * 0.005 + 0.03
+        )
+        rgb = np.vstack([
+            _solid_patch((245, 245, 245), n_white),
+            _solid_patch((20, 40, 220), n_blue),
+        ])
+
+        # Create a mock dims object.
+        class Dims:
+            x = 0.05
+            y = 0.03
+            z = 0.01
+
+        class_id = _semantic_class_id("white", "box", Dims(), rgb_pixels=rgb, cluster=cluster)
+        assert class_id == "blue_rectangle"
+
+    def test_pure_white_stays_white(self):
+        rgb = _solid_patch((245, 245, 245), 100)
+        cluster = np.random.rand(100, 3).astype(np.float32) * 0.03
+
+        class Dims:
+            x = 0.05
+            y = 0.03
+            z = 0.01
+
+        class_id = _semantic_class_id("white", "box", Dims(), rgb_pixels=rgb, cluster=cluster)
+        assert class_id == "white_box"
+
+    def test_has_chromatic_border_returns_none_for_uniform_white(self):
+        rgb = _solid_patch((245, 245, 245), 100)
+        cluster = np.random.rand(100, 3).astype(np.float32) * 0.03
+        color, ratio = _has_chromatic_border(rgb, cluster)
+        assert color is None
+        assert ratio == 0.0
+
+    def test_has_chromatic_border_detects_blue(self):
+        n_white = 80
+        n_blue = 20
+        cluster = np.zeros((n_white + n_blue, 3), dtype=np.float32)
+        cluster[:n_white] = np.random.rand(n_white, 3).astype(np.float32) * 0.01
+        cluster[n_white:] = (
+            np.random.rand(n_blue, 3).astype(np.float32) * 0.005 + 0.03
+        )
+        rgb = np.vstack([
+            _solid_patch((245, 245, 245), n_white),
+            _solid_patch((20, 40, 220), n_blue),
+        ])
+        color, ratio = _has_chromatic_border(rgb, cluster)
+        assert color == "blue"
+        assert ratio > 0.0

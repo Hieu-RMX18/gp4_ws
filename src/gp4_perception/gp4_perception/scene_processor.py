@@ -302,7 +302,7 @@ class SceneProcessor(Node):
             rgb = rgb[out_idx]
         pts_after_plane = len(pts)
         if pts_after_plane == 0:
-            self.get_logger().info(
+            self.get_logger().debug(
                 f"[perception] pts_raw={pts_raw} pts_roi={pts_roi} "
                 f"pts_after_voxel={pts_after_voxel} pts_after_plane=0"
             )
@@ -312,7 +312,7 @@ class SceneProcessor(Node):
         cluster_indices = _euclidean_cluster_indices(
             pts, self._cluster_tol, self._cluster_min, self._cluster_max
         )
-        self.get_logger().info(
+        self.get_logger().debug(
             f"[perception] pts_raw={pts_raw} pts_valid_depth={pts_valid_depth} "
             f"pts_roi={pts_roi} pts_after_voxel={pts_after_voxel} "
             f"pts_after_plane={pts_after_plane} clusters={len(cluster_indices)}"
@@ -334,7 +334,7 @@ class SceneProcessor(Node):
             # 4a. Contour filter — reject fragmented/noisy clusters.
             contour_ok, contour_props = _contour_filter(cluster)
             if not contour_ok:
-                self.get_logger().info(
+                self.get_logger().debug(
                     f"[perception] cluster[{i}] rejected reject_reason=contour "
                     f"solidity={(contour_props['solidity'] if contour_props else 0.0):.2f}"
                 )
@@ -362,7 +362,7 @@ class SceneProcessor(Node):
             self._record_depth_tier(noise_mm, depth_quality)
             thr_str = f"{threshold_used:.2f}" if threshold_used is not None else "n/a"
             if depth_quality == "REJECT":
-                self.get_logger().info(
+                self.get_logger().debug(
                     f"[perception] cluster[{i}] rejected reject_reason=depth "
                     f"depth_noise_mm={noise_mm:.2f} threshold_used={thr_str} "
                     f"dist={dist:.2f} ({depth_reason})"
@@ -381,7 +381,7 @@ class SceneProcessor(Node):
             color_name, color_conf = _dominant_color_voting(cluster_rgb)
             if self._debug_color:
                 diag = _color_diagnostics(cluster_rgb)
-                self.get_logger().info(
+                self.get_logger().debug(
                     f"[perception] cluster[{i}] diag n={diag.get('n')} "
                     f"rgb_min={diag.get('rgb_min')} rgb_max={diag.get('rgb_max')} "
                     f"rgb_mean={diag.get('rgb_mean')} "
@@ -399,7 +399,7 @@ class SceneProcessor(Node):
             )
             depth_conf = float(np.clip(1.0 - noise_mm / 15.0, 0.0, 1.0))
             score = _confidence_score(color_conf, geometry_conf, depth_conf)
-            self.get_logger().info(
+            self.get_logger().debug(
                 f"[perception] cluster[{i}] points={len(cluster)} "
                 f"color={color_name} color_score={color_conf:.2f} "
                 f"geometry_score={geometry_conf:.2f} depth_score={depth_conf:.2f} "
@@ -414,7 +414,7 @@ class SceneProcessor(Node):
                     if color_name == "unknown"
                     else "rejected_confidence"
                 )
-                self.get_logger().info(
+                self.get_logger().debug(
                     f"[perception] cluster[{i}] rejected reject_reason={reason} "
                     f"total={score:.2f} < min={self._min_publish_confidence:.2f} "
                     f"color={color_name}"

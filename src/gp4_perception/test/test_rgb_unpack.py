@@ -1,9 +1,11 @@
 """Packed RGB/RGBA decode from PointCloud2 + per-cluster color diagnostics."""
 
 import numpy as np
+from sensor_msgs.msg import PointCloud2, PointField
 
 from gp4_perception.scene_geometry import (
     _color_diagnostics,
+    _read_xyz_rgb,
     _unpack_packed_rgb,
 )
 
@@ -57,6 +59,41 @@ class TestUnpackPackedRgb:
         arr["rgba"] = u32
         _, rgb = _unpack_packed_rgb(arr, "rgba")
         assert rgb[0].tolist() == [200, 100, 50]
+
+
+class TestReadPointCloud2Rgb:
+    def test_reads_packed_rgb_pointcloud2(self):
+        # Match RealSense/PCL layout: x,y,z float32 + rgb float32 bit-packed.
+        colors = [(255, 0, 0), (0, 0, 255)]
+        packed = np.array(
+            [(r << 16) | (g << 8) | b for (r, g, b) in colors], dtype=np.uint32
+        ).view(np.float32)
+        data = np.zeros(
+            2,
+            dtype=[("x", np.float32), ("y", np.float32), ("z", np.float32), ("rgb", np.float32)],
+        )
+        data["x"] = [0.1, 0.2]
+        data["z"] = [0.3, 0.4]
+        data["rgb"] = packed
+
+        cloud = PointCloud2()
+        cloud.height = 1
+        cloud.width = 2
+        cloud.is_bigendian = False
+        cloud.is_dense = False
+        cloud.point_step = data.dtype.itemsize
+        cloud.row_step = cloud.point_step * cloud.width
+        cloud.fields = [
+            PointField(name="x", offset=data.dtype.fields["x"][1], datatype=PointField.FLOAT32, count=1),
+            PointField(name="y", offset=data.dtype.fields["y"][1], datatype=PointField.FLOAT32, count=1),
+            PointField(name="z", offset=data.dtype.fields["z"][1], datatype=PointField.FLOAT32, count=1),
+            PointField(name="rgb", offset=data.dtype.fields["rgb"][1], datatype=PointField.FLOAT32, count=1),
+        ]
+        cloud.data = data.tobytes()
+
+        xyz, rgb = _read_xyz_rgb(cloud)
+        np.testing.assert_allclose(xyz, [[0.1, 0.0, 0.3], [0.2, 0.0, 0.4]])
+        assert rgb.tolist() == [[255, 0, 0], [0, 0, 255]]
 
 
 class TestColorDiagnostics:

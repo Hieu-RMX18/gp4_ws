@@ -32,12 +32,12 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "depth_profile",
-                default_value="640x480x15",
+                default_value="848x480x30",
                 description="Depth stream resolution for calibration",
             ),
             DeclareLaunchArgument(
                 "color_profile",
-                default_value="640x480x15",
+                default_value="1280x720x30",
                 description="Color stream resolution for Charuco detection",
             ),
             # Camera node — same namespace strategy as camera.launch.py

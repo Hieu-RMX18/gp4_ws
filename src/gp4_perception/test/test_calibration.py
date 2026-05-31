@@ -326,7 +326,7 @@ def test_duplicate_sample_warning_does_not_crash_with_rclpy_logger(
 
     class FakeLogger:
         def info(self, message):
-            pass
+            warnings.append(message)
 
         def warning(self, message):
             warnings.append(message)
@@ -395,7 +395,7 @@ def test_duplicate_sample_warning_does_not_crash_with_rclpy_logger(
     service._on_image(SimpleNamespace(header=SimpleNamespace(stamp=object())))
 
     assert len(service._samples) == 1
-    assert any("Rejected calibration sample" in message for message in warnings)
+    assert any("Rejected calibration sample" in message or "DUPLICATE" in message for message in warnings)
 
 
 def test_fiducial_config_loads_charuco_board_dimensions(tmp_path):

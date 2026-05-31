@@ -62,6 +62,12 @@ def generate_launch_description() -> LaunchDescription:
                 name="detection_visualizer",
                 output="screen",
             ),
+            Node(
+                package="gp4_perception",
+                executable="preprocessing_visualizer",
+                name="preprocessing_visualizer",
+                output="screen",
+            ),
         ]
     )
 

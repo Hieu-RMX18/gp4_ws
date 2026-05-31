@@ -1,4 +1,4 @@
-"""Wave 2 temporal voting: sliding-window stability, jitter rejection,
+"""Temporal voting: sliding-window stability, jitter rejection,
 class consistency."""
 
 from gp4_perception.temporal_tracker import TemporalTracker

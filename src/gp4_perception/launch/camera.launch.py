@@ -31,6 +31,12 @@ def generate_launch_description() -> LaunchDescription:
     hole_filling_filter = ParameterValue(
         LaunchConfiguration("hole_filling_filter"), value_type=bool
     )
+    pointcloud_stream_filter = ParameterValue(
+        LaunchConfiguration("pointcloud_stream_filter"), value_type=int
+    )
+    pointcloud_stream_index_filter = ParameterValue(
+        LaunchConfiguration("pointcloud_stream_index_filter"), value_type=int
+    )
 
     return LaunchDescription(
         [
@@ -80,6 +86,16 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="true",
                 description="Enable hole-filling filter (reduces depth dropouts/noise)",
             ),
+            DeclareLaunchArgument(
+                "pointcloud_stream_filter",
+                default_value="2",
+                description="RealSense pointcloud texture stream (2=color on realsense-ros Humble)",
+            ),
+            DeclareLaunchArgument(
+                "pointcloud_stream_index_filter",
+                default_value="0",
+                description="RealSense pointcloud texture stream index",
+            ),
             # --- RealSense camera node ---
             Node(
                 package="realsense2_camera",
@@ -111,8 +127,11 @@ def generate_launch_description() -> LaunchDescription:
                         # Alignment and sync
                         "align_depth.enable": align_depth,
                         "enable_sync": enable_sync,
-                        # Point cloud
+                        # Point cloud. stream_filter=2 selects the color stream
+                        # as texture source for packed RGB in PointCloud2.
                         "pointcloud.enable": pointcloud,
+                        "pointcloud.stream_filter": pointcloud_stream_filter,
+                        "pointcloud.stream_index_filter": pointcloud_stream_index_filter,
                         # Post-processing filters
                         "spatial_filter.enable": spatial_filter,
                         "temporal_filter.enable": temporal_filter,

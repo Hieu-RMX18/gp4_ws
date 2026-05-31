@@ -6,7 +6,6 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 PROFILE_VALUES = (
-    "640x480x15",
     "848x480x30",
     "1280x720x30",
 )

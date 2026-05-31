@@ -39,6 +39,60 @@ ros2 topic info /camera/depth/color/points -v
 # Confirm Reliability=BEST_EFFORT, Durability=VOLATILE (SensorDataQoS)
 ```
 
+### Check camera topics in detail
+
+```bash
+# List all camera-related topics
+ros2 topic list | rg camera
+
+# Check topic publish rate
+ros2 topic hz /camera/color/image_raw
+ros2 topic hz /camera/depth/color/points
+
+# Echo camera info (intrinsics) — single message
+ros2 topic echo /camera/color/camera_info --once
+
+# Echo depth image header — single message
+ros2 topic echo /camera/depth/image_rect_raw --once
+```
+
+### TF2 echo — tool0 / base_link / camera
+
+Verify the transform chain between robot frames and camera frames:
+
+```bash
+# base_link → tool0 (robot TCP)
+ros2 run tf2_ros tf2_echo base_link tool0
+
+# base_link → camera_link (camera mount position)
+ros2 run tf2_ros tf2_echo base_link camera_link
+
+# base_link → camera_color_optical_frame (used by detections)
+ros2 run tf2_ros tf2_echo base_link camera_color_optical_frame
+
+# tool0 → camera_link (camera relative to TCP)
+ros2 run tf2_ros tf2_echo tool0 camera_link
+
+# camera_link → camera_color_optical_frame (internal camera TF)
+ros2 run tf2_ros tf2_echo camera_link camera_color_optical_frame
+```
+
+### TF tree inspection
+
+```bash
+# Generate full TF tree PDF (saves frames.pdf in current directory)
+ros2 run tf2_tools view_frames
+
+# Echo live TF and static TF topics
+ros2 topic echo /tf --once
+ros2 topic echo /tf_static --once
+```
+
+> **Tip:** If any `tf2_echo` prints `Could not transform ...` or `Lookup would
+> require extrapolation into the future`, the source node is either not running
+> or publishing on a different `ROS_DOMAIN_ID`.
+
+
 ## Calibration
 
 The short path is below. Use the full runbook for preflight, TF checks, safety

@@ -35,7 +35,6 @@ An end-to-end, deterministic LLM-driven motion planning and execution system for
 - **Advanced Motion Core:** Collision-aware planning via MoveIt 2, TRAC-IK inverse kinematics, and smooth trajectory generation (TOTG + Ruckig). Execution logic is split into focused modules per primitive type.
 - **Hardened Execution Pipeline:** Connects via MotoROS2 driver. Separates motion dispatch, state queries, and hardware I/O into distinct execution paths.
 - **HMI Web Interface:** React 18 + FastAPI bridge providing telemetry monitoring, real-time observability console, command ingress, jog pendant, and session management.
-- **CI/CD Validation:** GitHub Actions with real tool invocations (colcon build/test, pytest, clang-tidy, vulture) and safety chain validation.
 
 ---
 
@@ -261,97 +260,37 @@ cd ~/gp4_ws/hmi/frontend && npm run dev
 
 ### Camera Perception: Run D435i and Detect Objects
 
-Use this flow to bring up the Intel RealSense D435i, confirm ROS 2 topics are live, and test object detection from point-cloud clustering. This is perception-only; it does not command robot motion.
-
-#### 1. Terminal 1 — launch camera only
+Perception-only — does not command robot motion. Full runbook: [`src/gp4_perception/README.md`](src/gp4_perception/README.md).
 
 ```bash
-cd ~/gp4_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-export ROS_DOMAIN_ID=0
+# Camera only
+ros2 launch gp4_perception camera.launch.py serial:=943222073917
 
-ros2 launch gp4_perception camera.launch.py \
-  serial:=943222073917 \
-  depth_profile:=848x480x30 \
-  color_profile:=1280x720x30 \
-  align_depth:=true \
-  enable_sync:=true \
-  pointcloud:=true
-```
-
-Keep this terminal running. Do not type topic names such as `/camera/color/image_raw` directly into Bash; topic names must be used through `ros2 topic ...` commands.
-
-#### 2. Terminal 2 — verify camera topics and parameters
-
-```bash
-cd ~/gp4_ws
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-export ROS_DOMAIN_ID=0
-
-ros2 node list | rg "camera|realsense"
-ros2 topic list | rg camera
-ros2 topic info /camera/depth/color/points -v
-ros2 topic hz /camera/color/image_raw
-ros2 topic hz /camera/depth/color/points
-ros2 topic echo /camera/color/camera_info --once
-```
-
-Expected topics:
-
-- `/camera/color/image_raw`
-- `/camera/color/camera_info`
-- `/camera/depth/color/points`
-
-Expected QoS for RealSense image/depth streams: `BEST_EFFORT` reliability and `VOLATILE` durability. If `ros2 topic list | rg camera` prints nothing, the camera node is not running or the checking terminal is using a different `ROS_DOMAIN_ID` or RMW implementation.
-
-#### 3. Terminal 1 — launch full perception stack for object detection
-
-Stop the camera-only launch with `Ctrl+C`, then start the full stack:
-
-```bash
+# Full perception stack (camera + detection)
 ros2 launch gp4_perception perception_full.launch.py serial:=943222073917
 ```
 
-This starts:
+`perception_full.launch.py` starts:
 
-- `realsense2_camera_node` — publishes color, depth, aligned point cloud, and camera TF.
-- `scene_processor` — subscribes to `/camera/depth/color/points` and `/camera/color/camera_info`, crops the workspace ROI, removes the dominant plane, clusters objects, and publishes detections.
-- `tf_publisher` — publishes the configured camera-to-base transform.
-- `detection_visualizer` — overlays 3D detections onto the color image and publishes `/perception/annotated_image`.
+- `realsense2_camera_node` — color, depth, aligned point cloud, camera TF
+- `scene_processor` — ROI crop, plane removal, Euclidean clustering, MoveIt collision objects, `/perception/status`
+- `detection_visualizer` — RGB+depth HSV contour detection, temporal tracking, publishes `/perception/detections` (Detection3DArray), `/perception/annotated_image`, and debug topics
+- `preprocessing_visualizer` — optional debug overlay node
+- `calibration_service` / `tf_publisher` — hand-eye extrinsics and camera→base_link TF
 
-#### 4. Terminal 2 — observe detections
+Key output topics:
 
-Place a rigid object on the visible table area, then run:
-
-```bash
-ros2 topic echo /perception/status --once
-ros2 topic echo /perception/detections --once
-ros2 topic hz /perception/detections
-ros2 topic echo /perception/annotated_image --once
-```
-
-For RViz visualization:
+| Topic | Publisher | Type |
+|-------|-----------|------|
+| `/perception/detections` | `detection_visualizer` | Detection3DArray |
+| `/perception/annotated_image` | `detection_visualizer` | Image |
+| `/perception/debug_dashboard_image` | `detection_visualizer` | Image |
+| `/perception/zoom_roi_image` | `detection_visualizer` | Image |
+| `/perception/status` | `scene_processor` | String |
 
 ```bash
 rviz2 -d src/gp4_perception/config/perception.rviz
 ```
-
-Detection output is `vision_msgs/msg/Detection3DArray` in `base_link`. The current detector is geometric: it clusters point-cloud objects and labels them by rough color and shape, for example `red_box`, `blue_sphere`, or `cylinder`.
-
-#### 5. Troubleshooting quick checks
-
-| Symptom | Check |
-|---------|-------|
-| `bash: /camera/...: No such file or directory` | A topic name was typed as a shell command. Use `ros2 topic echo /camera/...` or `ros2 topic hz /camera/...`. |
-| `topic ... does not appear to be published yet` | Confirm the launch terminal is still running, then compare `ROS_DOMAIN_ID` and `RMW_IMPLEMENTATION` in both terminals. |
-| No D435i device appears | Run `rs-enumerate-devices` and `lsusb | rg "8086|Intel|RealSense"`; fix USB3 cable, power, or udev before debugging ROS. |
-| `/camera/depth/color/points` missing | Launch with `pointcloud:=true`, `align_depth:=true`, and `enable_sync:=true`. |
-| Detections are empty | Confirm the object lies inside `src/gp4_perception/config/perception.yaml` workspace ROI and that `tf_publisher` provides a transform to `base_link`. |
-| Annotated image only says waiting for TF | Check `ros2 run tf2_ros tf2_echo camera_color_optical_frame base_link`. |
 
 ### Joint Jogging (Experimental)
 
@@ -363,9 +302,7 @@ ros2 launch jog_pendant jog_pendant_experimental.launch.py
 
 ## Example Commands
 
-Use the HMI command interface or the `ReviewIntent` service path. The legacy
-`gp4_cmd` helper CLI and direct raw-command topic path were removed during the
-W8 cleanup; do not publish raw motion payloads directly from operator text.
+Use the HMI command interface or the `/llm_gateway/review_intent` service path.
 
 ```bash
 # Start the command-capable sim stack first.
@@ -462,10 +399,6 @@ export ROS_DOMAIN_ID=0
 ---
 
 *Research/thesis/demo system — not ISO 10218 production certified. Treat as real-hardware-adjacent at all times.*
-
-## Implementation History
-
-### W1: Safety Guards & CI/CD Hardening (COMPLETE)
 
 Implemented multi-stage safety guard system:
 - **JointPositionGuard:** 3-stage placement (A: pre-downsample in PrimitiveRouterDispatch, B: QualityGate, C: hw_adapter dispatch boundary)

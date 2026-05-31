@@ -23,6 +23,7 @@ pytestmark = [
 _INTERFACES_AVAILABLE = False
 try:
     import interfaces  # noqa: F401
+
     _INTERFACES_AVAILABLE = True
 except ImportError:
     pass
@@ -33,7 +34,6 @@ _SKIP_REASON = "requires colcon-sourced workspace with built interfaces"
 # Conditional imports — only available when interfaces is on PYTHONPATH.
 # Tests are skipped before these are referenced when _INTERFACES_AVAILABLE is False.
 if _INTERFACES_AVAILABLE:
-    import rclpy
     from rclpy.parameter import Parameter
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
@@ -52,16 +52,23 @@ class ImmediateFuture:
         return self._result
 
 
-def test_gateway_full_flow_uses_sanitized_json(openai_payload):
+def test_gateway_full_flow_uses_sanitized_json():
     node = LLMGatewayNode()
-    node.set_parameters([Parameter("auto_clear_unimplemented_approval", value=True)])
+    node.set_parameters([Parameter("runtime_mode", value="sim")])
     statuses = []
     debug_messages = []
     command_messages = []
     node.publish_status = lambda status: statuses.append(status)
-    node._llm_client.generate_response = MagicMock(return_value=openai_payload)
+    semantic_ir_payload = json.dumps(
+        {
+            "intent": "absolute_move_lin",
+            "target_pose": {"position": {"x": 0.30, "y": 0.0, "z": 0.30}},
+            "reference_frame": "base_link",
+        }
+    )
+    node._llm_client.generate_response = MagicMock(return_value=semantic_ir_payload)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
     node._command_publisher.publish = MagicMock(
         side_effect=lambda msg: command_messages.append(json.loads(msg.data))
@@ -77,7 +84,6 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
             "velocity_scale": 0.06,
             "acceleration_scale": 0.06,
             "planner_id": "PILZ_LIN",
-            "require_approval": True,
         }
     )
     node._validate_client.wait_for_service = MagicMock(return_value=True)
@@ -95,17 +101,17 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
         accepted=True,
         get_result_async=lambda: ImmediateFuture(mock_exec_result),
     )
-    node._execute_client.send_goal_async = MagicMock(return_value=ImmediateFuture(mock_goal_handle))
+    node._execute_client.send_goal_async = MagicMock(
+        return_value=ImmediateFuture(mock_goal_handle)
+    )
 
     node.process_intent("di chuyển thẳng tới x 0.30 y 0.0 z 0.30")
 
     goal = node._execute_client.send_goal_async.call_args.args[0]
     assert goal.velocity_scale == 0.06
-    assert goal.require_approval is False
     # Full flow now completes: debug_messages has both 'validated' and 'succeeded'
     validated_msg = next(m for m in debug_messages if m["status"] == "validated")
     assert validated_msg["validated_command"]["velocity_scale"] == 0.06
-    assert validated_msg["validated_command"]["require_approval"] is False
     assert "dispatched" in statuses
     assert command_messages[0]["primitive_type"] == "LIN"
     assert command_messages[0]["velocity_scale"] == 0.06
@@ -113,59 +119,34 @@ def test_gateway_full_flow_uses_sanitized_json(openai_payload):
     node.destroy_node()
 
 
-def test_gateway_clears_require_approval_when_auto_clear_disabled(openai_payload):
+def test_gateway_plan_only_does_precheck_without_execution():
     node = LLMGatewayNode()
     debug_messages = []
-    node._llm_client.generate_response = MagicMock(return_value=openai_payload)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
-    )
-
-    sanitized_json = json.dumps(
-        {
-            "primitive_type": "HOME",
-            "velocity_scale": 0.06,
-            "acceleration_scale": 0.06,
-            "planner_id": "PILZ_PTP",
-            "require_approval": True,
-        }
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
     node._validate_client.wait_for_service = MagicMock(return_value=True)
     node._validate_client.call_async = MagicMock(
         return_value=ImmediateFuture(
-            SimpleNamespace(valid=True, reason="OK", sanitized_json=sanitized_json)
+            SimpleNamespace(
+                valid=True,
+                reason="",
+                sanitized_json=json.dumps(
+                    {
+                        "primitive_type": "HOME",
+                        "velocity_scale": 0.06,
+                        "acceleration_scale": 0.06,
+                        "planner_id": "PILZ_PTP",
+                        "plan_only": True,
+                    }
+                ),
+            )
         )
     )
-    node._execute_client.server_is_ready = MagicMock(return_value=True)
-    # Mock goal handle must have .accepted and .get_result_async() like a real rclpy goal handle
-    mock_exec_result = SimpleNamespace(
-        result=SimpleNamespace(success=True, message="ok", execution_time_sec=0.1)
+    command_messages = []
+    node._command_publisher.publish = MagicMock(
+        side_effect=lambda msg: command_messages.append(json.loads(msg.data))
     )
-    mock_goal_handle = SimpleNamespace(
-        accepted=True,
-        get_result_async=lambda: ImmediateFuture(mock_exec_result),
-    )
-    node._execute_client.send_goal_async = MagicMock(return_value=ImmediateFuture(mock_goal_handle))
-
-    node.process_intent("di chuyển về home")
-
-    goal = node._execute_client.send_goal_async.call_args.args[0]
-    assert goal.require_approval is False
-    # Full flow now completes: find 'validated' message specifically
-    validated_msg = next(m for m in debug_messages if m["status"] == "validated")
-    assert validated_msg["validated_command"]["require_approval"] is False
-
-    node.destroy_node()
-
-
-def test_gateway_rejects_plan_only_before_validate_or_execute():
-    node = LLMGatewayNode()
-    debug_messages = []
-    node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
-    )
-    node._validate_client.wait_for_service = MagicMock(return_value=True)
-    node._validate_client.call_async = MagicMock()
     node._execute_client.send_goal_async = MagicMock()
 
     node.process_raw_command(
@@ -180,21 +161,32 @@ def test_gateway_rejects_plan_only_before_validate_or_execute():
         )
     )
 
-    node._validate_client.wait_for_service.assert_not_called()
-    node._validate_client.call_async.assert_not_called()
+    node._validate_client.call_async.assert_called_once()
+    assert command_messages == []
     node._execute_client.send_goal_async.assert_not_called()
-    assert debug_messages[-1]["stage"] == "plan_only_not_executable"
-    assert "plan_only" in debug_messages[-1]["reason"]
+    # Look for the precheck success message in debug stream
+    precheck_msgs = [m for m in debug_messages if m.get("stage") == "plan_only"]
+    assert (
+        precheck_msgs
+    ), f"Expected plan_only stage in debug messages, got {debug_messages}"
+    assert precheck_msgs[-1]["status"] == "plan_precheck_succeeded"
 
     node.destroy_node()
 
 
-def test_gateway_fails_closed_when_validate_service_unavailable(openai_payload):
+def test_gateway_fails_closed_when_validate_service_unavailable():
     node = LLMGatewayNode()
     debug_messages = []
-    node._llm_client.generate_response = MagicMock(return_value=openai_payload)
+    semantic_ir_payload = json.dumps(
+        {
+            "intent": "absolute_move_lin",
+            "target_pose": {"position": {"x": 0.30, "y": 0.0, "z": 0.30}},
+            "reference_frame": "base_link",
+        }
+    )
+    node._llm_client.generate_response = MagicMock(return_value=semantic_ir_payload)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
     node._validate_client.wait_for_service = MagicMock(return_value=False)
     node._execute_client.send_goal_async = MagicMock()
@@ -207,12 +199,19 @@ def test_gateway_fails_closed_when_validate_service_unavailable(openai_payload):
     node.destroy_node()
 
 
-def test_gateway_fails_closed_when_execute_motion_unavailable(openai_payload):
+def test_gateway_fails_closed_when_execute_motion_unavailable():
     node = LLMGatewayNode()
     debug_messages = []
-    node._llm_client.generate_response = MagicMock(return_value=openai_payload)
+    semantic_ir_payload = json.dumps(
+        {
+            "intent": "absolute_move_lin",
+            "target_pose": {"position": {"x": 0.30, "y": 0.0, "z": 0.30}},
+            "reference_frame": "base_link",
+        }
+    )
+    node._llm_client.generate_response = MagicMock(return_value=semantic_ir_payload)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
     node._validate_client.wait_for_service = MagicMock(return_value=True)
     node._validate_client.call_async = MagicMock(
@@ -234,7 +233,9 @@ def test_gateway_fails_closed_when_execute_motion_unavailable(openai_payload):
 def test_gateway_status_heartbeat_reuses_latest_status():
     node = LLMGatewayNode()
     published = []
-    node._status_publisher.publish = MagicMock(side_effect=lambda msg: published.append(msg.data))
+    node._status_publisher.publish = MagicMock(
+        side_effect=lambda msg: published.append(msg.data)
+    )
 
     node.publish_status("parsed")
     node._publish_status_heartbeat()
@@ -250,7 +251,7 @@ def test_gateway_rejects_model_error_payload(model_error_payload):
     debug_messages = []
     node._llm_client.generate_response = MagicMock(return_value=model_error_payload)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
     node._validate_client.call_async = MagicMock()
     node._execute_client.send_goal_async = MagicMock()
@@ -274,7 +275,7 @@ def test_gateway_routes_semantic_ir_single_command():
         side_effect=lambda msg: command_messages.append(json.loads(msg.data))
     )
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
 
     semantic_ir_payload = json.dumps(
@@ -313,7 +314,9 @@ def test_gateway_routes_semantic_ir_single_command():
         accepted=True,
         get_result_async=lambda: ImmediateFuture(mock_exec_result),
     )
-    node._execute_client.send_goal_async = MagicMock(return_value=ImmediateFuture(mock_goal_handle))
+    node._execute_client.send_goal_async = MagicMock(
+        return_value=ImmediateFuture(mock_goal_handle)
+    )
 
     node.process_intent("move linearly to x 0.30 y 0.00 z 0.30")
 
@@ -344,7 +347,7 @@ def test_gateway_executes_sequence_step_by_step():
         side_effect=lambda msg: command_messages.append(json.loads(msg.data))
     )
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
 
     semantic_ir_payload = json.dumps(
@@ -362,7 +365,11 @@ def test_gateway_executes_sequence_step_by_step():
                                     {
                                         "intent": "absolute_move_lin",
                                         "target_pose": {
-                                            "position": {"x": 0.30, "y": 0.00, "z": 0.30}
+                                            "position": {
+                                                "x": 0.30,
+                                                "y": 0.00,
+                                                "z": 0.30,
+                                            }
                                         },
                                         "reference_frame": "base_link",
                                     },
@@ -378,9 +385,15 @@ def test_gateway_executes_sequence_step_by_step():
     node._validate_client.wait_for_service = MagicMock(return_value=True)
     node._validate_client.call_async = MagicMock(
         side_effect=[
-            ImmediateFuture(SimpleNamespace(valid=True, reason="OK", sanitized_json="")),
-            ImmediateFuture(SimpleNamespace(valid=True, reason="OK", sanitized_json="")),
-            ImmediateFuture(SimpleNamespace(valid=True, reason="OK", sanitized_json="")),
+            ImmediateFuture(
+                SimpleNamespace(valid=True, reason="OK", sanitized_json="")
+            ),
+            ImmediateFuture(
+                SimpleNamespace(valid=True, reason="OK", sanitized_json="")
+            ),
+            ImmediateFuture(
+                SimpleNamespace(valid=True, reason="OK", sanitized_json="")
+            ),
         ]
     )
     node._execute_client.server_is_ready = MagicMock(return_value=True)
@@ -388,7 +401,11 @@ def test_gateway_executes_sequence_step_by_step():
         SimpleNamespace(
             accepted=True,
             get_result_async=lambda: ImmediateFuture(
-                SimpleNamespace(result=SimpleNamespace(success=True, message="ok", execution_time_sec=0.1))
+                SimpleNamespace(
+                    result=SimpleNamespace(
+                        success=True, message="ok", execution_time_sec=0.1
+                    )
+                )
             ),
         )
         for _ in range(3)
@@ -407,12 +424,19 @@ def test_gateway_executes_sequence_step_by_step():
     assert "sequence_succeeded" in statuses
     assert node._validate_client.call_async.call_count == 3
     assert node._execute_client.send_goal_async.call_count == 3
-    assert [goal.args[0].primitive_type for goal in node._execute_client.send_goal_async.call_args_list] == [
+    assert [
+        goal.args[0].primitive_type
+        for goal in node._execute_client.send_goal_async.call_args_list
+    ] == [
         "HOME",
         "WAIT",
         "LIN",
     ]
-    assert [command["primitive_type"] for command in command_messages] == ["HOME", "WAIT", "LIN"]
+    assert [command["primitive_type"] for command in command_messages] == [
+        "HOME",
+        "WAIT",
+        "LIN",
+    ]
     assert any(m.get("status") == "sequence_succeeded" for m in debug_messages)
 
     node.destroy_node()
@@ -424,7 +448,7 @@ def test_gateway_aborts_sequence_after_first_failed_step_and_marks_manual_recove
     debug_messages = []
     node.publish_status = lambda status: statuses.append(status)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
 
     semantic_ir_payload = json.dumps(
@@ -437,12 +461,20 @@ def test_gateway_aborts_sequence_after_first_failed_step_and_marks_manual_recove
                             {
                                 "intent": "sequence",
                                 "steps": [
-                                    {"intent": "io_set", "io_address": 10010, "io_value": 1},
+                                    {
+                                        "intent": "io_set",
+                                        "io_address": 10010,
+                                        "io_value": 1,
+                                    },
                                     {"intent": "go_home"},
                                     {
                                         "intent": "absolute_move_lin",
                                         "target_pose": {
-                                            "position": {"x": 0.30, "y": 0.00, "z": 0.30}
+                                            "position": {
+                                                "x": 0.30,
+                                                "y": 0.00,
+                                                "z": 0.30,
+                                            }
                                         },
                                         "reference_frame": "base_link",
                                     },
@@ -458,18 +490,30 @@ def test_gateway_aborts_sequence_after_first_failed_step_and_marks_manual_recove
     node._validate_client.wait_for_service = MagicMock(return_value=True)
     node._validate_client.call_async = MagicMock(
         side_effect=[
-            ImmediateFuture(SimpleNamespace(valid=True, reason="OK", sanitized_json="")),
-            ImmediateFuture(SimpleNamespace(valid=False, reason="blocked by safety gate", sanitized_json="")),
+            ImmediateFuture(
+                SimpleNamespace(valid=True, reason="OK", sanitized_json="")
+            ),
+            ImmediateFuture(
+                SimpleNamespace(
+                    valid=False, reason="blocked by safety gate", sanitized_json=""
+                )
+            ),
         ]
     )
     node._execute_client.server_is_ready = MagicMock(return_value=True)
     first_goal_handle = SimpleNamespace(
         accepted=True,
         get_result_async=lambda: ImmediateFuture(
-            SimpleNamespace(result=SimpleNamespace(success=True, message="ok", execution_time_sec=0.1))
+            SimpleNamespace(
+                result=SimpleNamespace(
+                    success=True, message="ok", execution_time_sec=0.1
+                )
+            )
         ),
     )
-    node._execute_client.send_goal_async = MagicMock(return_value=ImmediateFuture(first_goal_handle))
+    node._execute_client.send_goal_async = MagicMock(
+        return_value=ImmediateFuture(first_goal_handle)
+    )
 
     node.process_intent("set io, go home, then move linearly")
 

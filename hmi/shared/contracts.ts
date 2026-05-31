@@ -66,25 +66,10 @@ export interface BridgeCapabilities {
   hardwareGate: HardwareGateStatus;
 }
 
-export interface HardwareGateChecklist {
-  timingJitter: boolean;
-  disconnectReconnect: boolean;
-  robotStatusSemantics: boolean;
-  jointSourcePrecedence: boolean;
-  auditVisibility: boolean;
-}
-
 export interface HardwareGateStatus {
   unlocked: boolean;
   reasons: string[];
   flagEnabled: boolean;
-  evidencePath: string;
-  approvedBy: string | null;
-  approvedAt: string | null;
-  reportPath: string | null;
-  reportSha256: string | null;
-  reportSha256Match: boolean;
-  checklist: HardwareGateChecklist | null;
 }
 
 export interface TelemetrySourceStatus {
@@ -150,6 +135,7 @@ export interface ChatMessage {
   timestamp: string;
   text: string;
   tag?: string | null;
+  source?: string | null;
 }
 
 export interface CommandValidationResult {
@@ -188,6 +174,18 @@ export interface CommandExecutionResult {
   correlationId?: string | null;
 }
 
+export interface PipelineTrace {
+  t: string;
+  ts: number;
+  cmd_id: string;
+  layer: string;
+  phase: string;
+  event: string;
+  level: string;
+  summary: string;
+  details?: Record<string, unknown> | null;
+}
+
 export interface CommandView {
   commandId: string;
   commandKind: 'command';
@@ -218,6 +216,7 @@ export interface CommandView {
   parentSequenceId?: string | null;
   sequenceStepIndex?: number | null;
   sequenceStepCount?: number | null;
+  pipelineTraces?: PipelineTrace[];
 }
 
 export interface SequenceView {
@@ -291,6 +290,16 @@ export interface ReplayDetail {
   runtimeEvents: TimelineEvent[];
 }
 
+export interface ToolPose {
+  x: number;
+  y: number;
+  z: number;
+  roll: number;
+  pitch: number;
+  yaw: number;
+  frameId: string;
+}
+
 export interface HmiStateSnapshot {
   schemaVersion: string;
   generatedAt: string;
@@ -308,6 +317,7 @@ export interface HmiStateSnapshot {
   jointPositions: JointPosition[];
   planMetrics: PlanMetrics | null;
   replayItems: ReplayListItem[];
+  toolPose: ToolPose | null;
 }
 
 export interface RuntimeStateResponse {
@@ -360,8 +370,8 @@ export interface CommandIntentRequest {
   operatorId: string;
   leaseToken: string | null;
   intentText?: string | null;
-  structuredIntent?: Record<string, unknown> | null;
-  mode: RuntimeMode;
+  quickCommandId?: string | null;
+  mode: 'sim' | 'hardware';
 }
 
 export interface CommandConfirmRequest {
@@ -467,6 +477,12 @@ export interface ServoControlResponse {
   message: string;
 }
 
+export interface ServoControlRequest {
+  sessionId: string;
+  operatorId: string;
+  leaseToken: string | null;
+}
+
 export interface GP4BridgeClient {
   connect(params: {
     sessionId: string;
@@ -493,6 +509,6 @@ export interface GP4BridgeClient {
   deactivateJogBridge(): Promise<{ accepted: boolean; message: string }>;
   sendJogCommand(cmd: JogCommandRequest): Promise<{ accepted: boolean; message: string }>;
   // Servo control
-  startServo(): Promise<ServoControlResponse>;
-  stopServo(): Promise<ServoControlResponse>;
+  startServo(request: ServoControlRequest): Promise<ServoControlResponse>;
+  stopServo(request: ServoControlRequest): Promise<ServoControlResponse>;
 }

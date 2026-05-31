@@ -9,36 +9,31 @@
 #include "primitives/primitive_dispatcher.hpp"
 #include "primitives/primitive_types.hpp"
 
-namespace primitives
-{
-namespace
-{
-TEST(PrimitiveTypesTest, AllPrimitiveTypeStringsRoundTrip)
-{
+namespace primitives {
+namespace {
+TEST(PrimitiveTypesTest, AllPrimitiveTypeStringsRoundTrip) {
   const std::array<PrimitiveType, 7> types = {
-    PrimitiveType::HOME,
-    PrimitiveType::PTP,
-    PrimitiveType::LIN,
-    PrimitiveType::APPROACH,
-    PrimitiveType::RETRACT,
-    PrimitiveType::CIRC,
-    PrimitiveType::BLENDED_SEQUENCE,
+      PrimitiveType::HOME,
+      PrimitiveType::PTP,
+      PrimitiveType::LIN,
+      PrimitiveType::APPROACH,
+      PrimitiveType::RETRACT,
+      PrimitiveType::CIRC,
+      PrimitiveType::BLENDED_SEQUENCE,
   };
 
-  for (const PrimitiveType type : types)
-  {
+  for (const PrimitiveType type : types) {
     const std::string encoded = to_string(type);
-    EXPECT_EQ(from_string(encoded), type) << "round-trip failed for " << encoded;
+    EXPECT_EQ(from_string(encoded), type)
+        << "round-trip failed for " << encoded;
   }
 }
 
-TEST(PrimitiveTypesTest, UnknownStringMapsToUnknownType)
-{
+TEST(PrimitiveTypesTest, UnknownStringMapsToUnknownType) {
   EXPECT_EQ(from_string("NOT_A_PRIMITIVE"), PrimitiveType::UNKNOWN);
 }
 
-TEST(PrimitiveDispatcherTest, SupportsAllSevenPrimitiveTypes)
-{
+TEST(PrimitiveDispatcherTest, SupportsAllSevenPrimitiveTypes) {
   PrimitiveDispatcher dispatcher;
 
   EXPECT_TRUE(dispatcher.supports(PrimitiveType::HOME));
@@ -51,22 +46,20 @@ TEST(PrimitiveDispatcherTest, SupportsAllSevenPrimitiveTypes)
   EXPECT_FALSE(dispatcher.supports(PrimitiveType::UNKNOWN));
 }
 
-TEST(PrimitiveDispatcherTest, RoutesEachTypeToMatchingHandler)
-{
+TEST(PrimitiveDispatcherTest, RoutesEachTypeToMatchingHandler) {
   PrimitiveDispatcher dispatcher;
 
   PrimitiveDispatcher::GoalOnlyDispatchTable handlers;
 
   for (const PrimitiveType type : {
-         PrimitiveType::HOME,
-         PrimitiveType::PTP,
-         PrimitiveType::LIN,
-         PrimitiveType::APPROACH,
-         PrimitiveType::RETRACT,
-         PrimitiveType::CIRC,
-         PrimitiveType::BLENDED_SEQUENCE,
-       })
-  {
+           PrimitiveType::HOME,
+           PrimitiveType::PTP,
+           PrimitiveType::LIN,
+           PrimitiveType::APPROACH,
+           PrimitiveType::RETRACT,
+           PrimitiveType::CIRC,
+           PrimitiveType::BLENDED_SEQUENCE,
+       }) {
     handlers[type] = [type](const ExecuteMotionGoal & /*goal*/) {
       PrimitiveResult result;
       result.success = true;
@@ -78,23 +71,25 @@ TEST(PrimitiveDispatcherTest, RoutesEachTypeToMatchingHandler)
     ExecuteMotionGoal goal;
     goal.primitive_type = to_string(type);
 
-    const PrimitiveResult result = dispatcher.dispatch_with_goal_handlers(goal, handlers);
+    const PrimitiveResult result =
+        dispatcher.dispatch_with_goal_handlers(goal, handlers);
     EXPECT_TRUE(result.success);
     EXPECT_EQ(result.message, to_string(type));
   }
 }
 
-TEST(PrimitiveDispatcherTest, UnknownTypeFailsBeforeDispatch)
-{
+TEST(PrimitiveDispatcherTest, UnknownTypeFailsBeforeDispatch) {
   PrimitiveDispatcher dispatcher;
   ExecuteMotionGoal goal;
   goal.primitive_type = "UNSUPPORTED";
 
-  const PrimitiveResult result = dispatcher.dispatch_with_goal_handlers(goal, {});
+  const PrimitiveResult result =
+      dispatcher.dispatch_with_goal_handlers(goal, {});
 
   EXPECT_FALSE(result.success);
   EXPECT_EQ(result.reason, PrimitiveFailReason::UNKNOWN);
-  EXPECT_NE(result.message.find("Unsupported primitive_type"), std::string::npos);
+  EXPECT_NE(result.message.find("Unsupported primitive_type"),
+            std::string::npos);
 }
-}  // namespace
-}  // namespace primitives
+} // namespace
+} // namespace primitives

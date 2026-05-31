@@ -11,6 +11,7 @@ find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(trajectory_msgs REQUIRED)
+find_package(vision_msgs REQUIRED)
 
 set(msg_files
   "msg/MotionFeedback.msg"
@@ -20,6 +21,10 @@ set(msg_files
   # Experimental jog pendant interfaces
   "msg/JogCommand.msg"
   "msg/ServoBridgeStatus.msg"
+  # BLENDED_SEQUENCE typed step (W2.T0)
+  "msg/SequenceStep.msg"
+  # W4.T0 — Perception interfaces
+  "msg/PerceptionStatus.msg"
 )
 
 set(srv_files
@@ -27,6 +32,15 @@ set(srv_files
   "srv/GetCurrentPose.srv"
   "srv/AlarmReset.srv"
   "srv/IoSet.srv"
+  # W4.T0 — Perception services
+  "srv/CalibrateHandEye.srv"
+  "srv/GetObjectPositions.srv"
+  "srv/CheckCamera.srv"
+  # W5.T2 — HMI consolidation services
+  "srv/HydrateWorkplane.srv"
+  "srv/GetPrimitiveConstants.srv"
+  "srv/ConfirmExecution.srv"
+  "srv/ReviewIntent.srv"
 )
 
 set(action_files
@@ -38,7 +52,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   ${msg_files}
   ${srv_files}
   ${action_files}
-  DEPENDENCIES builtin_interfaces geometry_msgs std_msgs trajectory_msgs
+  DEPENDENCIES builtin_interfaces geometry_msgs std_msgs trajectory_msgs vision_msgs
 )
 
 ament_package()

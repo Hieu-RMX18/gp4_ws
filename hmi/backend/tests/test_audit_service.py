@@ -12,7 +12,7 @@ from hmi.backend.services.audit_service import AuditService
 class AuditServiceTests(unittest.TestCase):
     def test_telemetry_snapshot_retention_by_count(self) -> None:
         with TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / 'audit.sqlite3'
+            db_path = Path(temp_dir) / "audit.sqlite3"
             audit = AuditService(
                 db_path,
                 max_telemetry_snapshots=2,
@@ -21,25 +21,25 @@ class AuditServiceTests(unittest.TestCase):
 
             for index in range(3):
                 audit.record_telemetry_snapshot(
-                    transport_state='connected',
+                    transport_state="connected",
                     runtime_state=SystemRuntimeState.NORMAL,
-                    payload={'index': index},
+                    payload={"index": index},
                 )
 
             with sqlite3.connect(db_path) as connection:
                 count = connection.execute(
-                    'SELECT COUNT(*) FROM telemetry_snapshots'
+                    "SELECT COUNT(*) FROM telemetry_snapshots"
                 ).fetchone()[0]
 
             self.assertEqual(count, 2)
             self.assertEqual(
                 audit.telemetry_retention_policy(),
                 {
-                    'maxTelemetrySnapshots': 2,
-                    'telemetryRetentionDays': 365,
+                    "maxTelemetrySnapshots": 2,
+                    "telemetryRetentionDays": 365,
                 },
             )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

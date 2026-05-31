@@ -13,10 +13,8 @@
 #include <moveit_msgs/msg/collision_object.hpp>
 #include <rclcpp/rclcpp.hpp>
 
-namespace motion_core
-{
-enum class SceneLoadResult : uint8_t
-{
+namespace motion_core {
+enum class SceneLoadResult : uint8_t {
   OK,
   FILE_NOT_FOUND,
   PARSE_ERROR,
@@ -24,15 +22,14 @@ enum class SceneLoadResult : uint8_t
   SCENE_NOT_READY
 };
 
-const char * scene_load_result_name(SceneLoadResult result);
+const char *scene_load_result_name(SceneLoadResult result);
 
-class PlanningSceneManager
-{
+class PlanningSceneManager {
 public:
   explicit PlanningSceneManager(rclcpp::Logger logger);
 
   /// Load collision objects from YAML file and apply to planning scene.
-  SceneLoadResult load_and_apply(const std::string & yaml_path);
+  SceneLoadResult load_and_apply(const std::string &yaml_path);
 
   /// V4 fail-closed: planning blocked if this returns false.
   bool is_scene_loaded() const { return scene_loaded_.load(); }
@@ -44,4 +41,4 @@ private:
   std::atomic<bool> scene_loaded_{false};
   std::size_t applied_object_count_{0};
 };
-}  // namespace motion_core
+} // namespace motion_core

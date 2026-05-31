@@ -32,6 +32,14 @@ _SEQUENCE_SPLIT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# W5: default blend radius for intermediate items in a blended sequence.
+_DEFAULT_BLEND_RADIUS_M = 0.01
+
+# Primitives that can participate in a BLENDED_SEQUENCE.
+# W7: Restrict to pose-based LIN/PTP only. Named/home/joint targets
+# must execute step-by-step through safety gate.
+_BLENDED_SEQUENCE_ELIGIBLE = {"PTP", "LIN"}
+
 _COMMA_SEQUENCE_PREFIXES = {
     "alarm",
     "bật",
@@ -55,7 +63,6 @@ _COMMA_SEQUENCE_PREFIXES = {
     "mo",
     "move",
     "open",
-    "park",
     "pause",
     "quay",
     "reset",
@@ -91,9 +98,10 @@ class SupervisorSequenceMixin:
         sequence_segments: list[str],
     ) -> bool:
         """Return True when the input should be handled as a multi-step sequence."""
-        if structured_intent is not None and str(
-            structured_intent.get("intent") or ""
-        ).strip().lower() == "sequence":
+        if (
+            structured_intent is not None
+            and str(structured_intent.get("intent") or "").strip().lower() == "sequence"
+        ):
             return True
         return len(sequence_segments) > 1
 
@@ -159,6 +167,32 @@ class SupervisorSequenceMixin:
             return None
         return reader(reference_frame="base_link")
 
+    @staticmethod
+    def _inject_return_to_start_joints(
+        payload: dict[str, Any],
+        start_joints_rad: list[float] | None,
+    ) -> dict[str, Any]:
+        """If any step is return_to_start, inject captured joint_target."""
+        enriched = dict(payload)
+        intent_name = str(enriched.get("intent") or "").strip().lower()
+        if intent_name == "return_to_start":
+            if not start_joints_rad or len(start_joints_rad) != 6:
+                return enriched
+            enriched["joint_target"] = [float(v) for v in start_joints_rad]
+            return enriched
+        if intent_name == "sequence":
+            steps = enriched.get("steps")
+            if isinstance(steps, list):
+                enriched["steps"] = [
+                    SupervisorSequenceMixin._inject_return_to_start_joints(
+                        step, start_joints_rad
+                    )
+                    if isinstance(step, dict)
+                    else step
+                    for step in steps
+                ]
+        return enriched
+
     def _parse_sequence_steps(
         self,
         *,
@@ -166,12 +200,17 @@ class SupervisorSequenceMixin:
         structured_intent: dict[str, Any] | None,
         mode: RuntimeMode,
         sequence_segments: list[str],
-    ) -> tuple[list[dict[str, Any]] | None, list[str], str | None, dict[str, Any] | None]:
+    ) -> tuple[
+        list[dict[str, Any]] | None, list[str], str | None, dict[str, Any] | None
+    ]:
         diagnostics: list[str] = []
         parsed_steps: list[dict[str, Any]] = []
-        if structured_intent is not None and str(
-            structured_intent.get("intent") or ""
-        ).strip().lower() == "sequence":
+        # Capture start joints for possible return_to_start expansion.
+        start_joints_rad = self._current_joints_rad()
+        if (
+            structured_intent is not None
+            and str(structured_intent.get("intent") or "").strip().lower() == "sequence"
+        ):
             if IntentRouter is None or SequenceValidator is None:
                 return (
                     None,
@@ -180,11 +219,22 @@ class SupervisorSequenceMixin:
                     {"intent": "sequence"},
                 )
             try:
-                routed = IntentRouter(runtime_mode=mode.value).route(structured_intent)
+                routed_payload = self._inject_return_to_start_joints(
+                    structured_intent, start_joints_rad
+                )
+                routed_payload = (
+                    self._intent_resolution._prepare_semantic_ir_for_routing(
+                        routed_payload, self._current_joints()
+                    )
+                )
+                routed = IntentRouter(runtime_mode=mode.value).route(routed_payload)
                 if routed.route_type != "sequence":
-                    return None, diagnostics, "structured sequence did not resolve to a sequence route.", {
-                        "intent": "sequence"
-                    }
+                    return (
+                        None,
+                        diagnostics,
+                        "structured sequence did not resolve to a sequence route.",
+                        {"intent": "sequence"},
+                    )
                 validation = SequenceValidator().validate(routed.commands)
                 diagnostics.extend(validation.diagnostics)
                 for command in routed.commands:
@@ -194,6 +244,7 @@ class SupervisorSequenceMixin:
                             structured_intent=command,
                             runtime_mode=mode.value,
                             current_joints=self._current_joints(),
+                            allow_primitive_structured=True,
                         )
                     )
             except (IntentResolutionError, SequenceValidationError, ValueError) as exc:
@@ -227,7 +278,10 @@ class SupervisorSequenceMixin:
     ) -> str:
         macro_name = str((route_metadata or {}).get("macro_name") or "").strip().lower()
         if macro_name == "draw_shape":
-            shape_type = str((route_metadata or {}).get("shape_type") or "shape").strip().lower() or "shape"
+            shape_type = (
+                str((route_metadata or {}).get("shape_type") or "shape").strip().lower()
+                or "shape"
+            )
             return f"Draw {shape_type}"[:120]
         if macro_name == "draw_text":
             text = str((route_metadata or {}).get("text") or "").strip().upper()
@@ -237,7 +291,9 @@ class SupervisorSequenceMixin:
         if raw_text:
             return raw_text[:120]
         if structured_intent is not None:
-            return json.dumps(structured_intent, separators=(",", ":"), ensure_ascii=True)[:120]
+            return json.dumps(
+                structured_intent, separators=(",", ":"), ensure_ascii=True
+            )[:120]
         return "structured sequence"
 
     def _sequence_plan_summary(
@@ -254,7 +310,9 @@ class SupervisorSequenceMixin:
             "normalizedIntent": (
                 raw_text
                 or (
-                    json.dumps(structured_intent, separators=(",", ":"), ensure_ascii=True)
+                    json.dumps(
+                        structured_intent, separators=(",", ":"), ensure_ascii=True
+                    )
                     if structured_intent is not None
                     else ""
                 )
@@ -283,3 +341,119 @@ class SupervisorSequenceMixin:
         if (route_metadata or {}).get("execution_mode") is not None:
             summary["executionMode"] = (route_metadata or {}).get("execution_mode")
         return summary
+
+    # ── BLENDED_SEQUENCE emission (W5) ─────────────────────────────────
+
+    @staticmethod
+    def _should_emit_blended_sequence(
+        parsed_steps: list[dict[str, Any]], route_metadata: dict[str, Any] | None
+    ) -> bool:
+        """Return True when all steps are motion primitives eligible for blending."""
+        if not parsed_steps or len(parsed_steps) < 2:
+            return False
+        macro = str((route_metadata or {}).get("macro_name") or "").strip().lower()
+        if macro in {"draw_shape", "draw_text"}:
+            return False
+        for step in parsed_steps:
+            action = str(step.get("action") or "").strip().upper()
+            if action not in _BLENDED_SEQUENCE_ELIGIBLE:
+                return False
+            norm_cmd = step.get("normalizedCommand") or {}
+            primitive = norm_cmd.get("primitive_type", action)
+            # execution_gate rejects GOAL_JOINTS and GOAL_NAMED in blended
+            # sequences; named poses and HOME resolve to those goal types.
+            if primitive == "HOME":
+                return False
+            if norm_cmd.get("joint_target"):
+                return False
+            if norm_cmd.get("named_target"):
+                return False
+            params = step.get("parameters") or {}
+            if params.get("joint_target"):
+                return False
+        return True
+
+    @staticmethod
+    def _build_blended_sequence_step(
+        parsed_steps: list[dict[str, Any]],
+        raw_text: str,
+        structured_intent: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Collapse multiple motion-primitive parsed_steps into one BLENDED_SEQUENCE step."""
+        sequence_steps: list[dict[str, Any]] = []
+        for idx, step in enumerate(parsed_steps):
+            norm_cmd = step.get("normalizedCommand") or {}
+            action = str(step.get("action") or "").strip().upper()
+            primitive = norm_cmd.get("primitive_type", action)
+
+            # Determine goal type and payload
+            goal_type = 0  # GOAL_POSE default
+            step_payload: dict[str, Any] = {
+                "primitive_type": primitive,
+                "goal_type": goal_type,
+            }
+
+            # Target: pose, joints, or named
+            if primitive == "HOME":
+                goal_type = 2  # GOAL_NAMED
+                step_payload["goal_type"] = goal_type
+                step_payload["named_target"] = "home"
+            elif norm_cmd.get("joint_target"):
+                goal_type = 1  # GOAL_JOINTS
+                step_payload["goal_type"] = goal_type
+                step_payload["joint_target"] = list(norm_cmd["joint_target"])
+            elif norm_cmd.get("target_pose"):
+                step_payload["target_pose"] = dict(norm_cmd["target_pose"])
+            else:
+                # Fallback: extract from parameters
+                params = step.get("parameters") or {}
+                if params.get("target_pose"):
+                    step_payload["target_pose"] = dict(params["target_pose"])
+                elif params.get("joint_target"):
+                    goal_type = 1
+                    step_payload["goal_type"] = goal_type
+                    step_payload["joint_target"] = list(params["joint_target"])
+
+            # Blend radius: last must be 0.0; intermediates use default.
+            if idx == len(parsed_steps) - 1:
+                step_payload["blend_radius_m"] = 0.0
+            else:
+                step_payload["blend_radius_m"] = _DEFAULT_BLEND_RADIUS_M
+
+            # Planner / scales
+            step_payload["planner_id"] = norm_cmd.get("planner_id", "")
+            if norm_cmd.get("velocity_scale") is not None:
+                step_payload["velocity_scale"] = float(norm_cmd["velocity_scale"])
+            if norm_cmd.get("acceleration_scale") is not None:
+                step_payload["acceleration_scale"] = float(
+                    norm_cmd["acceleration_scale"]
+                )
+
+            sequence_steps.append(step_payload)
+
+        # Build the single collapsed parsed step
+        target_summary = " -> ".join(
+            step.get("targetSummary", "") for step in parsed_steps
+        )[:120]
+
+        normalized_command = {
+            "primitive_type": "BLENDED_SEQUENCE",
+            "sequence_steps": sequence_steps,
+        }
+
+        return {
+            "source": "blended",
+            "normalizedText": raw_text
+            or (
+                json.dumps(
+                    structured_intent, separators=(",", ":"), ensure_ascii=True
+                )
+                if structured_intent is not None
+                else ""
+            ),
+            "action": "BLENDED_SEQUENCE",
+            "parameters": {"sequence_steps": sequence_steps},
+            "targetSummary": target_summary,
+            "normalizedCommand": normalized_command,
+            "normalizationNotes": ["collapsed_into_blended_sequence"],
+        }

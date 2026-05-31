@@ -10,21 +10,36 @@
 !motoros2_config.yaml
 !hmi/
 !hmi/**
+!docs/
+!docs/**
+!references/
+references/*
+!references/*.pdf
+!references/*.repos
+
+# 4a. Governance files
+!AGENTS.md
+!tools/
+!tools/**
 
 # 4. (Tùy chọn) Chặn các folder rác bên trong src nếu có
 # Ví dụ: chặn các folder dependency bạn đã liệt kê trong ảnh 
 # nếu bạn không muốn đẩy code của thư viện bên thứ 3 lên
 src/motoman_ros2_support_packages/
+src/motoman_ros2_support_packages
 src/motoros2_client_interface_dependencies/
+src/motoros2_client_interface_dependencies
 src/ros-industrial/
 src/yaskawa-global/
 
 # 5. Luôn luôn chặn các file tạm và build (để chắc chắn)
 *.zip
 *.db
+*.sqlite3
 build/
 install/
 log/
+**/Testing/Temporary/
 .cache/
 .claude/
 .codex/
@@ -42,3 +57,7 @@ hmi/backend/.venv/
 *.secret
 *.key
 secrets/
+*/__pycache__
+*.pyc
+# Thêm rule cho pytest cache
+.pytest_cache/

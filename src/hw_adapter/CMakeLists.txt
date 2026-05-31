@@ -22,17 +22,18 @@ find_package(interfaces REQUIRED)
 find_package(moveit_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(industrial_msgs REQUIRED)
+find_package(motion_core REQUIRED)
 find_package(motoros2_interfaces QUIET)
 
 add_library(${PROJECT_NAME}_components SHARED
-  src/backend_capabilities.cpp
-  src/joint_state_monitor.cpp
-  src/robot_status_monitor.cpp
-  src/motoros2_session_manager.cpp
-  src/trajectory_executor.cpp
-  src/tool_state_monitor.cpp
-  src/recovery_state_machine.cpp
-  src/hw_adapter_node.cpp
+  src/monitoring/backend_capabilities.cpp
+  src/monitoring/joint_state_monitor.cpp
+  src/monitoring/robot_status_monitor.cpp
+  src/session/motoros2_session_manager.cpp
+  src/dispatch/trajectory_executor.cpp
+  src/monitoring/tool_state_monitor.cpp
+  src/session/recovery_state_machine.cpp
+  src/node/hw_adapter_node.cpp
 )
 
 target_include_directories(${PROJECT_NAME}_components PUBLIC
@@ -54,13 +55,17 @@ ament_target_dependencies(${PROJECT_NAME}_components
   pluginlib
   industrial_msgs
 )
+# Link motion_core library only (not the node executable which is also in the export set)
+target_link_libraries(${PROJECT_NAME}_components
+  motion_core::motion_core_components
+)
 
 if(motoros2_interfaces_FOUND)
   ament_target_dependencies(${PROJECT_NAME}_components motoros2_interfaces)
 endif()
 
 add_executable(hw_adapter_node
-  src/main.cpp
+  src/node/main.cpp
 )
 
 target_link_libraries(hw_adapter_node
@@ -99,6 +104,7 @@ ament_export_dependencies(
   moveit_msgs
   pluginlib
   industrial_msgs
+  motion_core
 )
 
 if(motoros2_interfaces_FOUND)
@@ -107,6 +113,17 @@ endif()
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+
+  set(ROS_TEST_LOG_DIR "${CMAKE_CURRENT_BINARY_DIR}/ros_test_logs")
+  file(MAKE_DIRECTORY "${ROS_TEST_LOG_DIR}")
+
+  function(configure_ros_test_environment test_name)
+    if(TARGET ${test_name})
+      set_tests_properties(${test_name} PROPERTIES
+        ENVIRONMENT "ROS_LOG_DIR=${ROS_TEST_LOG_DIR};ROS_LOCALHOST_ONLY=1;RMW_IMPLEMENTATION=rmw_fastrtps_cpp"
+      )
+    endif()
+  endfunction()
 
   ament_add_gtest(test_backend_capabilities
     test/test_backend_capabilities.cpp
@@ -122,6 +139,7 @@ if(BUILD_TESTING)
       rclcpp
       sensor_msgs
     )
+    configure_ros_test_environment(test_backend_capabilities)
   endif()
 
   ament_add_gtest(test_robot_status_monitor
@@ -139,6 +157,7 @@ if(BUILD_TESTING)
       industrial_msgs
       interfaces
     )
+    configure_ros_test_environment(test_robot_status_monitor)
   endif()
 
   ament_add_gtest(test_joint_state_monitor
@@ -155,6 +174,7 @@ if(BUILD_TESTING)
       rclcpp
       sensor_msgs
     )
+    configure_ros_test_environment(test_joint_state_monitor)
   endif()
 
   ament_add_gtest(test_motoros2_session_manager
@@ -173,6 +193,7 @@ if(BUILD_TESTING)
       control_msgs
       motoros2_interfaces
     )
+    configure_ros_test_environment(test_motoros2_session_manager)
   endif()
 
   ament_add_gtest(test_trajectory_executor
@@ -191,6 +212,7 @@ if(BUILD_TESTING)
       control_msgs
       trajectory_msgs
     )
+    configure_ros_test_environment(test_trajectory_executor)
   endif()
 
   if(motoros2_interfaces_FOUND)
@@ -208,6 +230,7 @@ if(BUILD_TESTING)
         rclcpp
         motoros2_interfaces
       )
+      configure_ros_test_environment(test_tool_state_monitor)
     endif()
 
     ament_add_gtest(test_hw_adapter_node
@@ -230,6 +253,7 @@ if(BUILD_TESTING)
         sensor_msgs
         trajectory_msgs
       )
+      configure_ros_test_environment(test_hw_adapter_node)
     endif()
   endif()
 endif()

@@ -1,0 +1,9 @@
+string fiducial_id           # ArUco / Charuco board id
+uint16 min_samples           # minimum N pose pairs; reject if collected < min
+---
+bool success
+string failure_reason        # empty on success
+string extrinsics_yaml_path  # path to written file on success
+float64 reprojection_error_mm
+uint16 n_samples_collected
+string calibration_date_iso  # filled at solve time, never templated

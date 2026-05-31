@@ -16,7 +16,6 @@ def test_normalizer_mm_to_m_with_explicit_unit(normalizer):
             },
             "velocity_scale": 0.2,
             "acceleration_scale": 0.3,
-            "require_approval": False,
         }
     )
 
@@ -144,7 +143,6 @@ def test_normalizer_defaults(normalizer):
     assert normalized["velocity_scale"] == 0.06
     assert normalized["acceleration_scale"] == 0.06
     assert normalized["planner_id"] == "PILZ_PTP"
-    assert normalized["require_approval"] is False
 
 
 def test_normalizer_accepts_quaternion_orientation(normalizer):
@@ -207,8 +205,12 @@ def test_normalizer_move_joint_normalizes_types(normalizer):
 def test_normalizer_move_joint_wraps_angle_to_pi(normalizer):
     """MOVE_JOINT: normalize revolute angle into (-pi, pi] with explicit deg unit."""
     normalized = normalizer.normalize(
-        {"primitive_type": "MOVE_JOINT", "joint_index": 5, "joint_angle": 450.0,
-         "angular_unit": "deg"}
+        {
+            "primitive_type": "MOVE_JOINT",
+            "joint_index": 5,
+            "joint_angle": 450.0,
+            "angular_unit": "deg",
+        }
     )
     assert math.isclose(normalized["joint_angle"], math.pi / 2.0, rel_tol=1e-9)
 
@@ -307,7 +309,38 @@ def test_normalizer_cartesian_path_normalizes_waypoints(normalizer):
     assert len(normalized["waypoints_msg"]) == 2
 
 
-def test_normalizer_plan_only_does_not_force_require_approval(normalizer):
+def test_normalizer_blended_sequence_normalizes_steps(normalizer):
+    normalized = normalizer.normalize(
+        {
+            "primitive_type": "BLENDED_SEQUENCE",
+            "reference_frame": "base_link",
+            "sequence_steps": [
+                {
+                    "primitive_type": "LIN",
+                    "target_pose": {"position": {"x": 0.30, "y": 0.00, "z": 0.30}},
+                    "blend_radius_m": 0.0,
+                },
+                {
+                    "primitive_type": "LIN",
+                    "target_pose": {"position": {"x": 0.32, "y": 0.02, "z": 0.30}},
+                    "blend_radius_m": 0.008,
+                },
+            ],
+        }
+    )
+
+    assert normalized["planner_id"] == "PILZ_LIN"
+    steps = normalized["sequence_steps"]
+    assert len(steps) == 2
+    # Each step should have a target_pose_msg after normalization
+    for step in steps:
+        assert "target_pose_msg" in step
+        assert step["planner_id"] == "PILZ_LIN"
+        assert step["velocity_scale"] == 0.06
+        assert step["acceleration_scale"] == 0.06
+
+
+def test_normalizer_plan_only_preserves_flag(normalizer):
     normalized = normalizer.normalize(
         {
             "primitive_type": "LIN",
@@ -316,8 +349,6 @@ def test_normalizer_plan_only_does_not_force_require_approval(normalizer):
                 "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
             },
             "plan_only": True,
-            "require_approval": False,
         }
     )
     assert normalized["plan_only"] is True
-    assert normalized["require_approval"] is False

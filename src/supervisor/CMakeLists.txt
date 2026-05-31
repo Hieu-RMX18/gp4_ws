@@ -99,6 +99,17 @@ ament_export_dependencies(
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 
+  set(ROS_TEST_LOG_DIR "${CMAKE_CURRENT_BINARY_DIR}/ros_test_logs")
+  file(MAKE_DIRECTORY "${ROS_TEST_LOG_DIR}")
+
+  function(configure_ros_test_environment test_name)
+    if(TARGET ${test_name})
+      set_tests_properties(${test_name} PROPERTIES
+        ENVIRONMENT "ROS_LOG_DIR=${ROS_TEST_LOG_DIR};ROS_LOCALHOST_ONLY=1;RMW_IMPLEMENTATION=rmw_fastrtps_cpp"
+      )
+    endif()
+  endfunction()
+
   ament_add_gtest(test_audit_logger
     test/test_audit_logger.cpp
   )
@@ -117,6 +128,7 @@ if(BUILD_TESTING)
       interfaces
       action_msgs
     )
+    configure_ros_test_environment(test_audit_logger)
   endif()
 
   ament_add_gtest(test_execution_monitor
@@ -135,6 +147,7 @@ if(BUILD_TESTING)
       diagnostic_msgs
       action_msgs
     )
+    configure_ros_test_environment(test_execution_monitor)
   endif()
 endif()
 

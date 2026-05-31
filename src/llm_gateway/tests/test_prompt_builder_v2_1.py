@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from llm_gateway.prompt_builder import (
+from llm_gateway.react_planner import (
     FROZEN_SEMANTIC_INTENTS,
     FROZEN_TOP_LEVEL_OUTPUT_INTENTS,
     build_system_prompt,
@@ -33,30 +33,37 @@ def prompt() -> str:
 
 
 def _load_workspace_bounds() -> dict:
-    safety_yaml = Path(__file__).resolve().parents[2] / "safety" / "config" / "safety_rules.yaml"
+    safety_yaml = (
+        Path(__file__).resolve().parents[2] / "safety" / "config" / "safety_rules.yaml"
+    )
     safety_rules = yaml.safe_load(safety_yaml.read_text()) or {}
     return safety_rules["workspace_bounds"]
 
 
 # ── 1. Frozen intent list is exactly correct ──────────────────────────────────
 
-_EXPECTED_INTENTS = frozenset({
-    "go_home",
-    "stop",
-    "alarm_reset",
-    "get_pose",
-    "set_speed",
-    "wait",
-    "move_relative",
-    "absolute_move_ptp",
-    "absolute_move_lin",
-    "circular_move",
-    "move_joint",
-    "move_joints",
-    "io_set",
-    "draw_shape",
-    "draw_text",
-})
+_EXPECTED_INTENTS = frozenset(
+    {
+        "go_home",
+        "stop",
+        "alarm_reset",
+        "get_pose",
+        "set_speed",
+        "wait",
+        "move_relative",
+        "absolute_move_ptp",
+        "move_named_pose",
+        "absolute_move_lin",
+        "circular_move",
+        "move_joint",
+        "move_joint_delta",
+        "move_joints",
+        "io_set",
+        "draw_shape",
+        "draw_text",
+        "return_to_start",
+    }
+)
 
 
 def test_frozen_intent_list_matches_expected():
@@ -74,12 +81,13 @@ def test_top_level_output_intents_include_sequence():
 
 # ── 2. Prompt mentions every frozen intent ────────────────────────────────────
 
+
 @pytest.mark.parametrize("intent_name", sorted(_EXPECTED_INTENTS))
 def test_prompt_mentions_intent(prompt: str, intent_name: str):
     """Every frozen semantic intent must appear in the prompt text."""
-    assert intent_name in prompt, (
-        f"Prompt does not mention semantic intent '{intent_name}'"
-    )
+    assert (
+        intent_name in prompt
+    ), f"Prompt does not mention semantic intent '{intent_name}'"
 
 
 def test_prompt_mentions_sequence(prompt: str):
@@ -87,6 +95,7 @@ def test_prompt_mentions_sequence(prompt: str):
 
 
 # ── 3. Prompt uses "intent" field, not "intent_type" ─────────────────────────
+
 
 def test_prompt_uses_intent_field_not_intent_type(prompt: str):
     """Prompt IR examples must use 'intent', matching IntentRouter's field name."""
@@ -96,12 +105,13 @@ def test_prompt_uses_intent_field_not_intent_type(prompt: str):
     # (it may appear in descriptive text but not in JSON examples)
     intent_type_in_json = re.findall(r'\{"intent_type":', prompt)
     assert not intent_type_in_json, (
-        f"Prompt uses 'intent_type' in JSON output examples — "
-        f"should use 'intent' to match IntentRouter"
+        "Prompt uses 'intent_type' in JSON output examples — "
+        "should use 'intent' to match IntentRouter"
     )
 
 
 # ── 4. Prompt does NOT instruct direct primitive_type output ──────────────────
+
 
 def test_prompt_does_not_instruct_primitive_type_output(prompt: str):
     """Normal-path prompt must not tell LLM to output primitive_type directly.
@@ -125,17 +135,21 @@ def test_prompt_does_not_instruct_primitive_type_output(prompt: str):
 
 # ── 5. Prompt includes all three output formats ──────────────────────────────
 
+
 def test_prompt_includes_semantic_ir_format(prompt: str):
     assert '"intent":' in prompt
 
+
 def test_prompt_includes_missing_slot_format(prompt: str):
     assert "MISSING_SLOT" in prompt
+
 
 def test_prompt_includes_unsupported_error_format(prompt: str):
     assert "UNSUPPORTED_OR_AMBIGUOUS_COMMAND" in prompt
 
 
 # ── 6. Prompt includes workspace and velocity constraints ─────────────────────
+
 
 def test_prompt_includes_workspace_limits(prompt: str):
     bounds = _load_workspace_bounds()
@@ -145,27 +159,43 @@ def test_prompt_includes_workspace_limits(prompt: str):
         f"y: {bounds['y_min']:.2f}–{bounds['y_max']:.2f}, "
         f"z: {bounds['z_min']:.2f}–{bounds['z_max']:.2f}"
     )
-    assert expected_line in prompt, "Prompt workspace limits are not synced with safety_rules.yaml"
+    assert (
+        expected_line in prompt
+    ), "Prompt workspace limits are not synced with safety_rules.yaml"
+
 
 def test_prompt_includes_velocity_scale_range(prompt: str):
     assert "0.01" in prompt and "0.06" in prompt, "Velocity scale range missing"
+
 
 def test_prompt_includes_unit_conversions(prompt: str):
     assert "0.01" in prompt or "cm" in prompt, "Unit conversion rules missing"
 
 
 def test_prompt_mentions_explicit_unit_fields(prompt: str):
-    assert "linear_unit" in prompt, "Prompt must mention linear_unit for non-SI distances"
-    assert "angular_unit" in prompt, "Prompt must mention angular_unit for non-SI angles"
+    assert (
+        "linear_unit" in prompt
+    ), "Prompt must mention linear_unit for non-SI distances"
+    assert (
+        "angular_unit" in prompt
+    ), "Prompt must mention angular_unit for non-SI angles"
 
 
 # ── 7. Prompt mentions correct slot names for key intents ─────────────────────
 
+
 def test_prompt_move_relative_uses_delta_object(prompt: str):
     """move_relative must use delta object with x/y/z, not axis/direction/distance_m."""
-    assert '"delta":' in prompt, (
-        "move_relative must use 'delta' slot matching IntentRouter._route_move_relative"
-    )
+    assert (
+        '"delta":' in prompt
+    ), "move_relative must use 'delta' slot matching IntentRouter._route_move_relative"
+
+
+def test_prompt_treats_delta_words_as_natural_language(prompt: str):
+    assert "move down 2 cm" in prompt
+    assert "move delta down 2 cm" in prompt
+    assert '"z": -0.02' in prompt
+    assert "relative move requires direction and distance" in prompt
 
 
 def test_prompt_non_si_examples_use_explicit_unit_fields(prompt: str):
@@ -175,26 +205,33 @@ def test_prompt_non_si_examples_use_explicit_unit_fields(prompt: str):
 
 def test_prompt_absolute_move_uses_target_pose(prompt: str):
     """absolute_move_ptp/lin must use target_pose.position, not target_x/y/z."""
-    assert '"target_pose":' in prompt, (
-        "absolute_move must use 'target_pose' slot matching IntentRouter._route_absolute_move"
-    )
+    assert (
+        '"target_pose":' in prompt
+    ), "absolute_move must use 'target_pose' slot matching IntentRouter._route_absolute_move"
+
+
+def test_prompt_includes_common_cartesian_operator_phrasings(prompt: str):
+    assert "move to Cartesian x 300 mm y 0 z 400" in prompt
+    assert "đi tới tọa độ x 300 mm y 0 z 400" in prompt
+    assert '"linear_unit": "mm"' in prompt
 
 
 def test_prompt_wait_uses_wait_duration_sec(prompt: str):
     """wait intent must use wait_duration_sec slot, not duration_sec."""
-    assert "wait_duration_sec" in prompt, (
-        "wait must use 'wait_duration_sec' slot matching IntentRouter._route_single_intent"
-    )
+    assert (
+        "wait_duration_sec" in prompt
+    ), "wait must use 'wait_duration_sec' slot matching IntentRouter._route_single_intent"
 
 
 def test_prompt_move_joints_uses_joint_target(prompt: str):
     """move_joints must use joint_target slot, not joint_values."""
-    assert "joint_target" in prompt, (
-        "move_joints must use 'joint_target' slot matching IntentRouter._route_move_joints"
-    )
+    assert (
+        "joint_target" in prompt
+    ), "move_joints must use 'joint_target' slot matching IntentRouter._route_move_joints"
 
 
 # ── 8. Draw intent contract sections ──────────────────────────────────────────
+
 
 def test_prompt_draw_shape_mentions_workplane_and_execution_mode(prompt: str):
     draw_section_match = re.search(r"draw_shape.*?draw_text", prompt, re.DOTALL)
@@ -214,6 +251,7 @@ def test_prompt_draw_text_mentions_single_stroke_font_contract(prompt: str):
 
 # ── 9. Absolute motion does not default to tool-down ──────────────────────────
 
+
 def test_prompt_absolute_move_no_default_tool_down(prompt: str):
     """v2.1 correction: generic absolute motions must NOT default to tool-down.
 
@@ -229,7 +267,9 @@ def test_prompt_absolute_move_no_default_tool_down(prompt: str):
     assert ptp_section_match is not None, "Could not find absolute_move_ptp section"
     ptp_section = ptp_section_match.group(0)
     # Should mention keeping current orientation, not defaulting to tool-down
-    assert "keep_current_orientation" in ptp_section or "OMIT orientation" in ptp_section, (
+    assert (
+        "keep_current_orientation" in ptp_section or "OMIT orientation" in ptp_section
+    ), (
         "absolute_move_ptp section should mention keep_current_orientation or "
         "instruct to omit orientation, not default to tool-down"
     )
@@ -246,16 +286,17 @@ def test_prompt_absolute_move_no_default_tool_down(prompt: str):
         re.DOTALL,
     )
     if generic_example:
-        assert "orientation_preset" not in generic_example.group(1), (
-            "Generic PTP example must NOT include orientation_preset"
-        )
+        assert "orientation_preset" not in generic_example.group(
+            1
+        ), "Generic PTP example must NOT include orientation_preset"
 
 
 # ── 10. FROZEN_SEMANTIC_INTENTS matches IntentRouter coverage ─────────────────
 
+
 def test_frozen_intents_match_intent_router():
     """FROZEN_SEMANTIC_INTENTS must cover exactly the intents in IntentRouter."""
-    from llm_gateway.intent_router import IntentRouter
+    from llm_gateway.intent_engine import IntentRouter
 
     router = IntentRouter(
         macro_policy_path=str(
@@ -266,6 +307,7 @@ def test_frozen_intents_match_intent_router():
     # Extract intent names from _route_single_intent by examining the source code.
     # This is fragile but is the ground-truth contract test.
     import inspect
+
     source = inspect.getsource(router._route_single_intent)
     # Pattern: if intent == "<name>":
     router_intents = set(re.findall(r'intent\s*==\s*"(\w+)"', source))
@@ -274,7 +316,7 @@ def test_frozen_intents_match_intent_router():
     route_source = inspect.getsource(router.route)
     meta_intents = set(re.findall(r'normalized_intent\s*==\s*"(\w+)"', route_source))
     # sequence is meta-only, not in FROZEN_SEMANTIC_INTENTS
-    router_intents |= (meta_intents - {"sequence"})
+    router_intents |= meta_intents - {"sequence"}
 
     assert FROZEN_SEMANTIC_INTENTS == router_intents, (
         f"FROZEN_SEMANTIC_INTENTS out of sync with IntentRouter.\n"
@@ -285,6 +327,7 @@ def test_frozen_intents_match_intent_router():
 
 # ── 11. Schema placeholder is injected ────────────────────────────────────────
 
+
 def test_schema_json_injected():
     """build_system_prompt must inject the schema JSON into the template."""
     marker = '{"test_schema": true}'
@@ -294,6 +337,7 @@ def test_schema_json_injected():
 
 
 # ── 12. Prompt does not mention deprecated field names ────────────────────────
+
 
 def test_prompt_does_not_mention_deprecated_slots(prompt: str):
     """Prompt must not use plan-draft slot names that differ from IntentRouter."""
@@ -306,15 +350,14 @@ def test_prompt_does_not_mention_deprecated_slots(prompt: str):
     ]
     for deprecated_name, reason in deprecated_pairs:
         # Allow the name in descriptive text but not in JSON examples
-        json_uses = re.findall(
-            rf'"{deprecated_name}"\s*:', prompt
-        )
-        assert not json_uses, (
-            f"Prompt uses deprecated slot '{deprecated_name}' in JSON. {reason}"
-        )
+        json_uses = re.findall(rf'"{deprecated_name}"\s*:', prompt)
+        assert (
+            not json_uses
+        ), f"Prompt uses deprecated slot '{deprecated_name}' in JSON. {reason}"
 
 
 # ── 13. Bilingual support ────────────────────────────────────────────────────
+
 
 def test_prompt_mentions_vietnamese_support(prompt: str):
     """Prompt must mention Vietnamese language support."""

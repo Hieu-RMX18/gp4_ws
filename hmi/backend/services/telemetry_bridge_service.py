@@ -24,7 +24,7 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-SNAPSHOT_SCHEMA_VERSION = 'telemetry.v1'
+SNAPSHOT_SCHEMA_VERSION = "telemetry.v1"
 
 
 class TelemetryBridgeService:
@@ -49,7 +49,9 @@ class TelemetryBridgeService:
         self._poll_interval_sec = poll_interval_sec
         self._heartbeat_interval_sec = heartbeat_interval_sec
         self._capabilities = BridgeCapabilities()
-        self._snapshot_overlay_provider: Callable[[str, str], dict[str, Any]] | None = None
+        self._snapshot_overlay_provider: Callable[[str, str], dict[str, Any]] | None = (
+            None
+        )
         self._subscribers: dict[asyncio.Queue[dict[str, Any]], tuple[str, str]] = {}
         self._lock = Lock()
         self._stop_event = asyncio.Event()
@@ -90,7 +92,9 @@ class TelemetryBridgeService:
     ) -> None:
         self._snapshot_overlay_provider = provider
 
-    def subscribe(self, session_id: str, operator_id: str) -> asyncio.Queue[dict[str, Any]]:
+    def subscribe(
+        self, session_id: str, operator_id: str
+    ) -> asyncio.Queue[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=8)
         with self._lock:
             self._subscribers[queue] = (session_id, operator_id)
@@ -174,7 +178,9 @@ class TelemetryBridgeService:
         connections = self._ros.read_connections()
         joints = self._ros.read_joint_positions()
         read_source_statuses = getattr(self._ros, "read_source_statuses", None)
-        source_statuses = read_source_statuses() if callable(read_source_statuses) else []
+        source_statuses = (
+            read_source_statuses() if callable(read_source_statuses) else []
+        )
         transport_state = self._transport_state(connections)
         return {
             "schemaVersion": SNAPSHOT_SCHEMA_VERSION,
@@ -182,10 +188,15 @@ class TelemetryBridgeService:
             "transportState": transport_state,
             "telemetryState": self._telemetry_state(transport_state, source_statuses),
             "mode": runtime.mode.value,
-            "connections": [self._serialize_connection(connection) for connection in connections],
+            "connections": [
+                self._serialize_connection(connection) for connection in connections
+            ],
             "runtime": self._serialize_runtime(runtime),
             "jointPositions": [self._serialize_joint(joint) for joint in joints],
-            "telemetrySources": [self._serialize_source_status(source_status) for source_status in source_statuses],
+            "telemetrySources": [
+                self._serialize_source_status(source_status)
+                for source_status in source_statuses
+            ],
         }
 
     def _build_hmi_snapshot(
@@ -221,7 +232,9 @@ class TelemetryBridgeService:
         for queue, (session_id, operator_id) in subscribers:
             payload = {
                 "type": "snapshot",
-                "snapshot": self._build_hmi_snapshot(base_snapshot, session_id, operator_id),
+                "snapshot": self._build_hmi_snapshot(
+                    base_snapshot, session_id, operator_id
+                ),
             }
             try:
                 if queue.full():
@@ -260,7 +273,9 @@ class TelemetryBridgeService:
             "telemetryState": base_snapshot["telemetryState"],
         }
 
-    def _serialize_lease_view(self, session_id: str, operator_id: str) -> dict[str, Any]:
+    def _serialize_lease_view(
+        self, session_id: str, operator_id: str
+    ) -> dict[str, Any]:
         lease = self._session_lock.current_controller()
         if lease is None:
             return {
@@ -279,7 +294,9 @@ class TelemetryBridgeService:
                 "canForceTakeover": False,
             }
 
-        owns_control = lease.session_id == session_id and lease.operator_id == operator_id
+        owns_control = (
+            lease.session_id == session_id and lease.operator_id == operator_id
+        )
         return {
             "leaseId": lease.lease_id,
             "leaseToken": None,
@@ -322,7 +339,9 @@ class TelemetryBridgeService:
             },
         }
 
-    def _serialize_source_status(self, source_status: TelemetrySourceSnapshot) -> dict[str, Any]:
+    def _serialize_source_status(
+        self, source_status: TelemetrySourceSnapshot
+    ) -> dict[str, Any]:
         return source_status.to_dict()
 
     def _telemetry_state(
@@ -334,7 +353,10 @@ class TelemetryBridgeService:
             return TelemetryFreshnessState.UNAVAILABLE.value
 
         active_sources = [source for source in source_statuses if source.active]
-        if any(source.freshness_state != TelemetryFreshnessState.FRESH for source in active_sources):
+        if any(
+            source.freshness_state != TelemetryFreshnessState.FRESH
+            for source in active_sources
+        ):
             return TelemetryFreshnessState.STALE.value
 
         return TelemetryFreshnessState.FRESH.value
@@ -406,7 +428,9 @@ class TelemetryBridgeService:
                 payload={"statusText": current["runtime"]["statusText"]},
             )
 
-        previous_connections = {item["name"]: item["health"] for item in previous["connections"]}
+        previous_connections = {
+            item["name"]: item["health"] for item in previous["connections"]
+        }
         for connection in current["connections"]:
             name = connection["name"]
             previous_health = previous_connections.get(name)

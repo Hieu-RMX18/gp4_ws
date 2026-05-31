@@ -12,7 +12,7 @@ Frame convention
 ────────────────
 - **Accepted frame:** ``base_link`` (robot base).
 - **Accepted units:** meters (SI). Callers holding millimeters / degrees
-  must normalize upstream (see ``llm_gateway.normalizer``).
+  must normalize upstream (see ``llm_gateway.intent_engine.Normalizer``).
 - **Orientation:** ignored. This guard checks translation only.
 - **End-effector flange vs TCP:** the caller decides which point is
   checked. Station bounds in ``safety_rules.yaml`` are defined for the
@@ -130,7 +130,11 @@ class WorkspaceGuard:
             min_z = zz - sz / 2.0
             max_z = zz + sz / 2.0
 
-            if (min_x <= x <= max_x) and (min_y <= y <= max_y) and (min_z <= z <= max_z):
+            if (
+                (min_x <= x <= max_x)
+                and (min_y <= y <= max_y)
+                and (min_z <= z <= max_z)
+            ):
                 return False, f"collision with {name}"
 
         return True, ""

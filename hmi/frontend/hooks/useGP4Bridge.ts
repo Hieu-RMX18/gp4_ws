@@ -6,10 +6,12 @@ import type {
   GP4BridgeClient,
   HmiStateSnapshot,
   HmiStreamEvent,
+  JogBridgeStatusSnapshot,
   JointPosition,
   LeaseMutationResponse,
   ReplayListItem,
   SequenceView,
+  ServoControlResponse,
   TransportState,
 } from '../../shared/contracts';
 
@@ -52,13 +54,6 @@ function createDisconnectedSnapshot(): HmiStateSnapshot {
         unlocked: false,
         reasons: ['hardware gate status unavailable while bridge is disconnected'],
         flagEnabled: false,
-        evidencePath: 'hmi/data/hardware_gate.json',
-        approvedBy: null,
-        approvedAt: null,
-        reportPath: null,
-        reportSha256: null,
-        reportSha256Match: false,
-        checklist: null,
       },
     },
     lease: {
@@ -94,6 +89,7 @@ function createDisconnectedSnapshot(): HmiStateSnapshot {
     jointPositions: DEFAULT_JOINTS,
     planMetrics: null,
     replayItems: [],
+    toolPose: null,
   };
 }
 
@@ -180,17 +176,32 @@ function applyEvent(snapshot: HmiStateSnapshot, event: HmiStreamEvent): HmiState
   }
 }
 
+export const DEFAULT_JOG_STATUS: JogBridgeStatusSnapshot = {
+  state: 'IDLE',
+  pointsQueued: 0,
+  effectiveHz: 0,
+  robotReady: false,
+  servoActive: false,
+  bridgeActive: false,
+  lastError: '',
+  rejectionReason: '',
+};
+
 export interface UseGp4BridgeResult {
   state: HmiStateSnapshot;
   transportState: TransportState;
+  jogBridgeStatus: JogBridgeStatusSnapshot;
   isController: boolean;
   blockingRuntime: boolean;
   submitCommand: (rawText: string) => Promise<CommandMutationResponse>;
+  submitQuickCommand: (quickCommandId: string) => Promise<CommandMutationResponse>;
   confirmCommandById: (commandId: string, planFingerprint: string) => Promise<CommandMutationResponse>;
   acquireControllerLease: () => Promise<LeaseMutationResponse>;
   releaseLease: () => Promise<LeaseMutationResponse | null>;
   confirmActiveCommand: () => Promise<CommandMutationResponse | null>;
   abortActiveCommand: (reason?: string) => Promise<CommandMutationResponse | null>;
+  startServo: () => Promise<ServoControlResponse | null>;
+  holdServo: () => Promise<ServoControlResponse | null>;
   refreshReplay: () => Promise<ReplayListItem[]>;
 }
 
@@ -201,12 +212,17 @@ export function useGP4Bridge(
 ): UseGp4BridgeResult {
   const [state, setState] = useState<HmiStateSnapshot>(createDisconnectedSnapshot);
   const [transportState, setTransportState] = useState<TransportState>('disconnected');
+  const [jogBridgeStatus, setJogBridgeStatus] = useState<JogBridgeStatusSnapshot>(DEFAULT_JOG_STATUS);
 
   useEffect(() => {
     const disconnect = client.connect({
       sessionId,
       operatorId,
       onEvent: (event) => {
+        if (event.type === 'jog_bridge_status') {
+          setJogBridgeStatus(event.jogBridgeStatus);
+          return;
+        }
         setState((current) => applyEvent(current, event));
       },
       onTransportStateChange: (nextState) => {
@@ -219,7 +235,7 @@ export function useGP4Bridge(
   }, [client, operatorId, sessionId]);
 
   useEffect(() => {
-    if (state.capabilities.readOnly || !state.lease.ownsControl || !state.lease.leaseToken) {
+    if (!state.lease.ownsControl || !state.lease.leaseToken) {
       return undefined;
     }
 
@@ -242,7 +258,7 @@ export function useGP4Bridge(
     }, 5000);
 
     return () => window.clearInterval(interval);
-  }, [client, operatorId, sessionId, state.capabilities.readOnly, state.lease.leaseToken, state.lease.ownsControl]);
+  }, [client, operatorId, sessionId, state.lease.leaseToken, state.lease.ownsControl]);
 
   const acquireControllerLease = useCallback(() => {
     return client.acquireLease({
@@ -269,11 +285,31 @@ export function useGP4Bridge(
   }, [client, operatorId, sessionId, state.lease.leaseToken]);
 
   const submitCommand = useCallback(async (rawText: string) => {
+    if (state.mode !== 'sim' && state.mode !== 'hardware') {
+      throw new Error('Command mode is not command-capable.');
+    }
     const response = await client.submitCommand({
       sessionId,
       operatorId,
       leaseToken: state.lease.leaseToken,
       intentText: rawText,
+      mode: state.mode,
+    });
+    if (response.snapshot) {
+      setState(response.snapshot);
+    }
+    return response;
+  }, [client, operatorId, sessionId, state.lease.leaseToken, state.mode]);
+
+  const submitQuickCommand = useCallback(async (quickCommandId: string) => {
+    if (state.mode !== 'sim' && state.mode !== 'hardware') {
+      throw new Error('Command mode is not command-capable.');
+    }
+    const response = await client.submitCommand({
+      sessionId,
+      operatorId,
+      leaseToken: state.lease.leaseToken,
+      quickCommandId,
       mode: state.mode,
     });
     if (response.snapshot) {
@@ -342,6 +378,28 @@ export function useGP4Bridge(
     return response;
   }, [client, operatorId, sessionId, state.activeCommand, state.activeSequence, state.lease.leaseToken]);
 
+  const startServo = useCallback(async () => {
+    if (!state.lease.leaseToken) {
+      return null;
+    }
+    return client.startServo({
+      sessionId,
+      operatorId,
+      leaseToken: state.lease.leaseToken,
+    });
+  }, [client, operatorId, sessionId, state.lease.leaseToken]);
+
+  const holdServo = useCallback(async () => {
+    if (!state.lease.leaseToken) {
+      return null;
+    }
+    return client.stopServo({
+      sessionId,
+      operatorId,
+      leaseToken: state.lease.leaseToken,
+    });
+  }, [client, operatorId, sessionId, state.lease.leaseToken]);
+
   const refreshReplay = useCallback(async () => {
     const response = await client.listReplay({ limit: 25 });
     setState((current) => ({ ...current, replayItems: response.items }));
@@ -355,14 +413,18 @@ export function useGP4Bridge(
   return {
     state,
     transportState,
-    isController: state.lease.ownsControl && !state.capabilities.readOnly,
+    jogBridgeStatus,
+    isController: state.lease.ownsControl && state.lease.leaseToken !== null,
     blockingRuntime,
     submitCommand,
+    submitQuickCommand,
     confirmCommandById,
     acquireControllerLease,
     releaseLease,
     confirmActiveCommand,
     abortActiveCommand,
+    startServo,
+    holdServo,
     refreshReplay,
   };
 }

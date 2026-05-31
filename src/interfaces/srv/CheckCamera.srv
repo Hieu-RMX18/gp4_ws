@@ -1,0 +1,7 @@
+---
+bool connected
+string firmware_version
+string serial_number
+float64 frame_rate_color_hz
+float64 frame_rate_depth_hz
+string failure_reason        # empty when connected

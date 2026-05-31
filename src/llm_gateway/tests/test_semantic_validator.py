@@ -4,11 +4,13 @@ import pytest
 import yaml
 from pathlib import Path
 
-from llm_gateway.semantic_validator import SemanticValidator
+from llm_gateway.intent_engine import SemanticValidator
 
 
 def _load_workspace_bounds() -> dict:
-    safety_yaml = Path(__file__).resolve().parents[2] / "safety" / "config" / "safety_rules.yaml"
+    safety_yaml = (
+        Path(__file__).resolve().parents[2] / "safety" / "config" / "safety_rules.yaml"
+    )
     safety_rules = yaml.safe_load(safety_yaml.read_text()) or {}
     return safety_rules["workspace_bounds"]
 
@@ -21,7 +23,9 @@ def test_semantic_validator_fallback_bounds_match_safety_rules():
     assert fallback["z"] == pytest.approx((bounds["z_min"], bounds["z_max"]))
 
 
-def test_semantic_validator_accepts_in_bounds_lin(normalizer, semantic_validator, canonical_command):
+def test_semantic_validator_accepts_in_bounds_lin(
+    normalizer, semantic_validator, canonical_command
+):
     normalized = normalizer.normalize(canonical_command)
 
     assert semantic_validator.validate(normalized) is True
@@ -50,7 +54,9 @@ def test_semantic_validator_rejects_home_with_pose(normalizer, semantic_validato
         }
     )
 
-    with pytest.raises(ValueError, match="HOME must not include target_pose or joint_target"):
+    with pytest.raises(
+        ValueError, match="HOME must not include target_pose or joint_target"
+    ):
         semantic_validator.validate(normalized)
 
 
@@ -93,17 +99,21 @@ def test_semantic_validator_rejects_move_rel_zero_delta(normalizer, semantic_val
         "velocity_scale": 0.06,
     }
     normalized = normalizer.normalize(cmd)
-    with pytest.raises(ValueError, match="at least one delta component must be non-zero"):
+    with pytest.raises(
+        ValueError, match="at least one delta component must be non-zero"
+    ):
         semantic_validator.validate(normalized)
 
 
-def test_semantic_validator_rejects_move_rel_oversized_delta(normalizer, semantic_validator):
-    """MOVE_REL with delta norm > 0.05 m is rejected."""
-    # norm = sqrt(0.04^2 + 0.04^2) ≈ 0.0566 > 0.05
+def test_semantic_validator_rejects_move_rel_oversized_delta(
+    normalizer, semantic_validator
+):
+    """MOVE_REL with delta norm above configured safety limit is rejected."""
+    # norm = sqrt(0.16^2 + 0.16^2) ≈ 0.2263 > 0.21
     cmd = {
         "primitive_type": "MOVE_REL",
-        "delta_x": 0.04,
-        "delta_y": 0.04,
+        "delta_x": 0.16,
+        "delta_y": 0.16,
         "delta_z": 0.0,
         "velocity_scale": 0.06,
     }
@@ -112,7 +122,9 @@ def test_semantic_validator_rejects_move_rel_oversized_delta(normalizer, semanti
         semantic_validator.validate(normalized)
 
 
-def test_semantic_validator_rejects_move_rel_unsupported_frame(normalizer, semantic_validator):
+def test_semantic_validator_rejects_move_rel_unsupported_frame(
+    normalizer, semantic_validator
+):
     """MOVE_REL with unsupported reference_frame is rejected."""
     cmd = {
         "primitive_type": "MOVE_REL",
@@ -136,13 +148,14 @@ def test_semantic_validator_rejects_move_rel_missing_delta(semantic_validator):
         "velocity_scale": 0.06,
         "acceleration_scale": 0.06,
         "planner_id": "PILZ_LIN",
-        "require_approval": True,
     }
     with pytest.raises(ValueError, match="MOVE_REL requires delta_y"):
         semantic_validator.validate(cmd)
 
 
-def test_semantic_validator_rejects_move_rel_with_target_pose(normalizer, semantic_validator):
+def test_semantic_validator_rejects_move_rel_with_target_pose(
+    normalizer, semantic_validator
+):
     """MOVE_REL must not include target_pose."""
     cmd = {
         "primitive_type": "MOVE_REL",
@@ -291,7 +304,11 @@ def test_move_joint_reject_negative_index(semantic_validator):
 
 def test_move_joint_reject_infinite_angle(semantic_validator):
     """MOVE_JOINT with infinite angle is rejected."""
-    cmd = {"primitive_type": "MOVE_JOINT", "joint_index": 0, "joint_angle": float("inf")}
+    cmd = {
+        "primitive_type": "MOVE_JOINT",
+        "joint_index": 0,
+        "joint_angle": float("inf"),
+    }
     with pytest.raises(ValueError, match="joint_angle must be a finite number"):
         semantic_validator.validate(cmd)
 
@@ -392,4 +409,181 @@ def test_semantic_validator_accepts_cartesian_path(normalizer, semantic_validato
         }
     )
 
+    assert semantic_validator.validate(normalized) is True
+
+
+# ── BLENDED_SEQUENCE tests (W2.T7) ──
+
+
+def _make_pose_msg(x, y, z):
+    """Create a minimal Pose-like object for semantic validator tests."""
+
+    class _Position:
+        def __init__(self, x, y, z):
+            self.x, self.y, self.z = x, y, z
+
+    class _Orientation:
+        def __init__(self):
+            self.x, self.y, self.z, self.w = 0.0, 0.0, 0.0, 1.0
+
+    class _Pose:
+        def __init__(self, pos):
+            self.position = pos
+            self.orientation = _Orientation()
+
+    return _Pose(_Position(x, y, z))
+
+
+def test_semantic_validator_accepts_valid_blended_sequence(semantic_validator):
+    cmd = {
+        "primitive_type": "BLENDED_SEQUENCE",
+        "sequence_steps": [
+            {
+                "primitive_type": "LIN",
+                "target_pose_msg": _make_pose_msg(0.30, 0.00, 0.30),
+                "blend_radius_m": 0.0,
+            },
+            {
+                "primitive_type": "LIN",
+                "target_pose_msg": _make_pose_msg(0.32, 0.02, 0.30),
+                "blend_radius_m": 0.008,
+            },
+            {
+                "primitive_type": "LIN",
+                "target_pose_msg": _make_pose_msg(0.34, 0.00, 0.30),
+                "blend_radius_m": 0.0,
+            },
+        ],
+    }
+    assert semantic_validator.validate(cmd) is True
+
+
+def test_semantic_validator_rejects_blended_sequence_1_step(semantic_validator):
+    cmd = {
+        "primitive_type": "BLENDED_SEQUENCE",
+        "sequence_steps": [
+            {
+                "primitive_type": "LIN",
+                "target_pose_msg": _make_pose_msg(0.30, 0.00, 0.30),
+                "blend_radius_m": 0.0,
+            },
+        ],
+    }
+    with pytest.raises(ValueError, match="at least 2"):
+        semantic_validator.validate(cmd)
+
+
+def test_semantic_validator_rejects_blended_sequence_first_blend_nonzero(
+    semantic_validator,
+):
+    cmd = {
+        "primitive_type": "BLENDED_SEQUENCE",
+        "sequence_steps": [
+            {
+                "primitive_type": "LIN",
+                "target_pose_msg": _make_pose_msg(0.30, 0.00, 0.30),
+                "blend_radius_m": 0.008,
+            },
+            {
+                "primitive_type": "LIN",
+                "target_pose_msg": _make_pose_msg(0.32, 0.02, 0.30),
+                "blend_radius_m": 0.0,
+            },
+        ],
+    }
+    with pytest.raises(ValueError, match="first step"):
+        semantic_validator.validate(cmd)
+
+
+def test_semantic_validator_rejects_blended_sequence_last_blend_nonzero(
+    semantic_validator,
+):
+    cmd = {
+        "primitive_type": "BLENDED_SEQUENCE",
+        "sequence_steps": [
+            {
+                "primitive_type": "LIN",
+                "target_pose_msg": _make_pose_msg(0.30, 0.00, 0.30),
+                "blend_radius_m": 0.0,
+            },
+            {
+                "primitive_type": "LIN",
+                "target_pose_msg": _make_pose_msg(0.32, 0.02, 0.30),
+                "blend_radius_m": 0.008,
+            },
+        ],
+    }
+    with pytest.raises(ValueError, match="last step"):
+        semantic_validator.validate(cmd)
+
+
+def test_semantic_validator_rejects_blended_sequence_step_out_of_workspace(
+    semantic_validator,
+):
+    cmd = {
+        "primitive_type": "BLENDED_SEQUENCE",
+        "sequence_steps": [
+            {
+                "primitive_type": "LIN",
+                "target_pose_msg": _make_pose_msg(0.30, 0.00, 0.30),
+                "blend_radius_m": 0.0,
+            },
+            {
+                "primitive_type": "LIN",
+                "target_pose_msg": _make_pose_msg(0.90, 0.00, 0.30),
+                "blend_radius_m": 0.0,
+            },
+        ],
+    }
+    with pytest.raises(ValueError, match="BLENDED_SEQUENCE step"):
+        semantic_validator.validate(cmd)
+
+
+# ── CIRC degenerate arc tests (W2.T6) ──
+
+
+def test_semantic_validator_rejects_circ_degenerate_colinear(
+    normalizer, semantic_validator
+):
+    """CIRC with colinear start, aux, goal should be rejected."""
+    cmd = {
+        "primitive_type": "CIRC",
+        "target_pose": {
+            "position": {"x": 0.34, "y": 0.00, "z": 0.30},
+            "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
+        },
+        "waypoints": [
+            {
+                "position": {"x": 0.32, "y": 0.00, "z": 0.30},
+                "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
+            }
+        ],
+        "velocity_scale": 0.06,
+    }
+    normalized = normalizer.normalize(cmd)
+    normalized["start_pose_msg"] = _make_pose_msg(0.30, 0.00, 0.30)
+    with pytest.raises(ValueError, match="degenerate CIRC"):
+        semantic_validator.validate(normalized)
+
+
+def test_semantic_validator_accepts_circ_non_degenerate_with_start(
+    normalizer, semantic_validator
+):
+    """CIRC with non-colinear start, aux, goal should pass."""
+    cmd = {
+        "primitive_type": "CIRC",
+        "target_pose": {
+            "position": {"x": 0.30, "y": 0.00, "z": 0.40},
+            "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
+        },
+        "waypoints": [
+            {
+                "position": {"x": 0.32, "y": 0.05, "z": 0.42},
+                "orientation": {"x": 0.0, "y": 1.0, "z": 0.0, "w": 0.0},
+            }
+        ],
+        "velocity_scale": 0.06,
+    }
+    normalized = normalizer.normalize(cmd)
+    normalized["start_pose_msg"] = _make_pose_msg(0.28, 0.00, 0.38)
     assert semantic_validator.validate(normalized) is True

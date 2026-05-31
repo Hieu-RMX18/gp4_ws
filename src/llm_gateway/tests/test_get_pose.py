@@ -18,10 +18,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from llm_gateway.normalizer import Normalizer
-from llm_gateway.parser import LLMParser
-from llm_gateway.schema_validator import SchemaValidator
-from llm_gateway.semantic_validator import SemanticValidator
+from llm_gateway.intent_engine import Normalizer
+from llm_gateway.intent_engine import LLMParser
+from llm_gateway.intent_engine import SchemaValidator
+from llm_gateway.intent_engine import SemanticValidator
 
 
 # ── Tier 1: Pure-logic tests (no ROS dependencies) ──────────────────────────
@@ -56,7 +56,7 @@ def test_normalizer_get_pose_returns_minimal(normalizer: Normalizer):
     assert "velocity_scale" not in result
     assert "acceleration_scale" not in result
     assert "planner_id" not in result
-    assert "require_approval" not in result
+    assert "require_approval" not in result  # field removed from action
 
 
 def test_normalizer_get_pose_preserves_reference_frame(normalizer: Normalizer):
@@ -124,6 +124,7 @@ class ImmediateFuture:
             raise self._error
         return self._result
 
+
 @pytest.mark.ros_integration
 def test_gateway_routes_get_pose_to_query_service(ros_integration_context):
     """GET_POSE must go through query service, NOT ValidateCommand/ExecuteMotion."""
@@ -134,11 +135,13 @@ def test_gateway_routes_get_pose_to_query_service(ros_integration_context):
     debug_messages = []
     node.publish_status = lambda status: statuses.append(status)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
 
-    # Mock the LLM to return a GET_POSE command
-    get_pose_payload = json.dumps({"primitive_type": "GET_POSE"})
+    # Mock the LLM to return a GET_POSE semantic IR command
+    get_pose_payload = json.dumps(
+        {"intent": "get_pose", "reference_frame": "base_link"}
+    )
     node._llm_client.generate_response = MagicMock(return_value=get_pose_payload)
 
     # Mock the query service
@@ -179,8 +182,9 @@ def test_gateway_routes_get_pose_to_query_service(ros_integration_context):
     node._get_pose_client.call_async.assert_called_once()
 
     # Verify debug output contains pose data
-    assert any(m.get("status") == "query_result" for m in debug_messages), \
-        f"Expected query_result in debug, got: {debug_messages}"
+    assert any(
+        m.get("status") == "query_result" for m in debug_messages
+    ), f"Expected query_result in debug, got: {debug_messages}"
     query_msg = next(m for m in debug_messages if m["status"] == "query_result")
     assert query_msg["current_pose"]["position"]["x"] == 0.35
     assert "query_succeeded" in statuses
@@ -189,7 +193,9 @@ def test_gateway_routes_get_pose_to_query_service(ros_integration_context):
 
 
 @pytest.mark.ros_integration
-def test_gateway_fails_closed_when_get_pose_service_unavailable(ros_integration_context):
+def test_gateway_fails_closed_when_get_pose_service_unavailable(
+    ros_integration_context,
+):
     """GET_POSE must fail-closed when the query service is unavailable."""
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
@@ -198,10 +204,12 @@ def test_gateway_fails_closed_when_get_pose_service_unavailable(ros_integration_
     debug_messages = []
     node.publish_status = lambda status: statuses.append(status)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
 
-    get_pose_payload = json.dumps({"primitive_type": "GET_POSE"})
+    get_pose_payload = json.dumps(
+        {"intent": "get_pose", "reference_frame": "base_link"}
+    )
     node._llm_client.generate_response = MagicMock(return_value=get_pose_payload)
     node._get_pose_client.wait_for_service = MagicMock(return_value=False)
 
@@ -230,10 +238,12 @@ def test_gateway_handles_get_pose_service_failure(ros_integration_context):
     debug_messages = []
     node.publish_status = lambda status: statuses.append(status)
     node._llm_debug_publisher.publish = MagicMock(
-        side_effect=lambda msg: debug_messages.append(json.loads(msg.data))
+        side_effect=lambda msg: (lambda d: debug_messages.append(d) if str(d.get('t')) != 'command_trace' else None)(json.loads(msg.data))
     )
 
-    get_pose_payload = json.dumps({"primitive_type": "GET_POSE"})
+    get_pose_payload = json.dumps(
+        {"intent": "get_pose", "reference_frame": "base_link"}
+    )
     node._llm_client.generate_response = MagicMock(return_value=get_pose_payload)
 
     mock_response = SimpleNamespace(
@@ -268,16 +278,17 @@ def test_gateway_get_pose_does_not_affect_motion_path(ros_integration_context):
     node._llm_debug_publisher.publish = MagicMock()
 
     # HOME command — must go through ValidateCommand, not query path
-    home_payload = json.dumps({"primitive_type": "HOME"})
+    home_payload = json.dumps({"intent": "go_home"})
     node._llm_client.generate_response = MagicMock(return_value=home_payload)
     node._validate_client.wait_for_service = MagicMock(return_value=True)
-    sanitized_json = json.dumps({
-        "primitive_type": "HOME",
-        "velocity_scale": 0.06,
-        "acceleration_scale": 0.06,
-        "planner_id": "PILZ_PTP",
-        "require_approval": False,
-    })
+    sanitized_json = json.dumps(
+        {
+            "primitive_type": "HOME",
+            "velocity_scale": 0.06,
+            "acceleration_scale": 0.06,
+            "planner_id": "PILZ_PTP",
+        }
+    )
     node._validate_client.call_async = MagicMock(
         return_value=ImmediateFuture(
             SimpleNamespace(valid=True, reason="OK", sanitized_json=sanitized_json)

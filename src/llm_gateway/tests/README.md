@@ -14,16 +14,17 @@ This tier covers:
 
 | Test file                         | Focus                                         |
 | --------------------------------- | --------------------------------------------- |
-| `test_parser.py`                  | LLM response extraction                       |
-| `test_schema_validator.py`        | Schema envelope checks                        |
+| `test_core_pipeline.py`           | Parser, execution command helpers, workplane hydration |
+| `test_contracts.py`               | Schema, semantic IR, and cross-layer contract checks |
 | `test_normalizer.py`              | Normalization defaults                        |
 | `test_semantic_validator.py`      | Semantic safety rules                         |
-| `test_contract_consistency.py`    | Cross-layer primitive set alignment           |
 | `test_intent_router.py`           | Semantic IR → primitive routing               |
-| `test_draw_shape.py`              | draw_shape macro routing (sim-only policy)    |
+| `test_drawing.py`                 | Drawing geometry, draw_shape, draw_text, stroke font |
 | `test_sequence_validator.py`      | Sequence prevalidation logic                  |
 | `test_prompt_builder_v2_1.py`     | System prompt contract tests                  |
-| `test_text_cli.py`                | CLI argument parsing                          |
+| `test_react_agent.py`             | ReAct agent loop, state injector, iteration budget |
+| `test_react_tools.py`             | Source-level ReAct tool safety contracts      |
+| `test_llm_backend.py`             | LLM backend config and retry behavior         |
 | `test_get_pose.py` (Tier 1 tests) | GET_POSE schema, normalizer, semantic, parser |
 
 **How to run:**
@@ -84,17 +85,11 @@ python3 -m pytest -m ros_integration
 
 ### Source-only mode
 
-```
-183 passed, 12 skipped
-```
-
-Skipped tests: 4 from `test_get_pose.py` + 8 from `test_integration.py`,
-all with reason: `requires colcon-sourced workspace with built interfaces`.
+All source-only tests should collect. Tests that require generated ROS
+interfaces are skipped with reason:
+`requires colcon-sourced workspace with built interfaces`.
 
 ### Full colcon mode
 
-```
-195 passed, 0 skipped
-```
-
-All tests pass (assuming ROS services are mocked correctly).
+All tests pass with no interface-availability skips, assuming ROS services are
+mocked correctly.

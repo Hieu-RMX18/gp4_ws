@@ -1,0 +1,54 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: GP4 Perception
+    Properties:
+      - Class: rviz_default_plugins/Grid
+        Name: Workspace Grid
+        Reference Frame: base_link
+        Plane Cell Count: 20
+        Color: 100; 100; 100
+      - Class: rviz_default_plugins/TF
+        Name: TF
+        Show Arrows: false
+        Show Axes: true
+        Show Names: true
+        Marker Scale: 0.3
+      - Class: rviz_default_plugins/PointCloud2
+        Name: PointCloud
+        Topic: /camera/depth/color/points
+        Reliability: Best Effort
+        Size (Pixels): 3
+        Color Transformer: RGB8
+        Use rainbow: true
+        Use fixed Frame: true
+      - Class: rviz_default_plugins/MarkerArray
+        Name: Detections
+        Topic: /perception/detection_markers
+        Reliability: Reliable
+      - Class: rviz_default_plugins/MarkerArray
+        Name: Debug Clusters
+        Topic: /perception/debug_clusters
+        Reliability: Reliable
+      - Class: rviz_default_plugins/PlanningScene
+        Name: PlanningScene
+        Topic: /monitored_planning_scene
+        Robot Description: robot_description
+      - Class: rviz_default_plugins/RobotModel
+        Name: RobotModel
+        Description Topic: /robot_description
+        TF Prefix: ""
+  - Class: rviz_common/Views
+    Name: Views
+    Properties:
+      - Class: rviz_default_plugins/Orbit
+        Name: Orbit
+        Distance: 1.5
+        Focal Point:
+          X: 0.3
+          Y: 0.0
+          Z: 0.2
+        Pitch: 0.5
+        Yaw: 0.0
+Window Geometry:
+  Width: 1200
+  Height: 800

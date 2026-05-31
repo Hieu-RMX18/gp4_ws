@@ -1,0 +1,56 @@
+# Nominal camera mount configuration for GP4 workcell.
+#
+# This file stores the APPROXIMATE physical camera position for URDF visualisation
+# and FOV coverage estimation. It is NOT the calibrated extrinsics.
+#
+# The ACTUAL camera→robot transform is determined by hand-eye calibration
+# and stored in extrinsics.yaml. That calibrated transform takes priority
+# over these nominal values for all perception and motion tasks.
+#
+# Coordinate frame: base_link (GP4 robot base)
+#
+# Camera placement (operator perspective, facing station front):
+#   - Front of robot (facing direction at HOME pose), centred on base_link Y axis (X ≈ 0)
+#   - Diagonal distance from base origin to camera: ~1.025 m
+#   - Horizontal/vertical leg of the diagonal: ~0.724 m each
+#   - Pitch down ~45° towards base origin
+#
+# This position is derived from physical measurement (scale 0.25 in CAD).
+
+camera_mount:
+  # --- Nominal position in base_link frame ---
+  # Front-center relative to HOME pose facing direction.
+  translation_m:
+    x:  0.000   # centred on robot Y axis (m)
+    y:  0.724   # forward from base origin at HOME pose (m)
+    z:  0.726   # height above base origin (m)
+
+  # --- Nominal orientation ---
+  # Euler angles (RPY) in base_link frame.
+  # Camera optical axis: Z-forward, X-right, Y-down (OpenCV convention).
+  # Camera looks back toward robot base from +Y, pitched down ~45°.
+  orientation_rpy_rad:
+    roll:  2.356   # ~135° (optical Z toward robot base)
+    pitch: 0.000
+    yaw:   3.142   # ~180°
+
+  # --- FOV coverage check ---
+  # D435i depth FOV: 87° × 58° (H × V)
+  # At 1.025 m distance with 45° pitch:
+  #   Horizontal coverage: ~2 × 1.025 × tan(43.5°) ≈ 1.95 m
+  #   Vertical coverage:   ~2 × 1.025 × tan(29°)  ≈ 1.14 m
+  # Conclusion: adequate coverage of the GP4 workspace area.
+  fov_check:
+    estimated_distance_m: 1.025
+    h_coverage_m: 1.95
+    v_coverage_m: 1.14
+    adequate: true
+
+  # --- Calibration notes ---
+  # After physical mounting:
+  # 1. Measure the actual camera position with a tape measure or CAD overlay.
+  # 2. Update the translation_m values above for better URDF visualisation.
+  # 3. Run hand-eye calibration
+  #    (see docs/perception/d435i_hand_eye_calibration_runbook.md).
+  # 4. The calibrated extrinsics in extrinsics.yaml override these nominal values
+  #    for all perception and motion tasks.

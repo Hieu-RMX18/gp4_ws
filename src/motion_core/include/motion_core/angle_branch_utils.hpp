@@ -5,10 +5,8 @@
 
 #include <moveit/robot_model/joint_model.h>
 
-namespace motion_core
-{
-struct BranchPreservedAngleResult
-{
+namespace motion_core {
+struct BranchPreservedAngleResult {
   bool success = false;
   double chosen_target = 0.0;
   double delta_from_current = 0.0;
@@ -16,8 +14,7 @@ struct BranchPreservedAngleResult
   std::string helper_used;
 };
 
-struct BranchPreservedJointVectorResult
-{
+struct BranchPreservedJointVectorResult {
   bool success = false;
   std::vector<double> chosen_targets;
   std::vector<double> deltas_from_current;
@@ -27,16 +24,15 @@ struct BranchPreservedJointVectorResult
 
 double normalize_angle_for_display(double angle);
 
-std::vector<double> normalize_joint_vector_for_display(const std::vector<double> & joints);
+std::vector<double>
+normalize_joint_vector_for_display(const std::vector<double> &joints);
 
-BranchPreservedAngleResult choose_branch_preserved_angle(
-  double current,
-  double requested,
-  double lower_limit,
-  double upper_limit);
+BranchPreservedAngleResult choose_branch_preserved_angle(double current,
+                                                         double requested,
+                                                         double lower_limit,
+                                                         double upper_limit);
 
 BranchPreservedJointVectorResult choose_branch_preserved_joint_vector(
-  const std::vector<const moveit::core::JointModel *> & joint_models,
-  const std::vector<double> & current,
-  const std::vector<double> & requested);
-}  // namespace motion_core
+    const std::vector<const moveit::core::JointModel *> &joint_models,
+    const std::vector<double> &current, const std::vector<double> &requested);
+} // namespace motion_core

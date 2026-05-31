@@ -22,17 +22,22 @@ def _utcnow() -> datetime:
 
 
 class SupervisorViewsMixin:
+    def _deterministic_quick_commands_ready(self) -> bool:
+        return True
+
     def _bridge_capabilities(self) -> BridgeCapabilities:
         runtime = self._current_runtime()
         hardware_gate = self._hardware_gate_evaluator.evaluate()
+        deterministic_quick_ready = self._deterministic_quick_commands_ready()
+        command_ingress_ready = deterministic_quick_ready
         if runtime.mode == RuntimeMode.SIM:
-            command_ingress_available = True
+            command_ingress_available = command_ingress_ready
             confirmation_available = True
             sim_only = True
         elif runtime.mode == RuntimeMode.HARDWARE:
-            command_ingress_available = hardware_gate.unlocked
-            confirmation_available = hardware_gate.unlocked
-            sim_only = not hardware_gate.unlocked
+            command_ingress_available = command_ingress_ready
+            confirmation_available = True
+            sim_only = False
         else:
             command_ingress_available = False
             confirmation_available = False
@@ -49,28 +54,26 @@ class SupervisorViewsMixin:
             execution_allowed=command_ingress_available,
             replay_available=True,
             sim_only=sim_only,
-            hardware_gate=hardware_gate,
+            hardware_gate=hardware_gate.to_dict(),
         )
 
-    def _serialize_lease_view(self, session_id: str, operator_id: str) -> dict[str, Any]:
+    def _serialize_lease_view(
+        self, session_id: str, operator_id: str
+    ) -> dict[str, Any]:
         capabilities = self._bridge_capabilities()
         runtime = self._current_runtime()
         lease = self._session_lock.current_controller()
         if lease is None:
-            if runtime.mode == RuntimeMode.HARDWARE:
+            if capabilities.can_acquire_lease:
+                status_text = "Observer mode — request the supervisor lease before submitting commands."
+            elif runtime.mode == RuntimeMode.HARDWARE:
                 status_text = (
-                    "Hardware command ingress locked — "
-                    + (
-                        capabilities.hardware_gate.reasons[0]
-                        if capabilities.hardware_gate.reasons
-                        else "dual hardware gate is not satisfied."
-                    )
+                    "Hardware command ingress unavailable — command review path is "
+                    "not ready."
                 )
             else:
                 status_text = (
-                    "Observer mode — request the supervisor lease before submitting commands."
-                    if capabilities.can_acquire_lease
-                    else "Read-only telemetry mode — command lease acquisition is disabled."
+                    "Read-only telemetry mode — command lease acquisition is disabled."
                 )
             return {
                 "leaseId": None,
@@ -85,24 +88,34 @@ class SupervisorViewsMixin:
                 "canForceTakeover": capabilities.can_acquire_lease,
             }
 
-        owns_control = lease.session_id == session_id and lease.operator_id == operator_id
-        if capabilities.read_only:
-            role = LeaseRole.OBSERVER.value
-            lease_token: str | None = None
-            owns_control = False
+        owns_control = (
+            lease.session_id == session_id and lease.operator_id == operator_id
+        )
+        if not capabilities.confirmation_available:
+            role = (
+                LeaseRole.CONTROLLER.value if owns_control else LeaseRole.OBSERVER.value
+            )
+            lease_token: str | None = lease.lease_token if owns_control else None
             if runtime.mode == RuntimeMode.HARDWARE:
+                locked_text = (
+                    "Hardware command ingress unavailable — command review path "
+                    "is not ready."
+                )
                 status_text = (
-                    "Hardware command ingress locked — "
-                    + (
-                        capabilities.hardware_gate.reasons[0]
-                        if capabilities.hardware_gate.reasons
-                        else "dual hardware gate is not satisfied."
-                    )
+                    f"Controller lease active for this session; {locked_text}"
+                    if owns_control
+                    else locked_text
                 )
             else:
-                status_text = "Read-only telemetry mode — command lease is disabled."
+                status_text = (
+                    "Controller lease active for this session; command ingress is read-only."
+                    if owns_control
+                    else "Read-only telemetry mode — command lease is disabled."
+                )
         else:
-            role = LeaseRole.CONTROLLER.value if owns_control else LeaseRole.OBSERVER.value
+            role = (
+                LeaseRole.CONTROLLER.value if owns_control else LeaseRole.OBSERVER.value
+            )
             lease_token = lease.lease_token if owns_control else None
             status_text = (
                 "Controller lease active for this session"
@@ -135,7 +148,9 @@ class SupervisorViewsMixin:
             "replanCount": metrics.replan_count,
         }
 
-    def _serialize_command(self, command: CommandRecord | None) -> dict[str, Any] | None:
+    def _serialize_command(
+        self, command: CommandRecord | None
+    ) -> dict[str, Any] | None:
         if command is None:
             return None
         return {
@@ -160,7 +175,9 @@ class SupervisorViewsMixin:
             "planSummary": command.plan_summary,
             "metrics": self._serialize_metrics(command.metrics),
             "confirmationExpiresAt": (
-                command.confirmation_expires_at.isoformat() if command.confirmation_expires_at else None
+                command.confirmation_expires_at.isoformat()
+                if command.confirmation_expires_at
+                else None
             ),
             "createdAt": command.created_at.isoformat(),
             "confirmAt": command.confirm_at.isoformat() if command.confirm_at else None,
@@ -170,9 +187,12 @@ class SupervisorViewsMixin:
             "parentSequenceId": command.parent_sequence_id,
             "sequenceStepIndex": command.sequence_step_index,
             "sequenceStepCount": command.sequence_step_count,
+            "pipelineTraces": command.pipeline_traces,
         }
 
-    def _serialize_sequence(self, command: CommandRecord | None) -> dict[str, Any] | None:
+    def _serialize_sequence(
+        self, command: CommandRecord | None
+    ) -> dict[str, Any] | None:
         if command is None:
             return None
         steps = [
@@ -200,7 +220,9 @@ class SupervisorViewsMixin:
             "planSummary": command.plan_summary,
             "metrics": self._serialize_metrics(command.metrics),
             "confirmationExpiresAt": (
-                command.confirmation_expires_at.isoformat() if command.confirmation_expires_at else None
+                command.confirmation_expires_at.isoformat()
+                if command.confirmation_expires_at
+                else None
             ),
             "createdAt": command.created_at.isoformat(),
             "confirmAt": command.confirm_at.isoformat() if command.confirm_at else None,
@@ -226,9 +248,11 @@ class SupervisorViewsMixin:
             "sessionId": row["session_id"],
             "operatorId": row["operator_id"],
             "rawText": row["raw_text"],
-            "intentSource": "structured" if structured_intent else "text",
+            "intentSource": "text" if row["raw_text"] else "structured",
             "structuredIntent": structured_intent,
-            "lifecycleState": row.get("lifecycle_state") or row.get("final_state") or CommandLifecycleState.RECEIVED.value,
+            "lifecycleState": row.get("lifecycle_state")
+            or row.get("final_state")
+            or CommandLifecycleState.RECEIVED.value,
             "summaryLabel": row.get("summary_label") or row["raw_text"][:80],
             "plannerUsed": row.get("planner_used"),
             "frameUsed": row.get("frame_used"),
@@ -252,7 +276,9 @@ class SupervisorViewsMixin:
             "sequenceStepCount": row.get("sequence_step_count"),
         }
 
-    def _serialize_audited_sequence(self, row: dict[str, Any], steps: list[dict[str, Any]]) -> dict[str, Any]:
+    def _serialize_audited_sequence(
+        self, row: dict[str, Any], steps: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         validation_result = self._decode_json(row.get("validation_result_json"))
         structured_intent = self._decode_json(row.get("structured_intent_json"))
         plan_summary = self._decode_json(row.get("plan_summary_json"))
@@ -264,9 +290,11 @@ class SupervisorViewsMixin:
             "sessionId": row["session_id"],
             "operatorId": row["operator_id"],
             "rawText": row["raw_text"],
-            "intentSource": "structured" if structured_intent else "text",
+            "intentSource": "text" if row["raw_text"] else "structured",
             "structuredIntent": structured_intent,
-            "lifecycleState": row.get("lifecycle_state") or row.get("final_state") or CommandLifecycleState.RECEIVED.value,
+            "lifecycleState": row.get("lifecycle_state")
+            or row.get("final_state")
+            or CommandLifecycleState.RECEIVED.value,
             "summaryLabel": row.get("summary_label") or row["raw_text"][:80],
             "plannerUsed": row.get("planner_used"),
             "frameUsed": row.get("frame_used"),
@@ -292,7 +320,11 @@ class SupervisorViewsMixin:
         }
 
     def _serialize_replay_item(self, row: dict[str, Any]) -> dict[str, Any]:
-        lifecycle_state = row.get("lifecycle_state") or row.get("final_state") or CommandLifecycleState.RECEIVED.value
+        lifecycle_state = (
+            row.get("lifecycle_state")
+            or row.get("final_state")
+            or CommandLifecycleState.RECEIVED.value
+        )
         return {
             "commandId": row["command_id"],
             "kind": row.get("command_kind") or CommandKind.COMMAND.value,
@@ -361,7 +393,9 @@ class SupervisorViewsMixin:
             "commandId": command.command_id,
             "jobType": CommandKind.COMMAND.value,
             "reason": reason,
-            "snapshot": self._telemetry.get_snapshot(session_id, operator_id) if self._telemetry else None,
+            "snapshot": self._telemetry.get_snapshot(session_id, operator_id)
+            if self._telemetry
+            else None,
             "command": self._serialize_command(command),
             "sequenceId": None,
             "sequence": None,
@@ -376,13 +410,19 @@ class SupervisorViewsMixin:
         accepted: bool,
         reason: str | None,
     ) -> dict[str, Any]:
-        active_command = self._commands.get(self._active_command_id) if self._active_command_id else None
+        active_command = (
+            self._commands.get(self._active_command_id)
+            if self._active_command_id
+            else None
+        )
         return {
             "accepted": accepted,
             "commandId": active_command.command_id if active_command else None,
             "jobType": CommandKind.SEQUENCE.value,
             "reason": reason,
-            "snapshot": self._telemetry.get_snapshot(session_id, operator_id) if self._telemetry else None,
+            "snapshot": self._telemetry.get_snapshot(session_id, operator_id)
+            if self._telemetry
+            else None,
             "command": self._serialize_command(active_command),
             "sequenceId": sequence.command_id,
             "sequence": self._serialize_sequence(sequence),
@@ -399,7 +439,9 @@ class SupervisorViewsMixin:
             lambda _session_id, _operator_id: {
                 "type": "command_lifecycle",
                 "command": self._serialize_command(command),
-                "messages": [message.to_dict() for message in messages] if messages else [],
+                "messages": [message.to_dict() for message in messages]
+                if messages
+                else [],
                 "planMetrics": self._serialize_metrics(command.metrics),
             }
         )
@@ -416,7 +458,9 @@ class SupervisorViewsMixin:
             lambda _session_id, _operator_id: {
                 "type": "sequence_lifecycle",
                 "sequence": self._serialize_sequence(command),
-                "messages": [message.to_dict() for message in messages] if messages else [],
+                "messages": [message.to_dict() for message in messages]
+                if messages
+                else [],
             }
         )
         self._broadcast_replay_update()
@@ -452,6 +496,7 @@ class SupervisorViewsMixin:
         text: str,
         command_id: str | None = None,
         tag: str | None = None,
+        source: str | None = None,
     ) -> ChatMessage:
         message = ChatMessage(
             message_id=str(uuid4()),
@@ -460,6 +505,7 @@ class SupervisorViewsMixin:
             timestamp=_utcnow().strftime("%H:%M:%S"),
             text=text,
             tag=tag,
+            source=source,
         )
         self._messages.append(message)
         return message

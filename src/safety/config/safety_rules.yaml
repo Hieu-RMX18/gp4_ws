@@ -12,8 +12,8 @@ workspace_bounds:
   x_max:  0.45   # conservative cap; do not expand positive X for hardware pass
   y_min: -0.16   # station front wall -0.197m + 37mm; kept above front_wall_guard max
   y_max:  0.52   # reach-limited  (back wall at +0.806m, beyond reach)
-  z_min:  0.23   # table-top estimated 0.20m + 30mm margin
-  z_max:  0.56   # relaxed from 0.52 for commissioning; current TCP z~0.53 when START
+  z_min:  0.15   # lowered per operator verification 2026-05-17; robot safely reaches below prev 0.23
+  z_max:  0.65   # raised per operator approval for taller workpieces; still inside station mesh + reach envelope
 
 # Backward-compatible keys still used by safety.command_validator.
 joint_limits_override:
@@ -24,7 +24,7 @@ joint_limits_override:
 motion_limits:
   max_velocity_scale: 0.06
   max_acceleration_scale: 0.06
-  max_move_rel_translation: 0.05
+  max_move_rel_translation: 0.21
 
 forbidden_zones:
   # Station front face (Y = -0.197m in base_link).  30mm zone each side of wall.
@@ -48,17 +48,94 @@ forbidden_zones:
     size_z: 1.50
 
   # Low-Z floor/table clearance. Defence-in-depth under workspace z_min.
-  # Spans Z: [0.00, 0.20]. Prevents inadvertent descent into table surface.
+  # Spans Z: [0.00, 0.12]. Prevents inadvertent descent into table surface.
   - name: floor_clearance_guard
     x:  0.00
     y:  0.30
-    z:  0.10
+    z:  0.06
     size_x: 1.50
     size_y: 1.10
-    size_z: 0.20
+    size_z: 0.12
+
+# operational_joint_limits — per U1 of PATCH-v3.1, J5 is HARD ±90°.
+# Do NOT widen this limit. If a use case requires J5 outside ±90°,
+# raise it as a new safety review, NOT as a unilateral edit here.
+# Named states requiring J5 < -1.571 rad were deleted in W1.T0
+# per the W0.T8 audit (see docs/audit/NAMED_STATE_AUDIT.md).
+# NOTE: home pose has J5 = -1.602 rad. Operator widened J5 to ±1.603 rad
+# on 2026-05-04 to accommodate home pose (Option C, NAMED_STATE_AUDIT.md).
+#
+# Soft limits enforced by JointPositionGuard at the trajectory point level.
+# MUST be a strict subset of the URDF/SRDF hardware limits in
+# src/gp4_moveit_config/config/joint_limits.yaml.
+# Hardware limits stay untouched; this is an additional, tighter envelope.
+operational_joint_limits:
+  joint_1_s: {min: -2.967, max:  2.967}   # +/-170 deg (= hardware S)
+  joint_2_l: {min: -1.9198, max:  2.2689}  # = hardware L (asymmetric)
+  joint_3_u: {min: -1.1344, max:  3.4906}  # = hardware U (asymmetric)
+  joint_4_r: {min: -2.443, max:  2.443}   # +/-140 deg (hardware R is +/-200 deg, derated)
+  joint_5_b: {min: -1.80, max:  1.80}     # +/-103 deg (hardware B is +/-123 deg, derated; widened per operator 2026-05-17 for HOME margin)
+  joint_6_t:
+    default:  {min: -3.142, max:  3.142}     # +/-180 deg (default safety envelope)
+    # Extended +/-455 deg mode is disabled for the current hardware-debug wave.
+    # Keep the ExecuteMotion fields for ROS interface compatibility; any
+    # extended_mode request is rejected by CommandValidator.
+
+joint_position_guard:
+  enabled: true
+  tolerance_rad: 0.005   # 0.29 deg — absorbs MoveIt interpolation artifacts without widening limits
+  reject_message_template: "joint_position_guard reject at point[{idx}]: {joint} = {value:.4f} rad outside [{min:.4f}, {max:.4f}]"
+
+manipulability_guard:
+  enabled: true
+  # Raw sqrt(det(J*J^T)) has m^3 scale for a 6-DOF arm with linear rows in meters.
+  # Normalize by GP4 horizontal reach^3 so the floor remains robot-size independent.
+  reference_length_m: 0.55
+  floor: 0.05                # normalized Yoshikawa floor; <0.05 is near-singular for GP4 6-DOF wrist
+  sample_every_n_points: 5   # check every 5th waypoint to keep cost bounded
+  reject_message_template: "manipulability_guard reject at point[{idx}]: w={w:.4f} < floor {floor:.4f}"
+
+cumulative_rotation_guard:
+  enabled: true
+  max_rad:
+    joint_4_r: 6.283   # 360 deg total trajectory rotation
+    joint_5_b: 4.189   # 240 deg
+    joint_6_t: 9.425   # 540 deg (more permissive — common in wind-on tasks)
+
+# W2: Drawing SSOT — blend radii, velocity defaults, fallback workplane
+drawing:
+  use_blended_sequence: false    # draw macros use CARTESIAN_PATH until MoveGroupSequence is stable for dense strokes
+  blend_radius_m: 0.008          # default for intermediate LIN items
+  blend_radius_m_max: 0.015      # hard upper bound enforced by schema
+  velocity_scale_default: 0.10   # used when caller does not specify
+  fallback_workplane:
+    mode: "base"
+    pose:
+      position: {x: 0.30, y: 0.0, z: 0.20}
+      orientation: {x: 1.0, y: 0.0, z: 0.0, w: 0.0}
+
+# W3: ReAct agent configuration
+llm:
+  react:
+    enabled: true
+    max_total_iterations: 5
+    max_motion_iterations: 3
+    max_readonly_iterations: 10
+    max_repair_iterations: 1
+    wall_clock_timeout_s: 30
+    temperature: 0.2
+
+# W2: CIRC degenerate arc tolerance
+circ:
+  degenerate_tolerance: 1.0e-3   # cross-product ratio below this → colinear → reject
 
 require_human_approval:
-  # Advisory HMI/supervisor review policy only; ExecuteMotion.require_approval
-  # is a deprecated compatibility field and is not enforced by motion_core.
+  # Advisory HMI/supervisor review policy only. Human approval is owned by
+  # the HMI supervisor lease/confirm flow, not by the ExecuteMotion action.
   velocity_scale_threshold: 0.05
   distance_from_home_threshold: 0.30
+
+# W4: Perception calibration quality gates
+calibration:
+  max_age_days: 30
+  max_reprojection_error_mm: 5.0

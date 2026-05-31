@@ -1,0 +1,10 @@
+fiducials:
+  # Charuco board specification used for hand-eye calibration.
+  # Printed board: 10 rows x 11 columns, 20 mm checker, 15 mm marker.
+  target_type: "charuco"
+  marker_dictionary: "DICT_5X5_100"
+  board_rows: 10
+  board_columns: 11
+  square_length_m: 0.020
+  marker_length_m: 0.015
+  marker_separation_m: 0.005

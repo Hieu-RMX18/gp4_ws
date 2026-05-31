@@ -3,19 +3,29 @@ import yaml
 import pytest
 from geometry_msgs.msg import Pose
 
+
 @pytest.fixture
 def safety_rules():
-    yaml_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'safety_rules.yaml')
-    with open(yaml_path, 'r') as f:
+    yaml_path = os.path.join(
+        os.path.dirname(__file__), "..", "config", "safety_rules.yaml"
+    )
+    with open(yaml_path, "r") as f:
         rules = yaml.safe_load(f)
-    
+
     # Inject a known test_box inside bounds to test AABB logic independently of z_min
-    rules['forbidden_zones'].append({
-        'name': 'test_box',
-        'x': -0.05, 'y': -0.05, 'z': 0.30,
-        'size_x': 0.1, 'size_y': 0.1, 'size_z': 0.1
-    })
+    rules["forbidden_zones"].append(
+        {
+            "name": "test_box",
+            "x": -0.05,
+            "y": -0.05,
+            "z": 0.30,
+            "size_x": 0.1,
+            "size_y": 0.1,
+            "size_z": 0.1,
+        }
+    )
     return rules
+
 
 @pytest.fixture
 def valid_pose():
@@ -25,6 +35,7 @@ def valid_pose():
     p.position.z = 0.30
     return p
 
+
 @pytest.fixture
 def table_collision_pose():
     # Adjusted to point precisely at our mock 'test_box' center to trigger collision
@@ -33,6 +44,7 @@ def table_collision_pose():
     p.position.y = -0.05
     p.position.z = 0.30
     return p
+
 
 @pytest.fixture
 def below_z_min_pose():

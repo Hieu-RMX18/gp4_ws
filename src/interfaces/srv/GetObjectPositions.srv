@@ -1,0 +1,11 @@
+string class_filter          # empty = all classes
+---
+bool ok
+string failure_reason        # empty on success; e.g. "calibration_invalid", "perception_blocked_during_motion"
+builtin_interfaces/Time stamp
+bool calibration_valid
+string calibration_date_iso
+float64 calibration_age_days
+bool depth_in_range
+float64 depth_noise_mm_p95
+vision_msgs/Detection3D[] detections   # poses already transformed to base_link

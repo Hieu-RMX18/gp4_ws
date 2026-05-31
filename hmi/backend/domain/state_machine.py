@@ -71,7 +71,9 @@ def ensure_command_transition(
 ) -> None:
     allowed = ALLOWED_COMMAND_TRANSITIONS.get(previous, set())
     if next_state not in allowed:
-        raise ValueError(f"invalid lifecycle transition: {previous.value} -> {next_state.value}")
+        raise ValueError(
+            f"invalid lifecycle transition: {previous.value} -> {next_state.value}"
+        )
 
 
 def is_terminal_command_state(state: CommandLifecycleState) -> bool:

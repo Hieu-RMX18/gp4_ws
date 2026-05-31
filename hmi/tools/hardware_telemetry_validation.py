@@ -36,6 +36,7 @@ try:
     from interfaces.msg import RobotReadiness
     from rclpy.executors import ExternalShutdownException
     from rclpy.node import Node
+    from rclpy.qos import qos_profile_sensor_data
     from std_msgs.msg import String
 
     JointState = _load_joint_state_type()
@@ -107,8 +108,16 @@ class SourceMetric:
             self.first_seen_at = observed_at_wall
         if self.last_seen_monotonic is not None:
             interval_sec = max(0.0, observed_at_monotonic - self.last_seen_monotonic)
-            self.min_interval_sec = interval_sec if self.min_interval_sec is None else min(self.min_interval_sec, interval_sec)
-            self.max_interval_sec = interval_sec if self.max_interval_sec is None else max(self.max_interval_sec, interval_sec)
+            self.min_interval_sec = (
+                interval_sec
+                if self.min_interval_sec is None
+                else min(self.min_interval_sec, interval_sec)
+            )
+            self.max_interval_sec = (
+                interval_sec
+                if self.max_interval_sec is None
+                else max(self.max_interval_sec, interval_sec)
+            )
             self.interval_sum_sec += interval_sec
             self.interval_count += 1
             self.max_gap_sec = max(self.max_gap_sec, interval_sec)
@@ -138,10 +147,14 @@ class SourceMetric:
 
     def to_dict(self) -> dict[str, Any]:
         mean_interval_sec = (
-            self.interval_sum_sec / self.interval_count if self.interval_count > 0 else None
+            self.interval_sum_sec / self.interval_count
+            if self.interval_count > 0
+            else None
         )
         mean_rate_hz = (
-            1.0 / mean_interval_sec if mean_interval_sec and mean_interval_sec > 0.0 else None
+            1.0 / mean_interval_sec
+            if mean_interval_sec and mean_interval_sec > 0.0
+            else None
         )
         return {
             "topic": self.topic,
@@ -150,9 +163,15 @@ class SourceMetric:
             "firstSeenAt": self.first_seen_at,
             "lastSeenAt": self.last_seen_at,
             "freshnessState": self.freshness_state,
-            "minIntervalSec": round(self.min_interval_sec, 6) if self.min_interval_sec is not None else None,
-            "maxIntervalSec": round(self.max_interval_sec, 6) if self.max_interval_sec is not None else None,
-            "meanIntervalSec": round(mean_interval_sec, 6) if mean_interval_sec is not None else None,
+            "minIntervalSec": round(self.min_interval_sec, 6)
+            if self.min_interval_sec is not None
+            else None,
+            "maxIntervalSec": round(self.max_interval_sec, 6)
+            if self.max_interval_sec is not None
+            else None,
+            "meanIntervalSec": round(mean_interval_sec, 6)
+            if mean_interval_sec is not None
+            else None,
             "meanRateHz": round(mean_rate_hz, 6) if mean_rate_hz is not None else None,
             "maxGapSec": round(self.max_gap_sec, 6),
             "thresholdMarginSec": (
@@ -221,12 +240,34 @@ class HardwareTelemetryValidationNode(Node):
         self._joint_source_transitions: list[dict[str, Any]] = []
         self._active_joint_source: str | None = None
 
-        self.create_subscription(String, args.gateway_status_topic, self._on_gateway_status, 10)
-        self.create_subscription(RobotReadiness, args.readiness_topic, self._on_readiness, 10)
-        self.create_subscription(DiagnosticStatus, args.supervisor_alert_topic, self._on_supervisor_alert, 10)
-        self.create_subscription(RobotStatus, args.robot_status_topic, self._on_robot_status, 10)
-        self.create_subscription(JointState, args.joint_primary_topic, self._on_joint_primary, 10)
-        self.create_subscription(JointState, args.joint_fallback_topic, self._on_joint_fallback, 10)
+        self.create_subscription(
+            String, args.gateway_status_topic, self._on_gateway_status, 10
+        )
+        self.create_subscription(
+            RobotReadiness, args.readiness_topic, self._on_readiness, 10
+        )
+        self.create_subscription(
+            DiagnosticStatus, args.supervisor_alert_topic, self._on_supervisor_alert, 10
+        )
+        # MotoROS2 publishes with Best Effort reliability; must match QoS
+        self.create_subscription(
+            RobotStatus,
+            args.robot_status_topic,
+            self._on_robot_status,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            JointState,
+            args.joint_primary_topic,
+            self._on_joint_primary,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(
+            JointState,
+            args.joint_fallback_topic,
+            self._on_joint_fallback,
+            qos_profile_sensor_data,
+        )
         self.create_timer(0.1, self._on_timer)
 
     @property
@@ -239,8 +280,7 @@ class HardwareTelemetryValidationNode(Node):
             "captureStartedAt": self._started_at_utc,
             "durationSec": self._duration_sec,
             "sources": {
-                name: metric.to_dict()
-                for name, metric in self._metrics.items()
+                name: metric.to_dict() for name, metric in self._metrics.items()
             },
             "jointSourcePrecedence": {
                 "expectedHardwarePreferredSource": "joint_states_primary",
@@ -308,13 +348,25 @@ class HardwareTelemetryValidationNode(Node):
     def _on_robot_status(self, msg: RobotStatus) -> None:
         self._touch_source("robot_status")
         self._robot_mode_counts[robot_mode_name(numeric_ros_value(msg.mode.val))] += 1
-        self._robot_estop_counts[tri_state_name(numeric_ros_value(msg.e_stopped.val))] += 1
-        self._robot_drives_counts[tri_state_name(numeric_ros_value(msg.drives_powered.val))] += 1
-        self._robot_motion_possible_counts[tri_state_name(numeric_ros_value(msg.motion_possible.val))] += 1
-        self._robot_in_motion_counts[tri_state_name(numeric_ros_value(msg.in_motion.val))] += 1
-        self._robot_in_error_counts[tri_state_name(numeric_ros_value(msg.in_error.val))] += 1
+        self._robot_estop_counts[
+            tri_state_name(numeric_ros_value(msg.e_stopped.val))
+        ] += 1
+        self._robot_drives_counts[
+            tri_state_name(numeric_ros_value(msg.drives_powered.val))
+        ] += 1
+        self._robot_motion_possible_counts[
+            tri_state_name(numeric_ros_value(msg.motion_possible.val))
+        ] += 1
+        self._robot_in_motion_counts[
+            tri_state_name(numeric_ros_value(msg.in_motion.val))
+        ] += 1
+        self._robot_in_error_counts[
+            tri_state_name(numeric_ros_value(msg.in_error.val))
+        ] += 1
         if msg.error_codes:
-            self._robot_error_code_samples.append([int(code) for code in msg.error_codes])
+            self._robot_error_code_samples.append(
+                [int(code) for code in msg.error_codes]
+            )
 
     def _on_joint_primary(self, msg: JointState) -> None:
         _ = msg

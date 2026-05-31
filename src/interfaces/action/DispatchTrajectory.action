@@ -8,6 +8,7 @@ string planner_id
 builtin_interfaces/Time source_joint_state_stamp
 float64[] expected_start_positions
 bool enforce_start_state_match
+bool extended_mode           # W7: pass through to hw_adapter Stage C JointPositionGuard
 ---
 # Result
 bool success

@@ -35,4 +35,75 @@
   </joint>
 
   <xacro:motoman_gp4 prefix="" />
+
+  <!-- ============================================================
+       D435i Camera — eye-to-hand, front-center above robot base
+       ============================================================
+       Position is NOMINAL from physical measurement (scale 0.25).
+       The actual camera-to-robot transform comes from hand-eye
+       calibration (extrinsics.yaml).
+       This link exists for:
+         1. RViz visualisation of camera position
+         2. MoveIt collision avoidance (camera body as collision box)
+         3. Approximate TF seed before calibration is run
+
+       Camera orientation convention (RealSense optical frame):
+         Z = forward (optical axis), X = right, Y = down
+
+       Mount description (operator perspective, facing station front):
+         - Front of robot (facing direction at HOME pose), centred on base_link Y axis (X ≈ 0)
+         - Diagonal distance from base origin to camera: ~1025 mm
+         - Horizontal/vertical leg of the diagonal: ~724 mm each
+         - Pitch down ~45° towards base origin
+       ============================================================ -->
+
+  <!-- Camera mount bracket (fixed directly to robot base for clarity) -->
+  <link name="camera_mount_link" />
+
+  <joint name="base_to_camera_mount" type="fixed">
+    <parent link="base_link" />
+    <child link="camera_mount_link" />
+    <origin xyz="0.0 0.724 0.726" rpy="0 0 0" />
+  </joint>
+
+  <!-- Camera body link with collision box for MoveIt planning -->
+  <link name="camera_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <!-- D435i physical dimensions: 90mm × 25mm × 25mm -->
+        <box size="0.090 0.025 0.025" />
+      </geometry>
+      <material name="camera_black">
+        <color rgba="0.15 0.15 0.15 1.0" />
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <!-- Slightly inflated for collision safety margin -->
+        <box size="0.100 0.035 0.035" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="camera_mount_to_camera" type="fixed">
+    <parent link="camera_mount_link" />
+    <child link="camera_link" />
+    <!-- Optical frame directly: Z forward toward robot base, X right, Y down -->
+    <origin xyz="0 0 0" rpy="2.356 0 3.1416" />
+  </joint>
+
+  <!-- Camera optical frame — same as camera_link for visual clarity.
+       The realsense2_camera node publishes its own camera_color_optical_frame TF.
+       This link keeps the URDF TF tree connected when the camera is offline. -->
+  <link name="camera_color_optical_frame_nominal" />
+
+  <joint name="camera_to_optical_nominal" type="fixed">
+    <parent link="camera_link" />
+    <child link="camera_color_optical_frame_nominal" />
+    <!-- Identity: camera_link already uses optical convention in this setup -->
+    <origin xyz="0 0 0" rpy="0 0 0" />
+  </joint>
+
 </robot>

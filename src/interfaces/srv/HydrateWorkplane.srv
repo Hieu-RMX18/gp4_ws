@@ -1,0 +1,7 @@
+# Request: hydrate a draw_shape/draw_text workplane with current pose origin
+string payload_json            # JSON of the draw intent payload
+---
+# Response
+bool success
+string error                   # reason if !success
+string hydrated_payload_json   # JSON of the hydrated payload

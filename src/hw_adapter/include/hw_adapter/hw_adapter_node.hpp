@@ -23,15 +23,13 @@
 #include "hw_adapter/backend_capabilities.hpp"
 #include "hw_adapter/joint_state_monitor.hpp"
 #include "hw_adapter/motoros2_session_manager.hpp"
-#include "hw_adapter/robot_status_monitor.hpp"
 #include "hw_adapter/recovery_state_machine.hpp"
+#include "hw_adapter/robot_status_monitor.hpp"
 #include "hw_adapter/tool_state_monitor.hpp"
 #include "hw_adapter/trajectory_executor.hpp"
 
-namespace hw_adapter
-{
-struct HwAdapterOrchestrationSnapshot
-{
+namespace hw_adapter {
+struct HwAdapterOrchestrationSnapshot {
   bool robot_ready = false;
   bool session_ready = false;
   bool tool_state_available = false;
@@ -42,8 +40,7 @@ struct HwAdapterOrchestrationSnapshot
   std::string status_message = "hw_adapter orchestrator initialized";
 };
 
-struct HwAdapterExecutionReport
-{
+struct HwAdapterExecutionReport {
   bool success = false;
   bool blocked = false;
   bool fatal_error = false;
@@ -58,64 +55,66 @@ struct HwAdapterExecutionReport
   std::string message = "trajectory not executed";
 };
 
-class HwAdapterNode final : public rclcpp::Node
-{
+class HwAdapterNode final : public rclcpp::Node {
 public:
   using DispatchTrajectory = interfaces::action::DispatchTrajectory;
-  using GoalHandleDispatchTrajectory = rclcpp_action::ServerGoalHandle<DispatchTrajectory>;
+  using GoalHandleDispatchTrajectory =
+      rclcpp_action::ServerGoalHandle<DispatchTrajectory>;
   using AlarmReset = interfaces::srv::AlarmReset;
   using IoSet = interfaces::srv::IoSet;
 
-  explicit HwAdapterNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
+  explicit HwAdapterNode(
+      const rclcpp::NodeOptions &options = rclcpp::NodeOptions());
   ~HwAdapterNode() override;
 
-  const BackendCapabilities & backend_capabilities() const;
-  const RobotStatusMonitor & robot_status_monitor() const;
-  const Motoros2SessionManager & session_manager() const;
-  const TrajectoryExecutor & trajectory_executor() const;
-  const ToolStateMonitor & tool_state_monitor() const;
-  bool is_ready_for_execution(std::string & reason) const;
+  const BackendCapabilities &backend_capabilities() const;
+  const RobotStatusMonitor &robot_status_monitor() const;
+  const Motoros2SessionManager &session_manager() const;
+  const TrajectoryExecutor &trajectory_executor() const;
+  const ToolStateMonitor &tool_state_monitor() const;
+  bool is_ready_for_execution(std::string &reason) const;
   HwAdapterOrchestrationSnapshot orchestration_snapshot() const;
   std::string orchestration_status() const;
   HwAdapterExecutionReport execute_trajectory(
-    const trajectory_msgs::msg::JointTrajectory & trajectory,
-    std::chrono::milliseconds timeout = std::chrono::seconds(30));
+      const trajectory_msgs::msg::JointTrajectory &trajectory,
+      std::chrono::milliseconds timeout = std::chrono::seconds(30));
 
-  /// V4 J4-Recovery: attempt deterministic recovery after fatal execution failure.
+  /// V4 J4-Recovery: attempt deterministic recovery after fatal execution
+  /// failure.
   RecoveryResult attempt_recovery();
 
 private:
   // DispatchTrajectory action server callbacks
-  rclcpp_action::GoalResponse handle_dispatch_goal(
-    const rclcpp_action::GoalUUID & uuid,
-    std::shared_ptr<const DispatchTrajectory::Goal> goal);
+  rclcpp_action::GoalResponse
+  handle_dispatch_goal(const rclcpp_action::GoalUUID &uuid,
+                       std::shared_ptr<const DispatchTrajectory::Goal> goal);
   rclcpp_action::CancelResponse handle_dispatch_cancel(
-    const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
+      const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
   void handle_dispatch_accepted(
-    const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
+      const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
   void execute_dispatch(
-    const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
+      const std::shared_ptr<GoalHandleDispatchTrajectory> goal_handle);
   void cleanup_dispatch_workers();
   void wait_for_dispatch_workers();
   void publish_sim_readiness();
-  HwAdapterExecutionReport execute_trajectory_internal(
-    const TrajectoryExecutionRequest & request,
-    bool dispatch_reservation_expected);
+  HwAdapterExecutionReport
+  execute_trajectory_internal(const TrajectoryExecutionRequest &request,
+                              bool dispatch_reservation_expected);
   ExecutionRuntimeSnapshot build_execution_runtime_snapshot() const;
 
   HwAdapterOrchestrationSnapshot build_snapshot_locked() const;
-  bool should_stop_motion_on_failure(const TrajectoryExecutionResult & result) const;
-  static std::string goal_uuid_to_string(const rclcpp_action::GoalUUID & goal_id);
+  bool
+  should_stop_motion_on_failure(const TrajectoryExecutionResult &result) const;
+  static std::string
+  goal_uuid_to_string(const rclcpp_action::GoalUUID &goal_id);
 
   // Step 4.1: AlarmReset service handler
-  void handle_alarm_reset(
-    const std::shared_ptr<AlarmReset::Request> request,
-    std::shared_ptr<AlarmReset::Response> response);
+  void handle_alarm_reset(const std::shared_ptr<AlarmReset::Request> request,
+                          std::shared_ptr<AlarmReset::Response> response);
 
   // Step 4.2: IoSet service handler
-  void handle_io_set(
-    const std::shared_ptr<IoSet::Request> request,
-    std::shared_ptr<IoSet::Response> response);
+  void handle_io_set(const std::shared_ptr<IoSet::Request> request,
+                     std::shared_ptr<IoSet::Response> response);
 
   BackendCapabilities backend_capabilities_;
   std::unique_ptr<JointStateMonitor> joint_state_monitor_;
@@ -123,7 +122,8 @@ private:
   std::unique_ptr<Motoros2SessionManager> session_manager_;
   std::unique_ptr<TrajectoryExecutor> trajectory_executor_;
   std::unique_ptr<ToolStateMonitor> tool_state_monitor_;
-  rclcpp::Publisher<interfaces::msg::RobotReadiness>::SharedPtr sim_readiness_pub_;
+  rclcpp::Publisher<interfaces::msg::RobotReadiness>::SharedPtr
+      sim_readiness_pub_;
   rclcpp::TimerBase::SharedPtr sim_readiness_timer_;
 
   // DispatchTrajectory action server
@@ -146,4 +146,4 @@ private:
   std::mutex dispatch_worker_mutex_;
   std::vector<std::future<void>> dispatch_worker_futures_;
 };
-}  // namespace hw_adapter
+} // namespace hw_adapter

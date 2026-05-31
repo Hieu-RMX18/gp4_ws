@@ -14,7 +14,21 @@ from ..domain.models import (
 from ..domain.state_machine import is_blocking_runtime_state
 from .intent_resolution import IntentResolutionError
 
-EVENT_DRIVEN_SOURCE_NAMES = {"llm_debug", "llm_command"}
+EVENT_DRIVEN_SOURCE_NAMES = {
+    "llm_debug",
+    "llm_command",
+    "review_intent_service",
+}
+
+POST_PARSE_INFO_ONLY_SOURCE_NAMES = {
+    "gateway_status",
+    "supervisor_alerts",
+}
+
+EXECUTION_BOUNDARY_SOURCE_NAMES = {
+    "validate_command_service",
+    "execute_motion_action",
+}
 
 
 class SupervisorValidationMixin:
@@ -61,15 +75,29 @@ class SupervisorValidationMixin:
         lease: Any,
         parsed_intent: dict[str, Any] | None,
         requested_mode: RuntimeMode,
+        enforce_execution_readiness: bool = False,
     ) -> dict[str, Any]:
         source_statuses = self._read_source_statuses()
-        critical_sources = [source for source in source_statuses if getattr(source, "active", False)]
+        nonblocking_source_names = self._nonblocking_source_names(
+            enforce_execution_readiness=enforce_execution_readiness
+        )
+        critical_sources = [
+            source
+            for source in source_statuses
+            if getattr(source, "active", False)
+            and source.name not in nonblocking_source_names
+        ]
         optional_sources = [
             source
             for source in source_statuses
-            if not getattr(source, "active", False) and source.name not in EVENT_DRIVEN_SOURCE_NAMES
+            if not getattr(source, "active", False)
+            and source.name not in EVENT_DRIVEN_SOURCE_NAMES
         ]
-        event_driven_sources = [source for source in source_statuses if source.name in EVENT_DRIVEN_SOURCE_NAMES]
+        event_driven_sources = [
+            source
+            for source in source_statuses
+            if source.name in EVENT_DRIVEN_SOURCE_NAMES
+        ]
         blocking_reasons: list[str] = []
         confirmation_reasons = [
             "HMI v2 requires explicit operator confirmation before a validated plan may cross the execution boundary."
@@ -95,9 +123,6 @@ class SupervisorValidationMixin:
                 f"runtime state {runtime.system_state.value} is hard-blocking for command-capable actions"
             )
 
-        if requested_mode == RuntimeMode.HARDWARE and not hardware_gate.unlocked:
-            blocking_reasons.extend(hardware_gate.reasons)
-
         stale_sources = [
             source.name
             for source in critical_sources
@@ -105,11 +130,15 @@ class SupervisorValidationMixin:
         ]
         if stale_sources:
             blocking_reasons.append(
-                "freshness-critical telemetry is stale or unavailable: " + ", ".join(stale_sources)
+                "freshness-critical telemetry is stale or unavailable: "
+                + ", ".join(stale_sources)
             )
 
         if not preflight.get("accepted", True):
-            preflight_reasons = list(preflight.get("reasons") or [])
+            preflight_reasons = self._filtered_preflight_reasons(
+                preflight.get("reasons") or [],
+                enforce_execution_readiness=enforce_execution_readiness,
+            )
             if preflight_reasons:
                 blocking_reasons.extend(preflight_reasons)
 
@@ -119,9 +148,22 @@ class SupervisorValidationMixin:
                 f"Risk assessment is {risk_level.value}; high-risk actions must stay behind confirmation."
             )
 
-        action = str(parsed_intent.get("action") if parsed_intent is not None else "").upper()
-        if action in {"MOVE_REL", "MOVE_JOINT", "MOVE_JOINTS", "PTP", "LIN", "CIRC", "CARTESIAN_PATH"}:
-            confirmation_reasons.append("Motion primitives always require explicit confirmation in v2.")
+        action = str(
+            parsed_intent.get("action") if parsed_intent is not None else ""
+        ).upper()
+        if action in {
+            "MOVE_REL",
+            "MOVE_JOINT",
+            "MOVE_JOINTS",
+            "PTP",
+            "LIN",
+            "CIRC",
+            "CARTESIAN_PATH",
+            "BLENDED_SEQUENCE",
+        }:
+            confirmation_reasons.append(
+                "Motion primitives always require explicit confirmation in v2."
+            )
 
         plan_fingerprint = (
             self._plan_fingerprint(parsed_intent, lease.lease_id, requested_mode.value)
@@ -139,18 +181,59 @@ class SupervisorValidationMixin:
             "confirmationReasons": confirmation_reasons,
             "planFingerprint": plan_fingerprint,
             "executionAllowedNow": False,
-            "criticalSources": [self._source_status_view(source) for source in critical_sources],
-            "optionalSources": [self._source_status_view(source) for source in optional_sources],
-            "eventDrivenSources": [self._source_status_view(source) for source in event_driven_sources],
+            "criticalSources": [
+                self._source_status_view(source) for source in critical_sources
+            ],
+            "optionalSources": [
+                self._source_status_view(source) for source in optional_sources
+            ],
+            "eventDrivenSources": [
+                self._source_status_view(source) for source in event_driven_sources
+            ],
             "hardwareGate": hardware_gate.to_dict(),
             "preflight": preflight,
         }
 
-    def _assess_risk(self, parsed_intent: dict[str, Any] | None) -> CommandRiskLevel | None:
+    def _nonblocking_source_names(
+        self, *, enforce_execution_readiness: bool
+    ) -> set[str]:
+        nonblocking = set(EVENT_DRIVEN_SOURCE_NAMES)
+        nonblocking.update(POST_PARSE_INFO_ONLY_SOURCE_NAMES)
+        if not enforce_execution_readiness:
+            nonblocking.update(EXECUTION_BOUNDARY_SOURCE_NAMES)
+        return nonblocking
+
+    def _filtered_preflight_reasons(
+        self,
+        reasons: list[Any],
+        *,
+        enforce_execution_readiness: bool,
+    ) -> list[str]:
+        if enforce_execution_readiness:
+            return [str(reason) for reason in reasons]
+
+        ignored_source_names = (
+            POST_PARSE_INFO_ONLY_SOURCE_NAMES | EXECUTION_BOUNDARY_SOURCE_NAMES
+        )
+        filtered: list[str] = []
+        for reason in reasons:
+            text = str(reason)
+            if any(source_name in text for source_name in ignored_source_names):
+                continue
+            filtered.append(text)
+        return filtered
+
+    def _assess_risk(
+        self, parsed_intent: dict[str, Any] | None
+    ) -> CommandRiskLevel | None:
         if parsed_intent is None:
             return None
         action = str(parsed_intent.get("action") or "").upper()
-        parameters = parsed_intent.get("normalizedCommand") or parsed_intent.get("parameters") or {}
+        parameters = (
+            parsed_intent.get("normalizedCommand")
+            or parsed_intent.get("parameters")
+            or {}
+        )
         if action in {"STOP", "WAIT", "GET_POSE", "ALARM_RESET", "IO_SET", "SET_SPEED"}:
             return CommandRiskLevel.LOW
         if action == "HOME":
@@ -182,7 +265,9 @@ class SupervisorValidationMixin:
             return CommandRiskLevel.HIGH
         return CommandRiskLevel.HIGH
 
-    def _plan_fingerprint(self, parsed_intent: dict[str, Any], lease_id: str, runtime_mode: str) -> str:
+    def _plan_fingerprint(
+        self, parsed_intent: dict[str, Any], lease_id: str, runtime_mode: str
+    ) -> str:
         stable_blob = json.dumps(
             {
                 "parsedIntent": parsed_intent,

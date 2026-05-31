@@ -1,0 +1,14 @@
+# Request: confirm a validated command for execution
+string command_id              # unique command identifier
+string plan_fingerprint        # SHA-256 fingerprint of the validated plan
+string operator_id             # operator who confirmed
+string session_id              # active session
+string lease_id                # controller lease
+string parsed_intent_json      # JSON of the parsed intent
+string requested_mode          # "hardware" or "sim"
+---
+# Response
+bool accepted                  # true if confirmation gate passed
+string reason                  # blocking reasons if !accepted
+string execution_summary       # summary of execution dispatch result
+bool dispatched_to_ros         # true if forwarded to /execute_motion

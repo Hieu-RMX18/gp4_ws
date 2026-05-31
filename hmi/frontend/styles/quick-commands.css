@@ -1,0 +1,60 @@
+/* quick commands */
+.quick-cmds {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.qcmd {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 0.5px solid var(--color-border-tertiary);
+  border-radius: var(--border-radius-sm);
+  background: var(--color-background-primary);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  text-align: left;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.qcmd-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.qcmd-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  line-height: 1.3;
+}
+
+.qcmd-subtitle {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  line-height: 1.3;
+}
+
+.qcmd:hover {
+  border-color: var(--color-border-secondary);
+  background: var(--color-background-tertiary);
+}
+
+.qcmd:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--color-background-tertiary);
+}
+
+.cmd-icon {
+  width: 14px;
+  color: var(--color-text-info);
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+}
+

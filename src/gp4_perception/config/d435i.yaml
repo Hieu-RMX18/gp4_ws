@@ -1,0 +1,78 @@
+# RealSense D435i camera configuration for GP4 workcell.
+#
+# Parameter names follow realsense-ros ros2-master branch conventions:
+#   https://github.com/realsenseai/realsense-ros (ros2-master)
+#
+# Camera mount: eye-to-hand, upper-left front corner of station frame.
+# Pitch down ~40°, yaw inward ~20° towards workspace centre.
+# Estimated working distance to table: 0.5–0.9 m (inside D435i ideal range 0.3–3 m).
+
+realsense:
+  # --- Device ---
+  device_serial: "943222073917"   # operator fills or auto-discovers
+
+  # --- Stream profiles ---
+  # Format: <width>x<height>x<fps>
+  depth_module:
+    depth_profile: "848x480x30"
+    infra_profile: "848x480x30"
+    emitter_enabled: 1            # 1 = IR projector on (better structured-light depth)
+
+  rgb_camera:
+    color_profile: "1280x720x30"  # lower than max 1920x1080 for less bandwidth;
+                                  # sufficient for ArUco detection and object recognition
+
+  # --- Alignment & sync ---
+  align_depth:
+    enable: true                  # align depth to color frame for point-cloud generation
+
+  enable_sync: true               # synchronize depth + color frames by timestamp
+  enable_color: true
+  enable_depth: true
+  enable_infra1: false            # IR streams off by default; enable for stereo debugging
+  enable_infra2: false
+  enable_gyro: false              # IMU not used in current perception pipeline
+  enable_accel: false
+
+  # --- Point cloud ---
+  pointcloud:
+    enable: true
+    ordered_pc: false             # unordered is faster; scene_processor does its own clustering
+    allow_no_texture_points: false
+
+  # --- Post-processing filters ---
+  # These run inside the RealSense driver before publishing.
+  # Improves depth quality at the cost of latency (~2-5 ms).
+  decimation_filter:
+    enable: false                 # already using 848x480; no need to further decimate
+
+  spatial_filter:
+    enable: true                  # edge-preserving spatial smoothing
+    # Default params: magnitude=2, smooth_alpha=0.5, smooth_delta=20, holes_fill=0
+
+  temporal_filter:
+    enable: true                  # temporal consistency filter
+    # Default params: smooth_alpha=0.4, smooth_delta=20, persistence_control=3
+
+  hole_filling_filter:
+    enable: false                 # can introduce phantom surfaces; keep off for safety
+
+  disparity_filter:
+    enable: false                 # depth-to-disparity conversion; not needed with align_depth
+
+  # --- TF ---
+  publish_tf: true                # publish camera internal TF (depth → color optical frames)
+  tf_publish_rate: 0.0            # 0 = static TF only (sufficient for fixed camera)
+
+  # --- QoS ---
+  depth_qos: "SENSOR_DATA"       # BEST_EFFORT reliability for real-time depth
+  color_qos: "SENSOR_DATA"       # BEST_EFFORT reliability for real-time color
+  infra_qos: "SENSOR_DATA"
+
+  # --- Camera naming ---
+  # camera_namespace and camera_name determine topic prefix:
+  #   /<namespace>/<name>/color/image_raw
+  # Current code subscribes to /camera/color/image_raw and /camera/depth/color/points
+  # so we set namespace="" and name="camera" to get /camera/color/image_raw etc.
+  camera_namespace: ""
+  camera_name: "camera"

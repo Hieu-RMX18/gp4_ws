@@ -1,8 +1,7 @@
 llm_backend:
   provider: "provider"
   base_url: "http://localhost:20128/v1"
-  # API key is resolved from GP4_LLM_API_KEY / LLM_API_KEY / OPENAI_API_KEY.
-  # A nearby .env file is also supported, but the secret itself must stay out of git.
+  # API key is resolved from GP4_LLM_API_KEY / LLM_API_KEY / OPENAI_API_KEY env vars.
   api_key: "${GP4_LLM_API_KEY}"
   api_mode: "openai_compatible"
   model: "cx/gpt-5.4"

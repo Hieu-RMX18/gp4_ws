@@ -28,7 +28,10 @@ from hmi.backend.domain.models import (
 )
 from hmi.backend.services.audit_service import AuditService
 from hmi.backend.services.session_lock_service import SessionLockService
-from hmi.backend.services.telemetry_bridge_service import SNAPSHOT_SCHEMA_VERSION, TelemetryBridgeService
+from hmi.backend.services.telemetry_bridge_service import (
+    SNAPSHOT_SCHEMA_VERSION,
+    TelemetryBridgeService,
+)
 
 
 def build_connections(
@@ -39,10 +42,10 @@ def build_connections(
     motoros2: ConnectionHealth,
 ) -> list[BridgeConnection]:
     return [
-        BridgeConnection(name='ros2', label='ROS 2', health=ros),
-        BridgeConnection(name='moveit2', label='MoveIt 2', health=moveit),
-        BridgeConnection(name='llm', label='LLM', health=llm),
-        BridgeConnection(name='motoros2', label='MotoROS2', health=motoros2),
+        BridgeConnection(name="ros2", label="ROS 2", health=ros),
+        BridgeConnection(name="moveit2", label="MoveIt 2", health=moveit),
+        BridgeConnection(name="llm", label="LLM", health=llm),
+        BridgeConnection(name="motoros2", label="MotoROS2", health=motoros2),
     ]
 
 
@@ -99,7 +102,9 @@ class FakeRosAdapter:
     def set_connections(self, connections: list[BridgeConnection]) -> None:
         self._connections = list(connections)
 
-    def set_source_statuses(self, source_statuses: list[TelemetrySourceSnapshot]) -> None:
+    def set_source_statuses(
+        self, source_statuses: list[TelemetrySourceSnapshot]
+    ) -> None:
         self._source_statuses = list(source_statuses)
 
 
@@ -124,7 +129,7 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
                 runtime=RuntimeSnapshot(
                     system_state=SystemRuntimeState.LOST_CONN,
                     blocking=True,
-                    status_text='No fresh ROS telemetry received from configured read-only topics.',
+                    status_text="No fresh ROS telemetry received from configured read-only topics.",
                     mode=RuntimeMode.UNKNOWN,
                 ),
                 connections=build_connections(
@@ -134,39 +139,43 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
                     motoros2=ConnectionHealth.DOWN,
                 ),
                 joints=[
-                    JointPosition(name='joint_1_s', position_deg=0.0),
-                    JointPosition(name='joint_2_l', position_deg=10.0),
+                    JointPosition(name="joint_1_s", position_deg=0.0),
+                    JointPosition(name="joint_2_l", position_deg=10.0),
                 ],
             )
-            service = self._build_service(adapter, Path(temp_dir) / 'audit.sqlite3')
+            service = self._build_service(adapter, Path(temp_dir) / "audit.sqlite3")
             await service.start()
             self.addAsyncCleanup(service.stop)
 
-            snapshot_payload = service.get_snapshot('session-a', 'operator-a')
-            runtime_payload = service.get_runtime_state('session-a', 'operator-a')
+            snapshot_payload = service.get_snapshot("session-a", "operator-a")
+            runtime_payload = service.get_runtime_state("session-a", "operator-a")
             connection_payload = service.get_connection_state()
-            lease_payload = service.get_lease_state('session-a', 'operator-a')
+            lease_payload = service.get_lease_state("session-a", "operator-a")
 
-            self.assertEqual(snapshot_payload['schemaVersion'], SNAPSHOT_SCHEMA_VERSION)
-            self.assertEqual(snapshot_payload['runtime']['systemState'], 'LOST_CONN')
-            self.assertTrue(snapshot_payload['runtime']['blocking'])
-            self.assertTrue(snapshot_payload['capabilities']['readOnly'])
-            self.assertEqual(snapshot_payload['telemetryState'], 'unavailable')
+            self.assertEqual(snapshot_payload["schemaVersion"], SNAPSHOT_SCHEMA_VERSION)
+            self.assertEqual(snapshot_payload["runtime"]["systemState"], "LOST_CONN")
+            self.assertTrue(snapshot_payload["runtime"]["blocking"])
+            self.assertTrue(snapshot_payload["capabilities"]["readOnly"])
+            self.assertEqual(snapshot_payload["telemetryState"], "unavailable")
 
-            self.assertEqual(runtime_payload['schemaVersion'], SNAPSHOT_SCHEMA_VERSION)
-            self.assertEqual(connection_payload['schemaVersion'], SNAPSHOT_SCHEMA_VERSION)
-            self.assertEqual(lease_payload['schemaVersion'], SNAPSHOT_SCHEMA_VERSION)
-            self.assertEqual(lease_payload['lease']['role'], 'observer')
-            self.assertFalse(lease_payload['lease']['ownsControl'])
-            self.assertFalse(lease_payload['capabilities']['canSubmitCommands'])
+            self.assertEqual(runtime_payload["schemaVersion"], SNAPSHOT_SCHEMA_VERSION)
+            self.assertEqual(
+                connection_payload["schemaVersion"], SNAPSHOT_SCHEMA_VERSION
+            )
+            self.assertEqual(lease_payload["schemaVersion"], SNAPSHOT_SCHEMA_VERSION)
+            self.assertEqual(lease_payload["lease"]["role"], "observer")
+            self.assertFalse(lease_payload["lease"]["ownsControl"])
+            self.assertFalse(lease_payload["capabilities"]["canSubmitCommands"])
 
-    async def test_contract_models_validate_payloads_and_fail_on_bad_schema(self) -> None:
+    async def test_contract_models_validate_payloads_and_fail_on_bad_schema(
+        self,
+    ) -> None:
         with TemporaryDirectory() as temp_dir:
             adapter = FakeRosAdapter(
                 runtime=RuntimeSnapshot(
                     system_state=SystemRuntimeState.NORMAL,
                     blocking=False,
-                    status_text='Telemetry bridge connected and no blocking state is active.',
+                    status_text="Telemetry bridge connected and no blocking state is active.",
                     mode=RuntimeMode.SIM,
                 ),
                 connections=build_connections(
@@ -177,45 +186,47 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
                 ),
                 source_statuses=[
                     TelemetrySourceSnapshot(
-                        name='readiness',
-                        label='HW readiness',
-                        topic='/hw_adapter/ready',
+                        name="readiness",
+                        label="HW readiness",
+                        topic="/hw_adapter/ready",
                         last_seen_at=None,
                         freshness_threshold_sec=3.0,
                         freshness_state=TelemetryFreshnessState.STALE,
                     ),
                 ],
             )
-            service = self._build_service(adapter, Path(temp_dir) / 'audit.sqlite3')
+            service = self._build_service(adapter, Path(temp_dir) / "audit.sqlite3")
             await service.start()
             self.addAsyncCleanup(service.stop)
 
-            snapshot = service.get_snapshot('session-contract', 'operator-contract')
-            runtime = service.get_runtime_state('session-contract', 'operator-contract')
+            snapshot = service.get_snapshot("session-contract", "operator-contract")
+            runtime = service.get_runtime_state("session-contract", "operator-contract")
             connection = service.get_connection_state()
-            lease = service.get_lease_state('session-contract', 'operator-contract')
+            lease = service.get_lease_state("session-contract", "operator-contract")
             heartbeat = service.get_heartbeat_event()
 
             HmiStateSnapshotModel.model_validate(snapshot)
             RuntimeStateResponseModel.model_validate(runtime)
             ConnectionStateResponseModel.model_validate(connection)
             LeaseStateResponseModel.model_validate(lease)
-            HMI_STREAM_EVENT_ADAPTER.validate_python({'type': 'snapshot', 'snapshot': snapshot})
+            HMI_STREAM_EVENT_ADAPTER.validate_python(
+                {"type": "snapshot", "snapshot": snapshot}
+            )
             HMI_STREAM_EVENT_ADAPTER.validate_python(heartbeat)
 
             broken_snapshot = deepcopy(snapshot)
-            broken_snapshot['schemaVersion'] = 'telemetry.v999'
+            broken_snapshot["schemaVersion"] = "telemetry.v999"
             with self.assertRaises(ValidationError):
                 HmiStateSnapshotModel.model_validate(broken_snapshot)
 
     async def test_semantic_changes_only_drive_audit_writes(self) -> None:
         with TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / 'audit.sqlite3'
+            db_path = Path(temp_dir) / "audit.sqlite3"
             adapter = FakeRosAdapter(
                 runtime=RuntimeSnapshot(
                     system_state=SystemRuntimeState.LOST_CONN,
                     blocking=True,
-                    status_text='No fresh ROS telemetry received from configured read-only topics.',
+                    status_text="No fresh ROS telemetry received from configured read-only topics.",
                     mode=RuntimeMode.UNKNOWN,
                 ),
                 connections=build_connections(
@@ -229,18 +240,18 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
             await service.start()
             self.addAsyncCleanup(service.stop)
 
-            service.get_snapshot('session-a', 'operator-a')
-            service.get_runtime_state('session-a', 'operator-a')
+            service.get_snapshot("session-a", "operator-a")
+            service.get_runtime_state("session-a", "operator-a")
             service.get_connection_state()
-            service.get_lease_state('session-a', 'operator-a')
+            service.get_lease_state("session-a", "operator-a")
             await self._sleep(0.2)
 
             with sqlite3.connect(db_path) as connection:
                 telemetry_count = connection.execute(
-                    'SELECT COUNT(*) FROM telemetry_snapshots'
+                    "SELECT COUNT(*) FROM telemetry_snapshots"
                 ).fetchone()[0]
                 transition_count = connection.execute(
-                    'SELECT COUNT(*) FROM state_transitions'
+                    "SELECT COUNT(*) FROM state_transitions"
                 ).fetchone()[0]
 
             self.assertEqual(telemetry_count, 1)
@@ -249,7 +260,7 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
             adapter.set_runtime(
                 SystemRuntimeState.SAFETY_BLOCKED,
                 blocking=True,
-                status_text='Supervisor reported safety blocked.',
+                status_text="Supervisor reported safety blocked.",
             )
             adapter.set_connections(
                 build_connections(
@@ -259,15 +270,15 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
                     motoros2=ConnectionHealth.HEALTHY,
                 )
             )
-            service.get_snapshot('session-a', 'operator-a')
+            service.get_snapshot("session-a", "operator-a")
             await self._sleep(0.2)
 
             with sqlite3.connect(db_path) as connection:
                 telemetry_count_after = connection.execute(
-                    'SELECT COUNT(*) FROM telemetry_snapshots'
+                    "SELECT COUNT(*) FROM telemetry_snapshots"
                 ).fetchone()[0]
                 transition_count_after = connection.execute(
-                    'SELECT COUNT(*) FROM state_transitions'
+                    "SELECT COUNT(*) FROM state_transitions"
                 ).fetchone()[0]
 
             self.assertEqual(telemetry_count_after, 2)
@@ -279,7 +290,7 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
                 runtime=RuntimeSnapshot(
                     system_state=SystemRuntimeState.NORMAL,
                     blocking=False,
-                    status_text='steady',
+                    status_text="steady",
                     mode=RuntimeMode.SIM,
                 ),
                 connections=build_connections(
@@ -289,19 +300,23 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
                     motoros2=ConnectionHealth.HEALTHY,
                 ),
             )
-            service = self._build_service(adapter, Path(temp_dir) / 'audit.sqlite3', poll_interval_sec=0.01)
+            service = self._build_service(
+                adapter, Path(temp_dir) / "audit.sqlite3", poll_interval_sec=0.01
+            )
             await service.start()
             self.addAsyncCleanup(service.stop)
-            queue = service.subscribe('session-burst', 'operator-burst')
+            queue = service.subscribe("session-burst", "operator-burst")
             self.addCleanup(lambda: service.unsubscribe(queue))
             await self._sleep(0.02)
 
             for index in range(16):
-                next_state = SystemRuntimeState.FAULT if index % 2 else SystemRuntimeState.NORMAL
+                next_state = (
+                    SystemRuntimeState.FAULT if index % 2 else SystemRuntimeState.NORMAL
+                )
                 adapter.set_runtime(
                     next_state,
                     blocking=next_state != SystemRuntimeState.NORMAL,
-                    status_text=f'burst-{index}',
+                    status_text=f"burst-{index}",
                     mode=RuntimeMode.SIM,
                 )
                 await self._sleep(0.03)
@@ -313,10 +328,10 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
 
             self.assertIsNotNone(latest_event)
             assert latest_event is not None
-            self.assertEqual(latest_event['type'], 'snapshot')
+            self.assertEqual(latest_event["type"], "snapshot")
             self.assertEqual(
-                latest_event['snapshot']['runtime']['statusText'],
-                'burst-15',
+                latest_event["snapshot"]["runtime"]["statusText"],
+                "burst-15",
             )
 
     async def test_runtime_state_blocking_and_lost_conn_transition(self) -> None:
@@ -325,7 +340,7 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
                 runtime=RuntimeSnapshot(
                     system_state=SystemRuntimeState.NORMAL,
                     blocking=False,
-                    status_text='Telemetry bridge connected and no blocking state is active.',
+                    status_text="Telemetry bridge connected and no blocking state is active.",
                     mode=RuntimeMode.SIM,
                 ),
                 connections=build_connections(
@@ -335,29 +350,38 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
                     motoros2=ConnectionHealth.DOWN,
                 ),
             )
-            service = self._build_service(adapter, Path(temp_dir) / 'audit.sqlite3')
+            service = self._build_service(adapter, Path(temp_dir) / "audit.sqlite3")
             await service.start()
             self.addAsyncCleanup(service.stop)
 
-            baseline = service.get_snapshot('session-b', 'operator-b')
-            self.assertEqual(baseline['runtime']['systemState'], 'NORMAL')
-            self.assertFalse(baseline['runtime']['blocking'])
+            baseline = service.get_snapshot("session-b", "operator-b")
+            self.assertEqual(baseline["runtime"]["systemState"], "NORMAL")
+            self.assertFalse(baseline["runtime"]["blocking"])
 
             for state, text in (
-                (SystemRuntimeState.FAULT, 'Robot controller reports an active fault condition.'),
-                (SystemRuntimeState.ESTOP, 'Emergency stop is active according to /yaskawa/robot_status.'),
-                (SystemRuntimeState.SAFETY_BLOCKED, 'Supervisor reported safety blocked.'),
+                (
+                    SystemRuntimeState.FAULT,
+                    "Robot controller reports an active fault condition.",
+                ),
+                (
+                    SystemRuntimeState.ESTOP,
+                    "Emergency stop is active according to /yaskawa/robot_status.",
+                ),
+                (
+                    SystemRuntimeState.SAFETY_BLOCKED,
+                    "Supervisor reported safety blocked.",
+                ),
             ):
                 adapter.set_runtime(state, blocking=True, status_text=text)
                 await self._sleep(0.1)
-                payload = service.get_runtime_state('session-b', 'operator-b')
-                self.assertEqual(payload['runtime']['systemState'], state.value)
-                self.assertTrue(payload['runtime']['blocking'])
+                payload = service.get_runtime_state("session-b", "operator-b")
+                self.assertEqual(payload["runtime"]["systemState"], state.value)
+                self.assertTrue(payload["runtime"]["blocking"])
 
             adapter.set_runtime(
                 SystemRuntimeState.LOST_CONN,
                 blocking=True,
-                status_text='No fresh ROS telemetry received from configured read-only topics.',
+                status_text="No fresh ROS telemetry received from configured read-only topics.",
             )
             adapter.set_connections(
                 build_connections(
@@ -368,11 +392,11 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
                 )
             )
             await self._sleep(0.1)
-            lost_conn = service.get_snapshot('session-b', 'operator-b')
-            self.assertEqual(lost_conn['runtime']['systemState'], 'LOST_CONN')
-            self.assertEqual(lost_conn['transportState'], 'disconnected')
-            self.assertEqual(lost_conn['lease']['role'], 'observer')
-            self.assertFalse(lost_conn['lease']['ownsControl'])
+            lost_conn = service.get_snapshot("session-b", "operator-b")
+            self.assertEqual(lost_conn["runtime"]["systemState"], "LOST_CONN")
+            self.assertEqual(lost_conn["transportState"], "disconnected")
+            self.assertEqual(lost_conn["lease"]["role"], "observer")
+            self.assertFalse(lost_conn["lease"]["ownsControl"])
 
     async def test_stale_subscriber_cleanup(self) -> None:
         with TemporaryDirectory() as temp_dir:
@@ -380,7 +404,7 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
                 runtime=RuntimeSnapshot(
                     system_state=SystemRuntimeState.NORMAL,
                     blocking=False,
-                    status_text='ok',
+                    status_text="ok",
                     mode=RuntimeMode.SIM,
                 ),
                 connections=build_connections(
@@ -390,23 +414,23 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
                     motoros2=ConnectionHealth.HEALTHY,
                 ),
             )
-            service = self._build_service(adapter, Path(temp_dir) / 'audit.sqlite3')
+            service = self._build_service(adapter, Path(temp_dir) / "audit.sqlite3")
             await service.start()
             self.addAsyncCleanup(service.stop)
 
-            queue = service.subscribe('session-cleanup', 'operator-cleanup')
+            queue = service.subscribe("session-cleanup", "operator-cleanup")
             self.assertEqual(service.subscriber_count(), 1)
             service.unsubscribe(queue)
             self.assertEqual(service.subscriber_count(), 0)
 
     async def test_ros_reconnect_while_backend_stays_up(self) -> None:
         with TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / 'audit.sqlite3'
+            db_path = Path(temp_dir) / "audit.sqlite3"
             adapter = FakeRosAdapter(
                 runtime=RuntimeSnapshot(
                     system_state=SystemRuntimeState.LOST_CONN,
                     blocking=True,
-                    status_text='initial lost',
+                    status_text="initial lost",
                     mode=RuntimeMode.UNKNOWN,
                 ),
                 connections=build_connections(
@@ -420,13 +444,13 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
             await service.start()
             self.addAsyncCleanup(service.stop)
 
-            first = service.get_snapshot('session-reconnect', 'operator-reconnect')
-            self.assertEqual(first['runtime']['systemState'], 'LOST_CONN')
+            first = service.get_snapshot("session-reconnect", "operator-reconnect")
+            self.assertEqual(first["runtime"]["systemState"], "LOST_CONN")
 
             adapter.set_runtime(
                 SystemRuntimeState.NORMAL,
                 blocking=False,
-                status_text='reconnected',
+                status_text="reconnected",
                 mode=RuntimeMode.HARDWARE,
             )
             adapter.set_connections(
@@ -437,16 +461,16 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
                     motoros2=ConnectionHealth.HEALTHY,
                 )
             )
-            service.get_snapshot('session-reconnect', 'operator-reconnect')
+            service.get_snapshot("session-reconnect", "operator-reconnect")
             await self._sleep(0.1)
-            second = service.get_snapshot('session-reconnect', 'operator-reconnect')
-            self.assertEqual(second['runtime']['systemState'], 'NORMAL')
-            self.assertEqual(second['transportState'], 'connected')
+            second = service.get_snapshot("session-reconnect", "operator-reconnect")
+            self.assertEqual(second["runtime"]["systemState"], "NORMAL")
+            self.assertEqual(second["transportState"], "connected")
 
             adapter.set_runtime(
                 SystemRuntimeState.LOST_CONN,
                 blocking=True,
-                status_text='lost again',
+                status_text="lost again",
                 mode=RuntimeMode.UNKNOWN,
             )
             adapter.set_connections(
@@ -457,11 +481,11 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
                     motoros2=ConnectionHealth.DOWN,
                 )
             )
-            service.get_snapshot('session-reconnect', 'operator-reconnect')
+            service.get_snapshot("session-reconnect", "operator-reconnect")
             await self._sleep(0.1)
-            third = service.get_snapshot('session-reconnect', 'operator-reconnect')
-            self.assertEqual(third['runtime']['systemState'], 'LOST_CONN')
-            self.assertEqual(third['transportState'], 'disconnected')
+            third = service.get_snapshot("session-reconnect", "operator-reconnect")
+            self.assertEqual(third["runtime"]["systemState"], "LOST_CONN")
+            self.assertEqual(third["transportState"], "disconnected")
 
             with sqlite3.connect(db_path) as connection:
                 runtime_transitions = connection.execute(
@@ -480,5 +504,5 @@ class TelemetryBridgeV1Tests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(seconds)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

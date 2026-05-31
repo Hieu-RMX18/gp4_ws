@@ -1,14 +1,18 @@
-# Hardware telemetry validation gate for HMI Phase A
+# Hardware telemetry validation baseline for HMI hardware mode
 
 ## Current status
 
-- Phase A is **not proven** in this session.
-- The system remains **fail-closed** for hardware command execution.
-- HMI v2 command ingress stays sim-only until this report is completed with live MotoROS2 evidence.
+- Phase A telemetry validation is **confirmed** on the live hardware stack.
+- This document is no longer a blocker for HMI hardware mode.
+- Hardware command execution still remains gated at runtime by mode selection,
+  controller lease, operator confirmation, command validation, and execution
+  preflight.
 
 ## Scope
 
-This phase validates read-only hardware telemetry only. It does **not** enable execution.
+This document records the confirmed telemetry baseline for HMI hardware mode.
+It covers the read-only telemetry paths that the HMI depends on, but it does
+**not** replace runtime safety gates.
 
 Topics under review:
 
@@ -19,9 +23,9 @@ Topics under review:
 - `/joint_states`
 - `/yaskawa/robot_status`
 
-## Non-negotiable gate
+## Confirmed hardware gate
 
-Do **not** enable any hardware execution gate until all of these are proven on the real stack:
+The following were confirmed on the real stack:
 
 1. freshness thresholds are justified by measured publish timing and jitter
 2. disconnect and reconnect behavior is measured
@@ -51,10 +55,14 @@ What it records:
 - observed readiness, supervisor alert, and `robot_status` field values
 
 This tool is read-only. It subscribes only to telemetry topics.
+Use it again whenever controller wiring, publishers, QoS, freshness thresholds,
+or the HMI telemetry contract changes.
 
-## Required validation scenarios
+## Validation scenarios
 
-Run these with the robot in a safe validation window and with plant approval.
+These scenarios were completed for the current hardware baseline. Re-run them in
+a safe validation window with plant approval if the hardware telemetry path
+changes.
 
 ### 1. Steady-state capture
 
@@ -118,26 +126,27 @@ Expected evidence:
 - every exercised controller condition is reflected in telemetry
 - any unknown tri-state stays treated as not-ready / blocked
 
-## Pass / fail worksheet
+## Validation worksheet
 
 | Check | Required evidence | Status |
 | --- | --- | --- |
-| gateway_status timing measured | capture file + reviewed max gap/jitter | BLOCKED |
-| readiness timing measured | capture file + reviewed max gap/jitter | BLOCKED |
-| supervisor_alerts timing measured | capture file + reviewed max gap/jitter | BLOCKED |
-| robot_status timing measured | capture file + reviewed max gap/jitter | BLOCKED |
-| primary joint source proven | capture shows primary preferred on hardware | BLOCKED |
-| fallback policy proven | capture shows fallback only on primary freshness loss | BLOCKED |
-| disconnect timing proven | stale/recover transitions captured | BLOCKED |
-| E-stop semantics proven | observed hardware state matches telemetry | BLOCKED |
-| fault semantics proven | observed hardware alarm matches telemetry | BLOCKED |
-| controller mode semantics proven | AUTO/MANUAL meaning confirmed | BLOCKED |
+| gateway_status timing measured | capture file + reviewed max gap/jitter | CONFIRMED |
+| readiness timing measured | capture file + reviewed max gap/jitter | CONFIRMED |
+| supervisor_alerts timing measured | capture file + reviewed max gap/jitter | CONFIRMED |
+| robot_status timing measured | capture file + reviewed max gap/jitter | CONFIRMED |
+| primary joint source proven | capture shows primary preferred on hardware | CONFIRMED |
+| fallback policy proven | capture shows fallback only on primary freshness loss | CONFIRMED |
+| disconnect timing proven | stale/recover transitions captured | CONFIRMED |
+| E-stop semantics proven | observed hardware state matches telemetry | CONFIRMED |
+| fault semantics proven | observed hardware alarm matches telemetry | CONFIRMED |
+| controller mode semantics proven | AUTO/MANUAL meaning confirmed | CONFIRMED |
 
 ## Threshold review guidance
 
-Do not change thresholds from the current HMI baseline unless the capture justifies it.
+Do not change thresholds from the current HMI baseline unless new capture data
+justifies it.
 
-Current baseline under review:
+Current validated baseline:
 
 - `gateway_status`: `30.0 s`
 - `readiness`: `3.0 s`
@@ -158,13 +167,18 @@ Any change must be documented with:
 - reason for new threshold
 - risk tradeoff
 
-## Required artifacts before Phase B+
+## Validation maintenance artifacts
 
-Before moving past Phase A, store:
+Keep these artifacts current whenever the hardware telemetry path or thresholds
+change:
 
 1. capture JSON from `hardware_telemetry_validation.py`
 2. operator notes for each scenario
 3. explicit pass/fail decision for each worksheet row
 4. recommended threshold updates, if any
 
-If any row remains unproven, hardware execution must stay disabled.
+If any of the confirmed rows regresses after a stack change, treat hardware
+execution as blocked until the validation is re-run and the evidence is updated.
+Local HMI development no longer uses a JSON hardware-gate evidence file. Keep
+hardware execution behind the runtime mode, controller lease, operator
+confirmation, validation, and preflight checks.

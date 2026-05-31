@@ -1,0 +1,11 @@
+# Request a gateway-owned Semantic IR review without dispatching motion.
+string raw_text
+string runtime_mode
+string session_id
+string operator_id
+string command_id
+string review_token
+---
+bool accepted
+string error
+string semantic_ir_json

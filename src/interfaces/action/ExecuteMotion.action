@@ -6,7 +6,6 @@ float64[] joint_target       # optional, dùng cho PTP joint-space
 float64 velocity_scale       # 0.0 - 1.0
 float64 acceleration_scale   # 0.0 - 1.0
 string planner_id            # "PILZ_LIN", "PILZ_PTP", "OMPL_RRTConnect"
-bool require_approval        # DEPRECATED compatibility field. Direct callers must send false; plan-only is not supported by this action.
 # MOVE_REL: translation-only relative motion (Step 2)
 float64 delta_x              # relative translation in meters (base_link frame)
 float64 delta_y              # relative translation in meters (base_link frame)
@@ -20,6 +19,17 @@ float64 joint_angle          # target angle in radians
 # --- IO_SET ---
 uint32 io_address            # controller I/O address
 int32 io_value               # value to write (0 or 1 for digital)
+# --- BLENDED_SEQUENCE (W2.T0) ---
+# When primitive_type == "BLENDED_SEQUENCE", sequence_steps carries the typed
+# steps.  When primitive_type is anything else, sequence_steps must be empty.
+SequenceStep[] sequence_steps
+# --- W7: T-axis tiered mode ---
+bool extended_mode           # opt-in extended ±455° joint_6_t envelope
+string[] mode_tokens         # [cable_inspection_signed_off_token, operator_confirm_token]
+float64 estimated_duration_s # estimated command duration for max_continuous_extended_time_s check
+# --- Runtime trace correlation (W7) ---
+string command_id            # optional correlation ID for command trace events
+string correlation_id        # optional higher-level correlation ID for multi-step workflows
 ---
 # Result
 bool success

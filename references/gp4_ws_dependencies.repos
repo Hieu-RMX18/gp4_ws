@@ -1,0 +1,21 @@
+repositories:
+  references/motoman_ros2_support_packages:
+    type: git
+    url: https://github.com/Yaskawa-Global/motoman_ros2_support_packages.git
+    version: a18b64086fbb54bc03055dd3d23ddedb2ba329a4
+  references/motoros2_client_interface_dependencies:
+    type: git
+    url: https://github.com/Yaskawa-Global/motoros2_client_interface_dependencies.git
+    version: 873b5aa8286f90d09403bdc7ec6a4649b4df16eb
+  references/ros-industrial/industrial_core_ros2_msgs_only:
+    type: git
+    url: https://github.com/ros-industrial/industrial_core.git
+    version: d547cdcfdaf3bc0d46325215b8219b0a190c8e6c
+  references/trac_ik:
+    type: git
+    url: https://bitbucket.org/traclabs/trac_ik.git
+    version: 740847641ae22f28d4f6c9d80cbd85de83954d3a
+  references/yaskawa-global/motoros2_interfaces:
+    type: git
+    url: https://github.com/yaskawa-global/motoros2_interfaces.git
+    version: 24a63cf8a7a582c9fa6744507d605415462c9c17

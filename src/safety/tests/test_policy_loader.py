@@ -25,12 +25,20 @@ def test_get_motion_limits_failsafe_on_empty():
     """Empty rules dict falls back to fail-safe constants."""
     limits = get_motion_limits({})
     assert limits["max_velocity_scale"] == _FAILSAFE_MOTION_LIMITS["max_velocity_scale"]
-    assert limits["max_acceleration_scale"] == _FAILSAFE_MOTION_LIMITS["max_acceleration_scale"]
-    assert limits["max_move_rel_translation"] == _FAILSAFE_MOTION_LIMITS["max_move_rel_translation"]
+    assert (
+        limits["max_acceleration_scale"]
+        == _FAILSAFE_MOTION_LIMITS["max_acceleration_scale"]
+    )
+    assert (
+        limits["max_move_rel_translation"]
+        == _FAILSAFE_MOTION_LIMITS["max_move_rel_translation"]
+    )
 
 
 def test_get_motion_limits_reads_from_motion_limits_key():
-    rules = {"motion_limits": {"max_velocity_scale": 0.10, "max_acceleration_scale": 0.08}}
+    rules = {
+        "motion_limits": {"max_velocity_scale": 0.10, "max_acceleration_scale": 0.08}
+    }
     limits = get_motion_limits(rules)
     assert limits["max_velocity_scale"] == 0.10
     assert limits["max_acceleration_scale"] == 0.08

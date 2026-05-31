@@ -4,8 +4,8 @@
   <name>safety</name>
   <version>0.0.0</version>
   <description>Safety layer for Yaskawa GP4 robot.</description>
-  <maintainer email="user@todo.todo">user</maintainer>
-  <license>TODO: License declaration</license>
+  <maintainer email="hieu2@example.com">hieu2</maintainer>
+  <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>std_msgs</depend>

@@ -4,13 +4,145 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from ..domain.models import CommandLifecycleState, CommandRecord, RuntimeMode, RuntimeSnapshot
+from ..domain.models import (
+    CommandLifecycleState,
+    CommandRecord,
+    RuntimeMode,
+    RuntimeSnapshot,
+    SystemRuntimeState,
+)
 
 
 class SupervisorExecutionMixin:
     @staticmethod
     def _utcnow() -> datetime:
         return datetime.now(timezone.utc)
+
+    def start_servo(
+        self,
+        *,
+        session_id: str,
+        operator_id: str,
+        lease_token: str | None,
+    ) -> dict[str, Any]:
+        return self._run_servo_control(
+            session_id=session_id,
+            operator_id=operator_id,
+            lease_token=lease_token,
+            action_label="Servo START",
+            adapter_method_name="start_traj_mode",
+        )
+
+    def hold_servo(
+        self,
+        *,
+        session_id: str,
+        operator_id: str,
+        lease_token: str | None,
+    ) -> dict[str, Any]:
+        return self._run_servo_control(
+            session_id=session_id,
+            operator_id=operator_id,
+            lease_token=lease_token,
+            action_label="Servo HOLD",
+            adapter_method_name="stop_motion",
+        )
+
+    def _run_servo_control(
+        self,
+        *,
+        session_id: str,
+        operator_id: str,
+        lease_token: str | None,
+        action_label: str,
+        adapter_method_name: str,
+    ) -> dict[str, Any]:
+        lease = self._assert_controller(session_id, operator_id, lease_token)
+        runtime = self._current_runtime()
+        preflight = self._servo_control_preflight(
+            runtime=runtime,
+            action_label=action_label,
+            require_auto=action_label == "Servo START",
+        )
+        if not preflight["accepted"]:
+            return {
+                "accepted": False,
+                "message": "; ".join(preflight["reasons"])
+                or "servo control preflight failed.",
+            }
+
+        adapter_method = getattr(self._ros, adapter_method_name, None)
+        if not callable(adapter_method):
+            return {
+                "accepted": False,
+                "message": f"{action_label} adapter method is unavailable.",
+            }
+
+        self._audit.record_runtime_event(
+            system_state=runtime.system_state,
+            session_id=session_id,
+            operator_id=operator_id,
+            command_id=None,
+            message=f"{action_label} requested",
+            payload={
+                "leaseId": lease.lease_id,
+                "preflight": preflight,
+            },
+        )
+        result = adapter_method()
+        if not isinstance(result, dict):
+            return {
+                "accepted": False,
+                "message": f"{action_label} returned an invalid response.",
+            }
+        return {
+            "accepted": bool(result.get("accepted", False)),
+            "message": str(result.get("message", "")),
+        }
+
+    def _servo_control_preflight(
+        self,
+        *,
+        runtime: RuntimeSnapshot,
+        action_label: str,
+        require_auto: bool,
+    ) -> dict[str, Any]:
+        reasons: list[str] = []
+        robot_status = runtime.robot_status
+
+        if runtime.mode != RuntimeMode.HARDWARE:
+            reasons.append(f"{action_label} is allowed only in hardware mode.")
+
+        if runtime.system_state in {
+            SystemRuntimeState.ESTOP,
+            SystemRuntimeState.FAULT,
+            SystemRuntimeState.LOST_CONN,
+            SystemRuntimeState.TIMEOUT,
+        }:
+            reasons.append(
+                f"runtime state {runtime.system_state.value} blocks servo control."
+            )
+
+        if robot_status.e_stop != "CLEAR":
+            reasons.append(f"e-stop state must be CLEAR, got {robot_status.e_stop}.")
+
+        if robot_status.alarm_state != "NONE":
+            reasons.append(
+                f"alarm state must be NONE, got {robot_status.alarm_state}."
+            )
+
+        if require_auto and robot_status.motion_mode != "AUTO":
+            reasons.append(
+                f"robot motion mode must be AUTO before Servo START, got {robot_status.motion_mode}."
+            )
+
+        return {
+            "accepted": len(reasons) == 0,
+            "mode": runtime.mode.value,
+            "reasons": reasons,
+            "runtimeState": runtime.system_state.value,
+            "robotStatus": robot_status.to_dict(),
+        }
 
     def _confirm_command_internal(
         self,
@@ -27,6 +159,7 @@ class SupervisorExecutionMixin:
             lease=lease,
             parsed_intent=command.parsed_intent,
             requested_mode=command.mode,
+            enforce_execution_readiness=True,
         )
         if command.mode == RuntimeMode.HARDWARE:
             self._audit.record_runtime_event(
@@ -46,7 +179,10 @@ class SupervisorExecutionMixin:
                 payload=confirm_gate.get("preflight"),
             )
         if not confirm_gate["accepted"]:
-            reason = "; ".join(confirm_gate["blockingReasons"]) or "confirmation gate rejected command"
+            reason = (
+                "; ".join(confirm_gate["blockingReasons"])
+                or "confirmation gate rejected command"
+            )
             self._trace(
                 "confirmation.rejected",
                 command_id=command.command_id,
@@ -195,7 +331,8 @@ class SupervisorExecutionMixin:
             self._transition_command(
                 command,
                 next_state=CommandLifecycleState.SUCCEEDED,
-                reason=execution_result.get("summary") or "execution completed successfully",
+                reason=execution_result.get("summary")
+                or "execution completed successfully",
                 runtime_state=runtime.system_state,
                 payload=execution_result,
                 message_text=(
@@ -208,7 +345,8 @@ class SupervisorExecutionMixin:
                 "terminal.succeeded",
                 command_id=command.command_id,
                 correlation_id=command.correlation_id,
-                reason=execution_result.get("summary") or "execution completed successfully",
+                reason=execution_result.get("summary")
+                or "execution completed successfully",
             )
         elif execution_status == "cancelled":
             if not dispatched_to_ros:
@@ -249,7 +387,8 @@ class SupervisorExecutionMixin:
             self._transition_command(
                 command,
                 next_state=CommandLifecycleState.FAILED,
-                reason=execution_result.get("summary") or "execution boundary rejected request",
+                reason=execution_result.get("summary")
+                or "execution boundary rejected request",
                 runtime_state=runtime.system_state,
                 payload=execution_result,
                 message_text=(
@@ -262,7 +401,8 @@ class SupervisorExecutionMixin:
                 "terminal.failed",
                 command_id=command.command_id,
                 correlation_id=command.correlation_id,
-                reason=execution_result.get("summary") or "execution boundary rejected request",
+                reason=execution_result.get("summary")
+                or "execution boundary rejected request",
             )
 
         self._audit.upsert_command(command)
@@ -280,7 +420,11 @@ class SupervisorExecutionMixin:
     def _is_get_pose_command(command: CommandRecord) -> bool:
         parsed_intent = command.parsed_intent or {}
         normalized_command = parsed_intent.get("normalizedCommand") or {}
-        primitive = str(normalized_command.get("primitive_type") or parsed_intent.get("action") or "").upper()
+        primitive = str(
+            normalized_command.get("primitive_type")
+            or parsed_intent.get("action")
+            or ""
+        ).upper()
         return primitive == "GET_POSE"
 
     def _execute_get_pose_query(
@@ -357,7 +501,9 @@ class SupervisorExecutionMixin:
             status=execution_result.get("status"),
             summary=execution_result.get("summary"),
         )
-        should_emit_querying_state = command.lifecycle_state != CommandLifecycleState.VALIDATING
+        should_emit_querying_state = (
+            command.lifecycle_state != CommandLifecycleState.VALIDATING
+        )
         if should_emit_querying_state:
             self._transition_command(
                 command,

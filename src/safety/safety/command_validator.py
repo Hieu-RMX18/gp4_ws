@@ -1,4 +1,6 @@
 import json
+from datetime import datetime, timezone
+from typing import Optional
 
 from .policy_loader import _FAILSAFE_MOTION_LIMITS
 
@@ -12,6 +14,25 @@ _VELOCITY_BYPASS_PRIMITIVES = {
 
 # Fail-safe only — active policy is loaded from safety_rules.yaml via constructor.
 _DEFAULT_MAX_SCALE = _FAILSAFE_MOTION_LIMITS["max_velocity_scale"]
+
+
+class _ExtendedRunTracker:
+    """Module-level tracker for extended-mode cooldown enforcement.
+
+    Single-threaded per the existing safety chain executor.
+    """
+
+    def __init__(self):
+        self._last_end_time: Optional[datetime] = None
+
+    def record_end(self):
+        self._last_end_time = datetime.now(timezone.utc)
+
+    def last_end_time(self) -> Optional[datetime]:
+        return self._last_end_time
+
+
+_extended_runs = _ExtendedRunTracker()
 
 
 class CommandValidator:
@@ -31,7 +52,7 @@ class CommandValidator:
     def validate(self, command_json: str) -> tuple[bool, str]:
         if not command_json:
             return False, "Empty JSON"
-            
+
         try:
             cmd = json.loads(command_json)
         except json.JSONDecodeError:
@@ -44,6 +65,11 @@ class CommandValidator:
         if primitive_type in _VELOCITY_BYPASS_PRIMITIVES:
             return True, ""
 
+        # W7: extended_mode precondition gate (before velocity check)
+        extended_ok, extended_reason = self._check_extended_mode_preconditions(cmd)
+        if not extended_ok:
+            return False, extended_reason
+
         # Policy-aware defaulting: absent scale → use the safety policy ceiling.
         # This prevents a missing field from being silently treated as 100% speed.
         velocity_scale = cmd.get("velocity_scale")
@@ -54,7 +80,10 @@ class CommandValidator:
                 return False, "Invalid velocity_scale format"
 
             if velocity_scale > self.max_velocity:
-                return False, f"velocity_scale {velocity_scale} exceeds max allowed {self.max_velocity}"
+                return (
+                    False,
+                    f"velocity_scale {velocity_scale} exceeds max allowed {self.max_velocity}",
+                )
 
             if velocity_scale <= 0.0:
                 return False, "velocity_scale must be positive"
@@ -80,3 +109,71 @@ class CommandValidator:
         # else: absent field is acceptable; motion_core resolves default at execution time.
 
         return True, ""
+
+    def _check_extended_mode_preconditions(self, command: dict) -> tuple:
+        if not command.get("extended_mode"):
+            return True, ""
+        cfg = self.safety_rules.get("operational_joint_limits", {}).get("joint_6_t")
+        disabled_reason = "extended_mode disabled; use default joint_6_t envelope"
+        if not isinstance(cfg, dict):
+            return False, disabled_reason
+        if "extended" not in cfg:
+            return False, disabled_reason
+
+        pre = cfg.get("extended_preconditions", {})
+
+        # 1. Cable inspection sign-off
+        if pre.get("cable_inspection_signed_off") and not command.get(
+            "cable_inspection_signed_off_token"
+        ):
+            return (
+                False,
+                "extended_mode requires cable_inspection_signed_off_token; "
+                "operator must certify",
+            )
+
+        # 2. Velocity cap
+        cap = float(pre.get("max_velocity_scale", 0.10))
+        vel = float(command.get("velocity_scale", 0.06))
+        if vel > cap:
+            return (
+                False,
+                f"extended_mode velocity_scale={vel} > cap {cap}",
+            )
+
+        # 3. Operator confirm token
+        if pre.get("requires_operator_confirm") and not command.get(
+            "operator_confirm_token"
+        ):
+            return (
+                False,
+                "extended_mode requires operator_confirm_token (single-command scope)",
+            )
+
+        # 4. Cooldown enforcement
+        last_extended_end = _extended_runs.last_end_time()
+        if last_extended_end is not None:
+            elapsed = (datetime.now(timezone.utc) - last_extended_end).total_seconds()
+            cool_down = float(pre.get("cool_down_s_between_runs", 60))
+            if elapsed < cool_down:
+                return (
+                    False,
+                    f"extended_mode cooldown not elapsed: "
+                    f"{elapsed:.1f}s < {cool_down}s",
+                )
+
+        # 5. Estimated duration cap
+        estimated_s = float(command.get("estimated_duration_s", 0))
+        max_duration = float(pre.get("max_continuous_extended_time_s", 30))
+        if estimated_s > max_duration:
+            return (
+                False,
+                f"extended_mode estimated_duration {estimated_s}s "
+                f"> cap {max_duration}s",
+            )
+
+        return True, ""
+
+    def record_extended_run_end(self):
+        """Called by execution_gate after an extended-mode command completes."""
+        _extended_runs.record_end()

@@ -2,10 +2,10 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>interfaces</name>
-  <version>0.0.0</version>
+  <version>0.1.0</version>
   <description>Custom messages, services, and actions for AI Agentic GP4 setup</description>
-  <maintainer email="hieu@todo.todo">hieu2</maintainer>
-  <license>Apache License 2.0</license>
+  <maintainer email="hieu2@example.com">hieu2</maintainer>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
@@ -13,6 +13,7 @@
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>trajectory_msgs</depend>
+  <depend>vision_msgs</depend>
 
   <buildtool_depend>rosidl_default_generators</buildtool_depend>
   <exec_depend>rosidl_default_runtime</exec_depend>

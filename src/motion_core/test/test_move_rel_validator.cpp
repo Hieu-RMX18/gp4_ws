@@ -53,22 +53,22 @@ TEST(MoveRelValidatorTest, AcceptsNegativeDelta) {
 }
 
 TEST(MoveRelValidatorTest, AcceptsDeltaExactlyAtLimit) {
-  // norm = 0.05 exactly — should pass.
+  // norm = 0.21 exactly — should pass.
   std::string reason;
-  EXPECT_TRUE(validate_move_rel_deltas(0.05, 0.0, 0.0, reason));
+  EXPECT_TRUE(validate_move_rel_deltas(0.21, 0.0, 0.0, reason));
 }
 
 TEST(MoveRelValidatorTest, RejectsDeltaNormExceedsLimit) {
-  // norm = sqrt(0.04^2 + 0.04^2) ≈ 0.0566 > 0.05 (reject)
+  // norm = sqrt(0.15^2 + 0.15^2) ≈ 0.212 > 0.21 (reject)
   std::string reason;
-  EXPECT_FALSE(validate_move_rel_deltas(0.04, 0.04, 0.0, reason));
+  EXPECT_FALSE(validate_move_rel_deltas(0.15, 0.15, 0.0, reason));
   EXPECT_NE(reason.find("exceeds safety limit"), std::string::npos);
 }
 
 TEST(MoveRelValidatorTest, RejectsLargeSingleAxisDelta) {
-  // 0.06 > 0.05 limit
+  // 0.22 > 0.21 limit
   std::string reason;
-  EXPECT_FALSE(validate_move_rel_deltas(0.0, 0.0, 0.06, reason));
+  EXPECT_FALSE(validate_move_rel_deltas(0.0, 0.0, 0.22, reason));
   EXPECT_NE(reason.find("exceeds safety limit"), std::string::npos);
 }
 
@@ -160,7 +160,7 @@ TEST(MoveRelValidatorTest, RejectsTargetBelowZMin) {
   geometry_msgs::msg::Pose target;
   target.position.x = 0.0;
   target.position.y = 0.0;
-  target.position.z = 0.22; // below kZMin = 0.23
+  target.position.z = 0.10; // below kZMin = 0.15
 
   std::string reason;
   EXPECT_FALSE(validate_move_rel_target_bounds(target, reason));
@@ -190,7 +190,7 @@ TEST(MoveRelValidatorTest, RejectsTargetBelowYMin) {
 }
 
 TEST(MoveRelValidatorTest, RejectsTargetBelowZMinBeforeFloorClearanceGuard) {
-  // floor_clearance_guard Z=[0.0, 0.20] is entirely below workspace z_min=0.23.
+  // floor_clearance_guard Z=[0.0, 0.12] is entirely below workspace z_min=0.15.
   // This test verifies the point is rejected by workspace bounds.
   geometry_msgs::msg::Pose target;
   target.position.x = 0.10;
@@ -214,7 +214,8 @@ TEST(MoveRelValidatorTest, RejectsTargetBelowXMin) {
 }
 
 TEST(MoveRelValidatorTest, RejectsTargetBeyondFrontWall) {
-  // Position beyond front wall (y < kYMin = -0.16) is rejected by workspace bounds.
+  // Position beyond front wall (y < kYMin = -0.16) is rejected by workspace
+  // bounds.
   geometry_msgs::msg::Pose target;
   target.position.x = 0.0;
   target.position.y = -0.197; // station front wall, below kYMin
@@ -226,7 +227,8 @@ TEST(MoveRelValidatorTest, RejectsTargetBeyondFrontWall) {
 }
 
 TEST(MoveRelValidatorTest, RejectsTargetBeyondRightWall) {
-  // Calibrated side wall is at x=-0.482; this is below kXMin=-0.45 and must be rejected.
+  // Calibrated side wall is at x=-0.482; this is below kXMin=-0.45 and must be
+  // rejected.
   geometry_msgs::msg::Pose target;
   target.position.x = -0.482;
   target.position.y = 0.30;
@@ -250,23 +252,23 @@ TEST(MoveRelValidatorTest, RejectsTargetNearRightWallEdge) {
 }
 
 TEST(MoveRelValidatorTest, ForbiddenZoneCentersAreRejectedByWorkspaceFirst) {
-  struct Case
-  {
-    const char * name;
+  struct Case {
+    const char *name;
     double x;
     double y;
     double z;
   };
 
   const Case cases[] = {
-    {"front_wall_guard", MoveRelLimits::kFrontWallX, MoveRelLimits::kFrontWallY, 0.35},
-    {"right_wall_guard", MoveRelLimits::kRightWallX, MoveRelLimits::kRightWallY, 0.35},
-    {"floor_clearance_guard", MoveRelLimits::kFloorClearanceX, MoveRelLimits::kFloorClearanceY,
-      MoveRelLimits::kFloorClearanceZ},
+      {"front_wall_guard", MoveRelLimits::kFrontWallX,
+       MoveRelLimits::kFrontWallY, 0.35},
+      {"right_wall_guard", MoveRelLimits::kRightWallX,
+       MoveRelLimits::kRightWallY, 0.35},
+      {"floor_clearance_guard", MoveRelLimits::kFloorClearanceX,
+       MoveRelLimits::kFloorClearanceY, MoveRelLimits::kFloorClearanceZ},
   };
 
-  for (const auto & test_case : cases)
-  {
+  for (const auto &test_case : cases) {
     geometry_msgs::msg::Pose target;
     target.position.x = test_case.x;
     target.position.y = test_case.y;
@@ -274,11 +276,11 @@ TEST(MoveRelValidatorTest, ForbiddenZoneCentersAreRejectedByWorkspaceFirst) {
 
     std::string reason;
     EXPECT_FALSE(validate_move_rel_target_bounds(target, reason))
-      << "case: " << test_case.name;
+        << "case: " << test_case.name;
     EXPECT_NE(reason.find("outside workspace bounds"), std::string::npos)
-      << "case: " << test_case.name;
+        << "case: " << test_case.name;
     EXPECT_EQ(reason.find("intersects forbidden zone"), std::string::npos)
-      << "case: " << test_case.name;
+        << "case: " << test_case.name;
   }
 }
 
@@ -309,11 +311,11 @@ TEST(MoveRelValidatorTest, FullFlowValidDeltaInsideBounds) {
 }
 
 TEST(MoveRelValidatorTest, FullFlowDeltaPushesTargetOutOfBounds) {
-  // Simulate: current near ceiling, move up 0.03 m -> exceeds z_max=0.56
+  // Simulate: current near ceiling, move up 0.03 m -> exceeds z_max=0.65
   geometry_msgs::msg::Pose current;
   current.position.x = 0.0;
   current.position.y = 0.0;
-  current.position.z = 0.54;  // just below kZMax = 0.56
+  current.position.z = 0.63; // just below kZMax = 0.65
   current.orientation.w = 1.0;
 
   std::string reason;

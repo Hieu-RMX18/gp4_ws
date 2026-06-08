@@ -64,7 +64,13 @@ from llm_gateway.react_planner import (
     WaitForStateTool,
     load_llm_backend_config,
 )
-from llm_gateway.composite_tools import EmitSequenceTool, PickObjectTool, RefreshSceneTool
+from llm_gateway.composite_tools import (
+    EmitSequenceTool,
+    GripperConfig,
+    GripperIoAdapter,
+    PickObjectTool,
+    RefreshSceneTool,
+)
 from llm_gateway.semantic_ir_contract import validate_semantic_ir_contract
 
 
@@ -176,6 +182,13 @@ class LLMGatewayNode(Node):
             self._default_velocity_scale, self._default_acceleration_scale
         )
         self._semantic_validator = semantic_validator or SemanticValidator()
+        self._gripper_adapter = GripperIoAdapter(
+            config=GripperConfig.from_rules(
+                getattr(self._semantic_validator, "_safety_rules", {})
+            ),
+            node=self,
+            robot_mode_fn=self._current_react_robot_mode,
+        )
         self._goal_mapper = goal_mapper or GoalMapper(
             default_velocity_scale=self._default_velocity_scale,
             default_acceleration_scale=self._default_acceleration_scale,
@@ -1029,6 +1042,11 @@ class LLMGatewayNode(Node):
 
     def _invalidate_scene_cache(self) -> None:
         self._scene_snapshot_cache.invalidate()
+
+    def _current_react_robot_mode(self) -> str:
+        snapshot = self._react_state_injector.snapshot()
+        robot_state = snapshot.get("robot_state", {}) if isinstance(snapshot, dict) else {}
+        return str(robot_state.get("mode") or "IDLE")
 
     @staticmethod
     def _tri_state_is_true(value: Any) -> bool:

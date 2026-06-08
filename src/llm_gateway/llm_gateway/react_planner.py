@@ -1321,11 +1321,15 @@ class GripperCloseTool(Tool):
     }
 
     def invoke(self, args: dict, context: "AgentContext") -> ToolResult:
-        return ToolResult(
-            ok=False,
-            error="capability_unavailable",
-            payload={"capability": "gripper"},
-        )
+        adapter = getattr(getattr(context, "ros_node", None), "_gripper_adapter", None)
+        if adapter is None:
+            return ToolResult(
+                ok=False,
+                error="capability_unavailable",
+                payload={"capability": "gripper"},
+            )
+        result = adapter.close()
+        return ToolResult(ok=result.ok, error=result.error or None)
 
 
 """Gripper open tool — stub until gripper capability is wired."""
@@ -1341,11 +1345,15 @@ class GripperOpenTool(Tool):
     }
 
     def invoke(self, args: dict, context: "AgentContext") -> ToolResult:
-        return ToolResult(
-            ok=False,
-            error="capability_unavailable",
-            payload={"capability": "gripper"},
-        )
+        adapter = getattr(getattr(context, "ros_node", None), "_gripper_adapter", None)
+        if adapter is None:
+            return ToolResult(
+                ok=False,
+                error="capability_unavailable",
+                payload={"capability": "gripper"},
+            )
+        result = adapter.open()
+        return ToolResult(ok=result.ok, error=result.error or None)
 
 
 """Plan motion tool — validates a motion target through /validate_command."""

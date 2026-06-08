@@ -753,6 +753,7 @@ class SemanticValidator:
     def __init__(self, safety_rules: dict | None = None):
         if safety_rules is None:
             safety_rules = _load_safety_rules()
+        self._safety_rules = dict(safety_rules)
         circ_cfg = safety_rules.get("circ", {})
         self._circ_degenerate_tolerance = float(
             circ_cfg.get("degenerate_tolerance", 1e-3)

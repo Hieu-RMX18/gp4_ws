@@ -138,3 +138,22 @@ require_human_approval:
 # W4: Perception calibration quality gates
 calibration:
   max_reprojection_error_mm: 5.0
+
+composite_limits:
+  max_sequence_length: 8
+  max_pick_approach_offset_m: 0.12
+  pick_descent_max_m: 0.06
+  pick_lift_max_m: 0.10
+  place_descent_max_m: 0.06
+  approach_axis_whitelist: ["+z_base", "-z_base", "+x_base", "-x_base", "+y_base", "-y_base"]
+
+gripper:
+  write_single_io_service: "/io_set"
+  read_single_io_service: "/read_single_io"
+  open_output_address: VERIFY_CONFIG
+  open_output_value: VERIFY_CONFIG
+  close_output_address: VERIFY_CONFIG
+  close_output_value: VERIFY_CONFIG
+  closed_input_address: VERIFY_CONFIG
+  closed_input_active_value: VERIFY_CONFIG
+  feedback_timeout_sec: 1.0

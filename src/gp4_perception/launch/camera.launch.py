@@ -141,7 +141,7 @@ def generate_launch_description() -> LaunchDescription:
                         "tf_publish_rate": 0.0,
                     }
                 ],
-                arguments=["--ros-args", "--log-level", "info"],
+                arguments=["--ros-args", "--log-level", "warn"],
             ),
         ]
     )

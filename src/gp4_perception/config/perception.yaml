@@ -206,7 +206,7 @@ perception:
       enabled: true
       detector_type: "blue_border_white_fill"
       min_area_px: 500
-      max_area_px: 30000
+      max_area_px: 120000
       morph_kernel: 5
       require_border: null          # handled by detector_type
       blue_border_hsv: [95, 50, 40, 135, 255, 255]

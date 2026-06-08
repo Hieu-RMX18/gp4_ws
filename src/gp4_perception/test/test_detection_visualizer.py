@@ -479,6 +479,50 @@ class TestWhiteWorkpiece:
         res = _detect_blue_border_white_fill(rgb, hsv, cfg)
         assert len(res) == 0
 
+    def test_white_workpiece_large_near_range_accepted(self):
+        """A blue-border/white-fill object > 30000 px but < 120000 px must be accepted."""
+        import cv2
+
+        # 400x200 = 80000 px: within [500, 120000]
+        # Image treated as RGB by detect_color_objects (COLOR_RGB2HSV).
+        # RGB(0,80,200) -> HSV[108,255,200] — within blue_border_hsv [95,50,40,135,255,255].
+        img = np.zeros((600, 900, 3), dtype=np.uint8)
+        cv2.rectangle(img, (100, 150), (499, 349), (0, 80, 200), 30)   # RGB blue
+        # White fill inside — RGB(255,255,255) -> HSV[0,0,255], within white_fill_hsv.
+        cv2.rectangle(img, (131, 181), (468, 318), (255, 255, 255), -1)
+
+        from gp4_perception.unified_visualizer import detect_color_objects
+        import yaml
+        from pathlib import Path
+        cfg_path = Path(__file__).parents[1] / "config" / "perception.yaml"
+        cfg = yaml.safe_load(cfg_path.read_text())
+        color_classes = cfg["perception"]["color_classes"]
+        postprocess = cfg["perception"].get("postprocess", {})
+        results = detect_color_objects(img, color_classes, postprocess)
+        wp = [r for r in results if r["class_id"] == "white_workpiece"]
+        assert len(wp) >= 1, f"Expected white_workpiece detection, got {results}"
+
+    def test_white_workpiece_above_max_area_rejected(self):
+        """Object above 120000 px must be rejected."""
+        import cv2
+
+        # Very large object > 120000 px (450x300=135000 px).
+        # RGB(0,80,200) for blue border (consistent with detect_color_objects RGB→HSV path).
+        img = np.zeros((700, 1000, 3), dtype=np.uint8)
+        cv2.rectangle(img, (50, 50), (499, 349), (0, 80, 200), 40)
+        cv2.rectangle(img, (91, 91), (458, 308), (255, 255, 255), -1)
+
+        from gp4_perception.unified_visualizer import detect_color_objects
+        import yaml
+        from pathlib import Path
+        cfg_path = Path(__file__).parents[1] / "config" / "perception.yaml"
+        cfg = yaml.safe_load(cfg_path.read_text())
+        color_classes = cfg["perception"]["color_classes"]
+        postprocess = cfg["perception"].get("postprocess", {})
+        results = detect_color_objects(img, color_classes, postprocess)
+        wp = [r for r in results if r["class_id"] == "white_workpiece"]
+        assert len(wp) == 0, f"Expected no white_workpiece detection for oversized object, got {results}"
+
 
 class TestLabelUnits:
     def test_distance_0_545m_formats_to_545mm(self):

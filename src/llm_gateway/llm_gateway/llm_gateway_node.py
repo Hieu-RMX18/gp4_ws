@@ -85,6 +85,41 @@ class _SequenceExecutionState:
     executed_io_side_effects: bool = False
 
 
+class _SceneSnapshotCache:
+    def __init__(self, ttl_sec: float, now_fn=time.monotonic):
+        self._ttl_sec = float(ttl_sec)
+        self._now_fn = now_fn
+        self._entries: Dict[tuple[str, str], tuple[float, Dict[str, Any]]] = {}
+
+    def get(self, args: Dict[str, Any]) -> Dict[str, Any] | None:
+        key = self._key(args)
+        entry = self._entries.get(key)
+        if entry is None:
+            return None
+        stamp, payload = entry
+        if self._now_fn() - stamp > self._ttl_sec:
+            self._entries.pop(key, None)
+            return None
+        cached = dict(payload)
+        cached["cache_hit"] = True
+        return cached
+
+    def store(self, args: Dict[str, Any], payload: Dict[str, Any]) -> None:
+        stored = dict(payload)
+        stored["cache_hit"] = False
+        self._entries[self._key(args)] = (self._now_fn(), stored)
+
+    def invalidate(self) -> None:
+        self._entries.clear()
+
+    @staticmethod
+    def _key(args: Dict[str, Any]) -> tuple[str, str]:
+        return (
+            str(args.get("class_filter") or ""),
+            str(args.get("frame") or "base_link"),
+        )
+
+
 class LLMGatewayNode(Node):
     """Convert /llm_intent or /llm_text_input text into a validated ExecuteMotion goal."""
 
@@ -159,6 +194,7 @@ class LLMGatewayNode(Node):
         self._latest_pose_by_frame: Dict[str, Dict[str, Any]] = {}
         self._current_pose_cache_ttl_sec = 5.0
         self._semantic_review_cache: Dict[str, Dict[str, Any]] = {}
+        self._scene_snapshot_cache = _SceneSnapshotCache(ttl_sec=2.0)
         llm_backend_config = load_llm_backend_config(llm_config_path)
         self._llm_client = llm_client or OpenAICompatibleLLMClient(
             llm_backend_config, self._schema_validator.schema_as_json()
@@ -988,6 +1024,11 @@ class LLMGatewayNode(Node):
                 "active_alarms": [str(code) for code in msg.error_codes],
             }
         )
+        if mode != "IDLE":
+            self._invalidate_scene_cache()
+
+    def _invalidate_scene_cache(self) -> None:
+        self._scene_snapshot_cache.invalidate()
 
     @staticmethod
     def _tri_state_is_true(value: Any) -> bool:
@@ -1818,6 +1859,10 @@ class LLMGatewayNode(Node):
         return False, None
 
     def _query_perception_detections(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        cached_payload = self._scene_snapshot_cache.get(args)
+        if cached_payload is not None:
+            return {"ok": True, "error": None, "payload": cached_payload}
+
         client = getattr(self, "_get_object_positions_client", None)
         if client is None or not client.service_is_ready():
             return {
@@ -1868,22 +1913,24 @@ class LLMGatewayNode(Node):
                     "depth_noise_mm_p95": depth_noise_mm_p95,
                 },
             }
+        payload = {
+            "detections": [
+                self._serialize_detection(detection)
+                for detection in response.detections
+            ],
+            "calibration": calibration_payload,
+            "depth_in_range": depth_in_range,
+            "depth_noise_mm_p95": depth_noise_mm_p95,
+            "stamp": {
+                "sec": int(response.stamp.sec),
+                "nanosec": int(response.stamp.nanosec),
+            },
+        }
+        self._scene_snapshot_cache.store(args, payload)
         return {
             "ok": True,
             "error": None,
-            "payload": {
-                "detections": [
-                    self._serialize_detection(detection)
-                    for detection in response.detections
-                ],
-                "calibration": calibration_payload,
-                "depth_in_range": depth_in_range,
-                "depth_noise_mm_p95": depth_noise_mm_p95,
-                "stamp": {
-                    "sec": int(response.stamp.sec),
-                    "nanosec": int(response.stamp.nanosec),
-                },
-            },
+            "payload": payload,
         }
 
     @staticmethod

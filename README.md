@@ -176,6 +176,10 @@ Source of truth for implementation logic: `src/primitives/`.
 | `retract`          | Sub-primitive of blended_sequence. |
 | `blended_sequence` | Chained primitive execution. |
 
+### ReAct semantic pick/place
+
+The gateway resolves pick/place goals through `src/llm_gateway/config/station_semantic_map.yaml`. Unknown measured geometry and gripper I/O values use `VERIFY_CONFIG`; runtime motion and I/O fail closed until those values are verified. Composite tools emit validated Semantic IR sequences and still pass through `/validate_command`, `motion_core`, supervisor gates, and the hardware adapter. Scene queries are cached for two seconds and invalidated by `refresh_scene`, robot motion, and world-changing tool metadata. Optional MTC pick/place is used only when dependencies and runtime services are available; otherwise the system uses validated primitive sequences or returns `capability_unavailable`.
+
 ---
 
 ## Prerequisites

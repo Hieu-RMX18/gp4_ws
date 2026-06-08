@@ -1,0 +1,11 @@
+string action
+string object_id
+string source_region
+string destination_region
+geometry_msgs/Pose object_pose
+geometry_msgs/Pose destination_pose
+bool execute
+---
+bool ok
+string status
+string message

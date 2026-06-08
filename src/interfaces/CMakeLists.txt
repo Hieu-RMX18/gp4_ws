@@ -41,6 +41,7 @@ set(srv_files
   "srv/GetPrimitiveConstants.srv"
   "srv/ConfirmExecution.srv"
   "srv/ReviewIntent.srv"
+  "srv/PlanPickPlace.srv"
 )
 
 set(action_files

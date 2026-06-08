@@ -1,0 +1,33 @@
+metadata:
+  source: "operator_review_required"
+  geometry_verified: false
+  reviewed_date: "2026-06-08"
+regions:
+  conveyor:
+    frame_id: base_link
+    geometry:
+      type: box
+      center: {x: VERIFY_CONFIG, y: VERIFY_CONFIG, z: VERIFY_CONFIG}
+      size: {x: VERIFY_CONFIG, y: VERIFY_CONFIG, z: VERIFY_CONFIG}
+    aliases: ["bang tai", "bang chuyen", "conveyor"]
+    zones:
+      drop_zone:
+        inset_m: 0.04
+        default_clearance_m: 0.10
+      inspect_zone:
+        offset: {x: 0.0, y: 0.0, z: 0.16}
+  fixture:
+    frame_id: base_link
+    geometry:
+      type: box
+      center: {x: VERIFY_CONFIG, y: VERIFY_CONFIG, z: VERIFY_CONFIG}
+      size: {x: VERIFY_CONFIG, y: VERIFY_CONFIG, z: VERIFY_CONFIG}
+    aliases: ["ga phoi", "jig", "fixture"]
+    zones:
+      grasp_zone:
+        default_clearance_m: 0.08
+        approach_axis: "-z_base"
+objects:
+  white_workpiece:
+    class_id: white_workpiece
+    aliases: ["phoi trang", "white workpiece", "white_workpiece"]

@@ -15,6 +15,10 @@ def _det(class_id: str, x: float, y: float, z: float):
     return type("Detection3D", (), {"results": [result]})()
 
 
+def make_detection(class_id: str, x: float, y: float, z: float):
+    return _det(class_id, x, y, z)
+
+
 class TestTemporalTracker:
     def test_stable_object_published_after_min_hits(self):
         tr = TemporalTracker(window_frames=5, min_hits=3, jitter_max_mm=15.0)
@@ -61,3 +65,23 @@ class TestTemporalTracker:
         tr.update([_det("red_box", 0.310, 0.0, 0.1)])
         out = tr.update([_det("red_box", 0.300, 0.0, 0.1)])
         assert len(out) == 1
+
+
+class TestHysteresis:
+    def test_confirmed_track_survives_two_missing_frames(self):
+        tracker = TemporalTracker(window_frames=5, min_hits=3, jitter_max_mm=15.0,
+                                  miss_tolerance_frames=2)
+        det = make_detection("red_box", 0.30, 0.00, 0.10)
+        assert tracker.update([det]) == []
+        assert tracker.update([det]) == []
+        assert len(tracker.update([det])) == 1     # confirmed
+        assert len(tracker.update([])) == 1         # miss 1, still held
+        assert len(tracker.update([])) == 1         # miss 2, still held
+        assert tracker.update([]) == []             # miss 3, evicted
+
+    def test_unconfirmed_track_does_not_survive_missing_frame(self):
+        tracker = TemporalTracker(window_frames=5, min_hits=3, jitter_max_mm=15.0,
+                                  miss_tolerance_frames=2)
+        det = make_detection("red_box", 0.30, 0.00, 0.10)
+        assert tracker.update([det]) == []
+        assert tracker.update([]) == []

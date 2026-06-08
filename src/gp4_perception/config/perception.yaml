@@ -31,6 +31,7 @@ perception:
   temporal_window_frames: 5
   temporal_min_hits: 3
   centroid_jitter_max_mm: 15.0
+  temporal_miss_tolerance_frames: 2
   detection_ttl_s: 2.0
   depth_noise:
     # Range-aware threshold. D435i noise grows with distance; one flat number is wrong.
@@ -42,7 +43,7 @@ perception:
       - {distance_m: 0.80, noise_mm_max: 15.0}
     extrapolation: "clamp"    # outside breakpoints -> use nearest breakpoint
 
-  # ---- RGB-first detector (detection_visualizer.py owns /perception/detections) ----
+  # ---- RGB-first detector (unified_visualizer.py owns /perception/detections) ----
   rgb_detector:
     color_topic: /camera/color/image_raw
     depth_topic: /camera/aligned_depth_to_color/image_raw

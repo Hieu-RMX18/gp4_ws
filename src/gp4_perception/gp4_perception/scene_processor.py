@@ -121,6 +121,7 @@ class SceneProcessor(Node):
             window_frames=int(self._cfg.get("temporal_window_frames", 5)),
             min_hits=int(self._cfg.get("temporal_min_hits", 3)),
             jitter_max_mm=float(self._cfg.get("centroid_jitter_max_mm", 15.0)),
+            miss_tolerance_frames=int(self._cfg.get("temporal_miss_tolerance_frames", 2)),
         )
         self._ttl = float(self._cfg.get("detection_ttl_s", 2.0))
         self._breakpoints = self._cfg.get("depth_noise", {}).get("breakpoints", [])
@@ -173,7 +174,7 @@ class SceneProcessor(Node):
 
         self._last_transform = None
 
-        # Detection3DArray is now published by detection_visualizer node.
+        # Detection3DArray is now published by unified_visualizer node.
         self._collision_pub = self.create_publisher(
             CollisionObject, "/collision_object", 10
         )

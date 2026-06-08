@@ -52,7 +52,8 @@ perception:
     camera_info_topic: /camera/color/camera_info
     depth_scale_m: 0.001          # 16UC1 raw units -> metres
     sync_slop_s: 0.05
-    sync_queue: 10
+    processing_rate_hz: 10.0
+    sync_queue: 2
     base_frame: base_link
     camera_optical_frame: camera_color_optical_frame
     bbox_thickness_z_m: 0.03      # nominal Z extent (single deprojected point has none)
@@ -68,7 +69,7 @@ perception:
       rate_hz: 2.0
 
     zoom_roi:
-      enabled: true
+      enabled: false
       rate_hz: 5.0
       mode: "grid"             # single | grid | selected_class | selected_id
       top_n: 6
@@ -92,11 +93,11 @@ perception:
 
     qos:
       debug_images:
-        reliability: "reliable"   # reliable | best_effort
+        reliability: "best_effort"   # reliable | best_effort
         depth: 1
 
     debug_masks:
-      enabled: true
+      enabled: false
       publish_blue_border: true
       publish_white_workpiece: true
 
@@ -125,6 +126,14 @@ perception:
       white_workpiece:
         red_box:
           fully_inside_only: true
+
+  visual_tracking:
+    enabled: true
+    min_hits: 2
+    miss_tolerance_frames: 2
+    max_centroid_distance_px: 45.0
+    min_iou: 0.15
+    ema_alpha: 0.35
 
   # ---- Color classes: HSV mask source of truth for 2D detection path ----
   # Ranges are [h_min, s_min, v_min, h_max, s_max, v_max] in OpenCV HSV.

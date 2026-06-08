@@ -237,3 +237,20 @@ class GripperIoAdapter:
         if self._robot_mode_fn() != "IDLE":
             return GripperResult(ok=False, error="robot_not_idle")
         return GripperResult(ok=False, error="runtime_unavailable")
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    ok: bool
+    error: str = ""
+
+
+class PostconditionVerifier:
+    def verify_place(
+        self, *, object_id: str, destination: str, scene: dict[str, Any]
+    ) -> VerificationResult:
+        detections = scene.get("detections", []) if isinstance(scene, dict) else []
+        for detection in detections:
+            if detection.get("class_id") == object_id and detection.get("region") == destination:
+                return VerificationResult(ok=True)
+        return VerificationResult(ok=False, error="postcondition_failed")

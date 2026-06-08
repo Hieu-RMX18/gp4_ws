@@ -383,3 +383,56 @@ class VerifyPostconditionTool(_CompositeTool):
             object_id=object_id, destination=destination, scene=scene
         )
         return ToolResult(ok=result.ok, error=result.error if not result.ok else None)
+
+
+def mtc_select(
+    *,
+    mtc_service_ready_fn=None,
+    object_pose_known: bool = False,
+    destination_known: bool = False,
+    gripper_config_verified: bool = False,
+) -> str:
+    """Choose execution path: 'mtc' when all prerequisites are met, else 'primitive'.
+
+    Returns 'capability_unavailable' when no path is viable.
+    This function is pure and deterministic given its inputs.
+    """
+    all_prereqs = object_pose_known and destination_known and gripper_config_verified
+    if all_prereqs and callable(mtc_service_ready_fn) and mtc_service_ready_fn():
+        return "mtc"
+    if all_prereqs:
+        return "primitive"
+    return "capability_unavailable"
+
+
+class VerifyGraspTool(_CompositeTool):
+    name = "verify_grasp"
+    description = (
+        "Query the gripper feedback input to confirm an object is grasped. "
+        "Fails closed when gripper config is unverified or feedback times out."
+    )
+    is_readonly = True
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "properties": {"object_id": {"type": "string"}},
+        "required": ["object_id"],
+    }
+
+    def invoke(self, args: dict, context) -> ToolResult:
+        object_id = str(args["object_id"])
+        node = getattr(context, "ros_node", None)
+        adapter = getattr(node, "_gripper_adapter", None)
+        if adapter is None:
+            return ToolResult(ok=False, error="capability_unavailable")
+        config = getattr(adapter, "_config", None)
+        if config is None or not config.verified():
+            return ToolResult(ok=False, error="verify_config_required")
+        # At runtime the adapter would read the IO feedback pin.
+        # Without a live node, fail closed so tests and simulation work correctly.
+        read_fn = getattr(node, "_read_gripper_feedback", None)
+        if not callable(read_fn):
+            return ToolResult(ok=False, error="runtime_unavailable")
+        grasped = read_fn()
+        if grasped:
+            return ToolResult(ok=True, payload={"object_id": object_id, "grasped": True})
+        return ToolResult(ok=False, error="grasp_not_confirmed")

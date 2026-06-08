@@ -23,6 +23,14 @@ This tier covers:
 | `test_sequence_validator.py`      | Sequence prevalidation logic                  |
 | `test_prompt_builder_v2_1.py`     | System prompt contract tests                  |
 | `test_react_agent.py`             | ReAct agent loop, state injector, iteration budget |
+| `test_station_scene_graph.py`     | Station map loader, alias resolver, VERIFY_CONFIG guards |
+| `test_goal_compiler.py`           | pick_and_place goal DSL compiler, clarification paths |
+| `test_candidate_poses.py`         | Candidate pose generator, TCP offset, workspace rejection |
+| `test_composite_tools.py`         | Composite ReAct tools, MTC selector, verify_grasp |
+| `test_scene_cache.py`             | Scene snapshot cache: TTL, invalidation, world-change |
+| `test_gripper_adapter.py`         | Gripper adapter fail-closed behavior |
+| `test_closed_loop_react.py`       | PostconditionVerifier logic |
+| `test_pick_white_workpiece_sim.py`| Sim integration: pick/place with mocked scene |
 | `test_react_tools.py`             | Source-level ReAct tool safety contracts      |
 | `test_llm_backend.py`             | LLM backend config and retry behavior         |
 | `test_get_pose.py` (Tier 1 tests) | GET_POSE schema, normalizer, semantic, parser |

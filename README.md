@@ -178,7 +178,19 @@ Source of truth for implementation logic: `src/primitives/`.
 
 ### ReAct semantic pick/place
 
-The gateway resolves pick/place goals through `src/llm_gateway/config/station_semantic_map.yaml`. Unknown measured geometry and gripper I/O values use `VERIFY_CONFIG`; runtime motion and I/O fail closed until those values are verified. Composite tools emit validated Semantic IR sequences and still pass through `/validate_command`, `motion_core`, supervisor gates, and the hardware adapter. Scene queries are cached for two seconds and invalidated by `refresh_scene`, robot motion, and world-changing tool metadata. Optional MTC pick/place is used only when dependencies and runtime services are available; otherwise the system uses validated primitive sequences or returns `capability_unavailable`.
+The gateway resolves pick/place goals through `src/llm_gateway/config/station_semantic_map.yaml`.
+
+**Station semantic map** — Defines named regions (`conveyor`, `fixture`), zone offsets, object class aliases, and approach axes. Geometry values that have not been physically measured use `VERIFY_CONFIG`. The map is loaded at runtime; any field still containing `VERIFY_CONFIG` causes planning to fail closed with `verify_config_required`. This file is separate from `safety_rules.yaml` and must not be merged with it.
+
+**Composite pick/place commands** — The agent uses `compile_goal` to resolve `pick_and_place` DSL into an ordered skill sequence: `refresh_scene` → `approach_object` → `pick_object` → `place_object` → `verify_postcondition`. Each composite tool emits a validated Semantic IR `sequence` that still passes through `/validate_command`, `motion_core`, supervisor gates, and the hardware adapter. Composite picks and places each count as one motion iteration against the ReAct budget.
+
+**Scene cache** — Perception results are cached for 2 s, keyed by `(class_filter, frame)`. The cache is invalidated by `refresh_scene`, by any non-IDLE robot state, and when a motion tool's result metadata contains `tool_changed_world=True`. Cache hits are observable via `payload.cache_hit=True` in `QueryPerceptionTool` results.
+
+**Gripper verification** — Gripper open/close/verify fail closed when any I/O address or value in `safety_rules.yaml` still contains `VERIFY_CONFIG`, when the robot is not `IDLE`, or when the `WriteSingleIO`/`ReadSingleIO` ROS services are unavailable. Fill verified I/O config values before hardware use.
+
+**MTC optional path** — Composite tools query `mtc_select()` to choose between an MTC-backed pick/place path and the validated primitive sequence path. MTC is selected only when the MTC service is ready and all required inputs (object pose, destination, gripper config) are verified. If MTC is unavailable, the primitive sequence path is used. If both are unavailable, the tool returns `capability_unavailable`.
+
+**Closed-loop postcondition** — After a world-changing action, the agent calls `verify_postcondition` to query perception and confirm the object is in the expected destination region. If verification fails, the agent has one repair attempt (`max_repair=1`) before the sequence halts with a structured `postcondition_failed` error.
 
 ---
 

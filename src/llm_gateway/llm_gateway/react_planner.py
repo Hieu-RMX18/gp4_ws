@@ -1994,6 +1994,15 @@ class ReActAgent:
                 )
 
             counters.record(tool)
+            # Invalidate scene cache when a motion tool signals a world change.
+            if result.ok and tool.is_motion:
+                payload = result.payload or {}
+                semantic_ir = payload.get("semantic_ir", {})
+                metadata = semantic_ir.get("metadata", {}) if isinstance(semantic_ir, dict) else {}
+                if metadata.get("tool_changed_world"):
+                    invalidate = getattr(getattr(context, "ros_node", None), "_invalidate_scene_cache", None)
+                    if callable(invalidate):
+                        invalidate()
             state = self._state_injector.snapshot()
             history.append(("tool_call", tool_call))
             history.append(("observation", result.to_observation()))

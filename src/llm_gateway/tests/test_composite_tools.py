@@ -119,3 +119,59 @@ def test_verify_postcondition_fails_when_object_not_in_destination():
 
     assert result.ok is False
     assert result.error == "postcondition_failed"
+
+from llm_gateway.composite_tools import VerifyGraspTool, mtc_select
+
+def test_mtc_select_returns_mtc_when_all_prereqs_met():
+    result = mtc_select(
+        mtc_service_ready_fn=lambda: True,
+        object_pose_known=True,
+        destination_known=True,
+        gripper_config_verified=True,
+    )
+    assert result == "mtc"
+
+def test_mtc_select_returns_primitive_when_service_unavailable():
+    result = mtc_select(
+        mtc_service_ready_fn=lambda: False,
+        object_pose_known=True,
+        destination_known=True,
+        gripper_config_verified=True,
+    )
+    assert result == "primitive"
+
+def test_mtc_select_returns_capability_unavailable_when_prereqs_missing():
+    result = mtc_select(
+        mtc_service_ready_fn=lambda: True,
+        object_pose_known=False,
+        destination_known=True,
+        gripper_config_verified=True,
+    )
+    assert result == "capability_unavailable"
+
+def test_verify_grasp_fails_closed_without_adapter():
+    tool = VerifyGraspTool()
+
+    result = tool.invoke({"object_id": "white_workpiece"}, SimpleNamespace(ros_node=None))
+
+    assert result.ok is False
+    assert result.error == "capability_unavailable"
+    assert tool.is_readonly is True
+
+def test_verify_grasp_fails_with_verify_config_gripper():
+    from llm_gateway.composite_tools import GripperConfig, GripperIoAdapter
+
+    config = GripperConfig.from_rules({"gripper": {"open_output_address": "VERIFY_CONFIG"}})
+    adapter = GripperIoAdapter(config=config, node=None, robot_mode_fn=lambda: "IDLE")
+
+    class _FakeNode:
+        _gripper_adapter = adapter
+
+    tool = VerifyGraspTool()
+    result = tool.invoke(
+        {"object_id": "white_workpiece"},
+        SimpleNamespace(ros_node=_FakeNode()),
+    )
+
+    assert result.ok is False
+    assert result.error == "verify_config_required"

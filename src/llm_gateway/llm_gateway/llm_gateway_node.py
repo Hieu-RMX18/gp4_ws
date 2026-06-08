@@ -72,6 +72,7 @@ from llm_gateway.composite_tools import (
     PickObjectTool,
     PlaceObjectTool,
     RefreshSceneTool,
+    VerifyGraspTool,
     VerifyPostconditionTool,
 )
 from llm_gateway.semantic_ir_contract import validate_semantic_ir_contract
@@ -240,6 +241,7 @@ class LLMGatewayNode(Node):
                 .register(ApproachObjectTool())
                 .register(PlaceObjectTool())
                 .register(VerifyPostconditionTool())
+                .register(VerifyGraspTool())
                 .register(GripperOpenTool())
                 .register(GripperCloseTool())
                 .register(ComputeArcPointsTool())
@@ -1048,6 +1050,17 @@ class LLMGatewayNode(Node):
 
     def _invalidate_scene_cache(self) -> None:
         self._get_scene_snapshot_cache().invalidate()
+
+    def _query_scene_for_verify(self) -> dict:
+        # Bypass cache: always get a fresh snapshot for postcondition verification.
+        self._invalidate_scene_cache()
+        result = self._query_perception_detections({
+            "class_filter": "",
+            "frame": "base_link",
+        })
+        if result.get("ok"):
+            return result.get("payload") or {}
+        return {}
 
     def _get_scene_snapshot_cache(self) -> _SceneSnapshotCache:
         cache = getattr(self, "_scene_snapshot_cache", None)

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
+import jsonschema
+
+from llm_gateway.semantic_ir_contract import validate_semantic_ir_contract
 from llm_gateway.station_scene_graph import map_contains_verify_config
 
 
@@ -21,6 +25,30 @@ class CandidatePoseResult:
     poses: list[dict[str, Any]] = field(default_factory=list)
     error: str = ""
     rejected: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ToolResult:
+    ok: bool
+    payload: dict | None = None
+    error: str | None = None
+
+    def to_observation(self) -> str:
+        if self.ok:
+            return json.dumps({"ok": True, "payload": self.payload})
+        return json.dumps({"ok": False, "error": self.error})
+
+
+class _CompositeTool:
+    name: ClassVar[str] = ""
+    description: ClassVar[str] = ""
+    input_schema: ClassVar[dict] = {}
+    is_motion: ClassVar[bool] = False
+    is_readonly: ClassVar[bool] = False
+
+    def validate_input(self, args: dict) -> None:
+        if self.input_schema:
+            jsonschema.validate(instance=args, schema=self.input_schema)
 
 
 def generate_candidate_poses(request: CandidatePoseRequest) -> CandidatePoseResult:
@@ -71,3 +99,72 @@ def _workspace_rejection(position: dict[str, float], safety_rules: dict[str, Any
         if not (low <= value <= high):
             return f"{axis}={value:.4f} outside [{low:.4f}, {high:.4f}]"
     return ""
+
+
+class EmitSequenceTool(_CompositeTool):
+    name = "emit_sequence"
+    description = "Build a validated Semantic IR sequence from child Semantic IR steps."
+    is_motion = True
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "properties": {"steps": {"type": "array", "items": {"type": "object"}}},
+        "required": ["steps"],
+    }
+
+    def invoke(self, args: dict, context) -> ToolResult:
+        semantic_ir = {
+            "intent": "sequence",
+            "steps": list(args["steps"]),
+            "metadata": {"source": "emit_sequence"},
+        }
+        contract = validate_semantic_ir_contract(semantic_ir)
+        if not contract.valid:
+            return ToolResult(ok=False, error=contract.reason)
+        return ToolResult(ok=True, payload={"semantic_ir": semantic_ir})
+
+
+class RefreshSceneTool(_CompositeTool):
+    name = "refresh_scene"
+    description = "Invalidate cached perception so the next scene query is fresh."
+    is_readonly = True
+    input_schema: ClassVar[dict] = {"type": "object", "properties": {}}
+
+    def invoke(self, args: dict, context) -> ToolResult:
+        invalidate = getattr(getattr(context, "ros_node", None), "_invalidate_scene_cache", None)
+        if callable(invalidate):
+            invalidate()
+        return ToolResult(ok=True, payload={"scene_cache_invalidated": True})
+
+
+class PickObjectTool(_CompositeTool):
+    name = "pick_object"
+    description = "Emit a fail-closed composite pick sequence for an already resolved object."
+    is_motion = True
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "properties": {"object_id": {"type": "string"}},
+        "required": ["object_id"],
+    }
+
+    def invoke(self, args: dict, context) -> ToolResult:
+        object_id = str(args["object_id"])
+        semantic_ir = {
+            "intent": "sequence",
+            "metadata": {
+                "source": "composite_pick",
+                "tool_changed_world": True,
+                "object_id": object_id,
+            },
+            "steps": [
+                {
+                    "intent": "io_set",
+                    "io_address": 0,
+                    "io_value": 1,
+                    "metadata": {"requires_gripper_config": True},
+                },
+            ],
+        }
+        contract = validate_semantic_ir_contract(semantic_ir)
+        if not contract.valid:
+            return ToolResult(ok=False, error=contract.reason)
+        return ToolResult(ok=True, payload={"semantic_ir": semantic_ir})

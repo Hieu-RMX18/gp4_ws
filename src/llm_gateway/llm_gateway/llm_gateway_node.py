@@ -64,6 +64,7 @@ from llm_gateway.react_planner import (
     WaitForStateTool,
     load_llm_backend_config,
 )
+from llm_gateway.composite_tools import EmitSequenceTool, PickObjectTool, RefreshSceneTool
 from llm_gateway.semantic_ir_contract import validate_semantic_ir_contract
 
 
@@ -181,6 +182,9 @@ class LLMGatewayNode(Node):
                 .register(WaitForStateTool())
                 .register(SetSpeedTool())
                 .register(QueryPerceptionTool())
+                .register(EmitSequenceTool())
+                .register(RefreshSceneTool())
+                .register(PickObjectTool())
                 .register(GripperOpenTool())
                 .register(GripperCloseTool())
                 .register(ComputeArcPointsTool())

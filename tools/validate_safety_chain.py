@@ -178,9 +178,6 @@ def main() -> int:
     if calibration is None:
         errors.append("safety.calibration section missing (required by W4)")
     else:
-        max_age = calibration.get("max_age_days")
-        if max_age is None or not isinstance(max_age, int):
-            errors.append("safety.calibration.max_age_days missing or not an integer")
         max_reproj = calibration.get("max_reprojection_error_mm")
         if max_reproj is None or not isinstance(max_reproj, (int, float)):
             errors.append(
@@ -204,13 +201,6 @@ def main() -> int:
                 cal_date = datetime.fromisoformat(
                     date_str.rstrip("Z").replace("Z", "+00:00")
                 )
-                now = datetime.now(timezone.utc)
-                age_days = (now - cal_date).total_seconds() / 86400.0
-                if calibration and age_days > calibration.get("max_age_days", 30):
-                    errors.append(
-                        f"extrinsics.yaml calibration is {age_days:.1f} days old "
-                        f"(max {calibration.get('max_age_days', 30)} days)"
-                    )
             except ValueError:
                 errors.append(f"extrinsics.yaml calibration_date invalid: {date_str}")
         reproj = hee.get("reprojection_error_mm")

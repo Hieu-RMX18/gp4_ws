@@ -30,7 +30,6 @@ class TestQueryPerception:
         result = query_perception(
             args={},
             context_state={"robot_state": {"mode": "IDLE"}},
-            max_age_days=30,
             extrinsics_path=path,
         )
         assert result["ok"]
@@ -48,7 +47,6 @@ class TestQueryPerception:
         result = query_perception(
             args={},
             context_state={"robot_state": {"mode": "IDLE"}},
-            max_age_days=30,
             extrinsics_path=path,
         )
         assert result["ok"]
@@ -69,7 +67,6 @@ class TestQueryPerception:
         result = query_perception(
             args={},
             context_state={"robot_state": {"mode": "IDLE"}},
-            max_age_days=30,
             extrinsics_path=path,
         )
 

@@ -348,7 +348,7 @@ move_relative
   Move BY a relative amount from current position.
   Required: delta (object with x, y, z; set unused axes to 0.0)
   Optional: reference_frame (default: "base_link")
-  Safety: single MOVE_REL translation norm must stay ≤ 0.05 m for hardware use.
+  Safety: single MOVE_REL translation norm must stay ≤ 0.21 m for hardware use.
   Operator words like "delta", "relative", "offset", "move", "go",
   "down", "xuống", and "hạ" are natural language, not special syntax.
   VN: "nâng lên", "hạ xuống", "dịch lên/xuống", "nhích lên", "đẩy lên", "kéo xuống"

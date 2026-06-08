@@ -1,4 +1,5 @@
 from llm_gateway.llm_gateway_node import _SceneSnapshotCache
+from llm_gateway.llm_gateway_node import LLMGatewayNode
 
 
 def test_scene_cache_returns_cache_hit_inside_ttl():
@@ -27,3 +28,11 @@ def test_scene_cache_invalidate_clears_entries():
     cache.invalidate()
 
     assert cache.get({"class_filter": "white_workpiece", "frame": "base_link"}) is None
+
+
+def test_gateway_scene_cache_lazy_initializes_for_source_level_tests():
+    node = object.__new__(LLMGatewayNode)
+
+    node._invalidate_scene_cache()
+
+    assert isinstance(node._scene_snapshot_cache, _SceneSnapshotCache)

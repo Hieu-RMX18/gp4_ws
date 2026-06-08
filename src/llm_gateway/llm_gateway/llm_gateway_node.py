@@ -1041,7 +1041,14 @@ class LLMGatewayNode(Node):
             self._invalidate_scene_cache()
 
     def _invalidate_scene_cache(self) -> None:
-        self._scene_snapshot_cache.invalidate()
+        self._get_scene_snapshot_cache().invalidate()
+
+    def _get_scene_snapshot_cache(self) -> _SceneSnapshotCache:
+        cache = getattr(self, "_scene_snapshot_cache", None)
+        if cache is None:
+            cache = _SceneSnapshotCache(ttl_sec=2.0)
+            self._scene_snapshot_cache = cache
+        return cache
 
     def _current_react_robot_mode(self) -> str:
         snapshot = self._react_state_injector.snapshot()
@@ -1877,7 +1884,8 @@ class LLMGatewayNode(Node):
         return False, None
 
     def _query_perception_detections(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        cached_payload = self._scene_snapshot_cache.get(args)
+        scene_cache = self._get_scene_snapshot_cache()
+        cached_payload = scene_cache.get(args)
         if cached_payload is not None:
             return {"ok": True, "error": None, "payload": cached_payload}
 
@@ -1944,7 +1952,7 @@ class LLMGatewayNode(Node):
                 "nanosec": int(response.stamp.nanosec),
             },
         }
-        self._scene_snapshot_cache.store(args, payload)
+        scene_cache.store(args, payload)
         return {
             "ok": True,
             "error": None,

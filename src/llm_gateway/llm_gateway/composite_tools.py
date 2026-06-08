@@ -254,3 +254,132 @@ class PostconditionVerifier:
             if detection.get("class_id") == object_id and detection.get("region") == destination:
                 return VerificationResult(ok=True)
         return VerificationResult(ok=False, error="postcondition_failed")
+
+
+class ApproachObjectTool(_CompositeTool):
+    name = "approach_object"
+    description = (
+        "Emit a validated LIN approach sequence to the pre-grasp position above a resolved object. "
+        "Requires the scene to have been refreshed beforehand."
+    )
+    is_motion = True
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "properties": {"object_id": {"type": "string"}},
+        "required": ["object_id"],
+    }
+
+    def invoke(self, args: dict, context) -> ToolResult:
+        object_id = str(args["object_id"])
+        # Approach is a relative lift-clear move toward the object.
+        # Actual target pose comes from perception at execution time via motion_core.
+        semantic_ir = {
+            "intent": "sequence",
+            "metadata": {
+                "source": "composite_approach",
+                "tool_changed_world": False,
+                "object_id": object_id,
+            },
+            "steps": [
+                {
+                    "intent": "move_relative",
+                    "delta": {"x": 0.0, "y": 0.0, "z": -0.08},
+                    "reference_frame": "base_link",
+                    "metadata": {"purpose": "approach_object", "object_id": object_id},
+                },
+            ],
+        }
+        contract = validate_semantic_ir_contract(semantic_ir)
+        if not contract.valid:
+            return ToolResult(ok=False, error=contract.reason)
+        return ToolResult(ok=True, payload={"semantic_ir": semantic_ir, "object_id": object_id})
+
+
+class PlaceObjectTool(_CompositeTool):
+    name = "place_object"
+    description = (
+        "Emit a validated composite place sequence: descend to destination, release, lift clear. "
+        "Destination must already be resolved to a known region."
+    )
+    is_motion = True
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "properties": {
+            "object_id": {"type": "string"},
+            "destination": {"type": "string"},
+        },
+        "required": ["object_id", "destination"],
+    }
+
+    def invoke(self, args: dict, context) -> ToolResult:
+        object_id = str(args["object_id"])
+        destination = str(args["destination"])
+        semantic_ir = {
+            "intent": "sequence",
+            "metadata": {
+                "source": "composite_place",
+                "tool_changed_world": True,
+                "object_id": object_id,
+                "destination": destination,
+            },
+            "steps": [
+                {
+                    "intent": "move_relative",
+                    "delta": {"x": 0.0, "y": 0.0, "z": -0.05},
+                    "reference_frame": "base_link",
+                    "metadata": {"purpose": "place_descend"},
+                },
+                {
+                    "intent": "io_set",
+                    "io_address": 0,
+                    "io_value": 0,
+                    "metadata": {"requires_gripper_config": True, "purpose": "release"},
+                },
+                {
+                    "intent": "move_relative",
+                    "delta": {"x": 0.0, "y": 0.0, "z": 0.08},
+                    "reference_frame": "base_link",
+                    "metadata": {"purpose": "place_lift_clear"},
+                },
+            ],
+        }
+        contract = validate_semantic_ir_contract(semantic_ir)
+        if not contract.valid:
+            return ToolResult(ok=False, error=contract.reason)
+        return ToolResult(
+            ok=True,
+            payload={"semantic_ir": semantic_ir, "object_id": object_id, "destination": destination},
+        )
+
+
+class VerifyPostconditionTool(_CompositeTool):
+    name = "verify_postcondition"
+    description = (
+        "Query perception to confirm the object is detected in the expected destination region. "
+        "Returns ok=False with error='postcondition_failed' if the object is not confirmed there."
+    )
+    is_readonly = True
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "properties": {
+            "object_id": {"type": "string"},
+            "destination": {"type": "string"},
+        },
+        "required": ["object_id", "destination"],
+    }
+
+    def invoke(self, args: dict, context) -> ToolResult:
+        object_id = str(args["object_id"])
+        destination = str(args["destination"])
+        node = getattr(context, "ros_node", None)
+        scene_fn = getattr(node, "_query_scene_for_verify", None)
+        if callable(scene_fn):
+            scene = scene_fn()
+        else:
+            # No live scene available; fail closed so the agent can retry or escalate.
+            return ToolResult(ok=False, error="capability_unavailable")
+        verifier = PostconditionVerifier()
+        result = verifier.verify_place(
+            object_id=object_id, destination=destination, scene=scene
+        )
+        return ToolResult(ok=result.ok, error=result.error if not result.ok else None)

@@ -65,11 +65,14 @@ from llm_gateway.react_planner import (
     load_llm_backend_config,
 )
 from llm_gateway.composite_tools import (
+    ApproachObjectTool,
     EmitSequenceTool,
     GripperConfig,
     GripperIoAdapter,
     PickObjectTool,
+    PlaceObjectTool,
     RefreshSceneTool,
+    VerifyPostconditionTool,
 )
 from llm_gateway.semantic_ir_contract import validate_semantic_ir_contract
 
@@ -234,6 +237,9 @@ class LLMGatewayNode(Node):
                 .register(EmitSequenceTool())
                 .register(RefreshSceneTool())
                 .register(PickObjectTool())
+                .register(ApproachObjectTool())
+                .register(PlaceObjectTool())
+                .register(VerifyPostconditionTool())
                 .register(GripperOpenTool())
                 .register(GripperCloseTool())
                 .register(ComputeArcPointsTool())

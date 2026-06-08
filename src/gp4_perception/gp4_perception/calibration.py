@@ -776,8 +776,7 @@ class CalibrationService(Node):
         samples, n_rejected = _reject_outlier_samples(samples)
         if n_rejected > 0:
             self.get_logger().info(
-                "Outlier rejection removed %d sample(s); %d remain.",
-                n_rejected, len(samples),
+                f"Outlier rejection removed {n_rejected} sample(s); {len(samples)} remain."
             )
         n = len(samples)  # update count after rejection
 
@@ -805,7 +804,7 @@ class CalibrationService(Node):
 
         solver_name, R_cam2base, t_cam2base, reproj_mm = best_result
         self.get_logger().info(
-            "Solver: %s (residual=%.2f mm)", solver_name, reproj_mm,
+            f"Solver: {solver_name} (residual={reproj_mm:.2f} mm)"
         )
 
         if not np.isfinite(reproj_mm) or reproj_mm > _REPROJECTION_ERROR_MAX_MM:

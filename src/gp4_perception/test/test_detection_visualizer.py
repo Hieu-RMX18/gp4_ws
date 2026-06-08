@@ -614,9 +614,9 @@ def test_unified_visualizer_has_processing_rate_gate():
     from pathlib import Path
     source = Path(__file__).parents[1] / "gp4_perception" / "unified_visualizer.py"
     text = source.read_text()
-    assert "processing_rate_hz" in text
+    assert "max_process_fps" in text
     assert "MonotonicRateGate" in text
-    assert "if not self._processing_gate.allow" in text
+    assert "if not self._process_gate.allow" in text
 
 
 # ---------------------------------------------------------------------------

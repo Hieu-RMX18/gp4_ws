@@ -1,0 +1,6 @@
+[console_scripts]
+calibration_service = gp4_perception.calibration:main_calibration_service
+detection_visualizer = gp4_perception.detection_visualizer:main
+preprocessing_visualizer = gp4_perception.preprocessing_visualizer:main
+scene_processor = gp4_perception.scene_processor:main
+tf_publisher = gp4_perception.calibration:main_tf_publisher

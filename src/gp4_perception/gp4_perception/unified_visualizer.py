@@ -996,8 +996,9 @@ class UnifiedVisualizer(Node):
         self._bbox_z = float(rgb_cfg.get("bbox_thickness_z_m", 0.03))
         self._sync_slop = float(rgb_cfg.get("sync_slop_s", 0.05))
         self._sync_queue = int(rgb_cfg.get("sync_queue", 10))
-        self._processing_rate_hz = float(rgb_cfg.get("processing_rate_hz", 10.0))
-        self._processing_gate = MonotonicRateGate(self._processing_rate_hz)
+        self._max_process_fps = float(viz_cfg.get("max_process_fps", 10.0))
+        self._process_gate = MonotonicRateGate(self._max_process_fps)
+        self._processing = True
 
         # Viz config.
         ann_cfg = viz_cfg.get("annotated_image", {})
@@ -1005,6 +1006,7 @@ class UnifiedVisualizer(Node):
         self._max_width_px = viz_cfg.get("max_width_px")
         self._max_height_px = viz_cfg.get("max_height_px")
         self._output_width = viz_cfg.get("output_width_px")
+        self._max_annotated_width = viz_cfg.get("max_annotated_width_px", 960)
 
         dash_cfg = viz_cfg.get("dashboard", {})
         self._dashboard_enabled = bool(dash_cfg.get("enabled", True))
@@ -1058,13 +1060,17 @@ class UnifiedVisualizer(Node):
         self._depth_sub = Subscriber(self, Image, depth_topic, qos_profile=qos)
         self._sync = ApproximateTimeSynchronizer(
             [self._color_sub, self._depth_sub],
-            queue_size=self._sync_queue, slop=self._sync_slop,
+            queue_size=2, slop=self._sync_slop,
         )
         self._sync.registerCallback(self._on_synced_rgbd)
 
         # Publishers.
         self._det_pub = self.create_publisher(Detection3DArray, "/perception/detections", 10)
-        self._annotated_pub = self.create_publisher(Image, "/perception/annotated_image", 10)
+        ann_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST, depth=1,
+        )
+        self._annotated_pub = self.create_publisher(Image, "/perception/annotated_image", ann_qos)
 
         qos_cfg = viz_cfg.get("qos", {}).get("debug_images", {})
         rel_str = qos_cfg.get("reliability", "reliable").lower()
@@ -1596,7 +1602,10 @@ class UnifiedVisualizer(Node):
 
     # ── Main RGBD callback ──────────────────────────────────────────
     def _on_synced_rgbd(self, color_msg: Image, depth_msg: Image) -> None:
-        if not self._processing_gate.allow(time.monotonic()):
+        if self._processing:
+            if not self._process_gate.allow(time.monotonic()):
+                return
+        else:
             return
         try:
             rgb = self._bridge.imgmsg_to_cv2(color_msg, desired_encoding="rgb8")
@@ -1952,6 +1961,8 @@ class UnifiedVisualizer(Node):
             scale_f = min(scale_f, self._max_height_px / ch)
         if scale_f < 1.0:
             top_row = cv2.resize(top_row, (int(cw * scale_f), int(ch * scale_f)))
+
+        top_row = _downscale_to_max_width(top_row, self._max_annotated_width)
 
         # Publish annotated image.
         try:

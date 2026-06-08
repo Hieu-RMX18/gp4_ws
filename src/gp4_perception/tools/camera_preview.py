@@ -169,42 +169,48 @@ class CameraPreview(Node):
             self.get_logger().error(f"Clear failed: {e}")
 
     def _solve_calibration(self):
-        """Call solve in background thread."""
+        """Call solve using async callback (safe with main-thread spin)."""
         if self._solve_busy:
             return
         self._solve_busy = True
         self._solve_status = "SOLVING..."
 
-        def _call():
-            req = CalibrateHandEye.Request()
-            req.fiducial_id = (
-                f"charuco_{_BOARD_ROWS}x{_BOARD_COLS}_"
-                f"{int(_SQUARE_LEN * 1000)}mm_{int(_MARKER_LEN * 1000)}mm"
-            )
-            req.min_samples = 12
-            if self._solve_client.wait_for_service(timeout_sec=2.0):
-                future = self._solve_client.call_async(req)
-                rclpy.spin_until_future_complete(self, future, timeout_sec=30.0)
-                try:
-                    resp = future.result()
-                    if resp.success:
-                        self._solve_status = (
-                            f"SAVED! Error: {resp.reprojection_error_mm:.2f}mm "
-                            f"| {resp.n_samples_collected} samples "
-                            f"| {resp.extrinsics_yaml_path}"
-                        )
-                        self.get_logger().info(self._solve_status)
-                    else:
-                        self._solve_status = f"FAILED: {resp.failure_reason}"
-                        self.get_logger().error(self._solve_status)
-                except Exception as e:
-                    self._solve_status = f"ERROR: {e}"
-                    self.get_logger().error(str(e))
-            else:
-                self._solve_status = "SERVICE NOT AVAILABLE"
+        if not self._solve_client.service_is_ready():
+            self._solve_status = "SERVICE NOT AVAILABLE"
             self._solve_busy = False
+            self.get_logger().error(
+                "calibrate_hand_eye service not ready. "
+                "Is calibration_collect.launch.py running?"
+            )
+            return
 
-        threading.Thread(target=_call, daemon=True).start()
+        req = CalibrateHandEye.Request()
+        req.fiducial_id = (
+            f"charuco_{_BOARD_ROWS}x{_BOARD_COLS}_"
+            f"{int(_SQUARE_LEN * 1000)}mm_{int(_MARKER_LEN * 1000)}mm"
+        )
+        req.min_samples = 12
+        future = self._solve_client.call_async(req)
+        future.add_done_callback(self._on_solve_done)
+
+    def _on_solve_done(self, future):
+        """Handle solve response from async service call."""
+        try:
+            resp = future.result()
+            if resp.success:
+                self._solve_status = (
+                    f"SAVED! Error: {resp.reprojection_error_mm:.2f}mm "
+                    f"| {resp.n_samples_collected} samples "
+                    f"| {resp.extrinsics_yaml_path}"
+                )
+                self.get_logger().info(self._solve_status)
+            else:
+                self._solve_status = f"FAILED: {resp.failure_reason}"
+                self.get_logger().error(self._solve_status)
+        except Exception as e:
+            self._solve_status = f"ERROR: {e}"
+            self.get_logger().error(str(e))
+        self._solve_busy = False
 
     def _on_image(self, msg):
         try:
@@ -262,72 +268,95 @@ class CameraPreview(Node):
                         dist_cm = np.linalg.norm(tvec) * 100
 
         # ──── HUD OVERLAY ────
-        panel_h = 200
+        panel_w = 280
         overlay = display.copy()
-        cv2.rectangle(overlay, (0, 0), (w, panel_h), _BG, -1)
+        cv2.rectangle(overlay, (0, 0), (panel_w, h - 30), _BG, -1)
         cv2.addWeighted(overlay, 0.75, display, 0.25, 0, display)
 
-        y = 25
+        y = 30
+        x = 10
         # Title
-        cv2.putText(display, "GP4 Hand-Eye Calibration", (10, y),
-                     cv2.FONT_HERSHEY_SIMPLEX, 0.75, _CYAN, 2)
+        cv2.putText(display, "GP4 Hand-Eye", (x, y),
+                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, _CYAN, 2)
+        y += 25
+        cv2.putText(display, "Calibration", (x, y),
+                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, _CYAN, 2)
 
         # Collection status
-        y += 30
+        y += 40
         max_samples = 200
         if self._collecting:
-            cv2.circle(display, (18, y - 5), 6, _GREEN, -1)
-            cv2.putText(display, "COLLECTING", (30, y),
+            cv2.circle(display, (x + 8, y - 5), 6, _GREEN, -1)
+            cv2.putText(display, "COLLECTING", (x + 20, y),
                          cv2.FONT_HERSHEY_SIMPLEX, 0.55, _GREEN, 2)
         elif self._sample_count >= max_samples:
-            cv2.circle(display, (18, y - 5), 6, _YELLOW, -1)
-            cv2.putText(display, "AUTO PAUSED (MAX)", (30, y),
+            cv2.circle(display, (x + 8, y - 5), 6, _YELLOW, -1)
+            cv2.putText(display, "AUTO PAUSED", (x + 20, y),
                          cv2.FONT_HERSHEY_SIMPLEX, 0.55, _YELLOW, 2)
         else:
-            cv2.circle(display, (18, y - 5), 6, _ORANGE, -1)
-            cv2.putText(display, "PAUSED", (30, y),
+            cv2.circle(display, (x + 8, y - 5), 6, _ORANGE, -1)
+            cv2.putText(display, "PAUSED", (x + 20, y),
                          cv2.FONT_HERSHEY_SIMPLEX, 0.55, _ORANGE, 2)
 
-        # Sample count (big)
-        cv2.putText(display, f"Samples: {self._sample_count}/{max_samples}", (200, y),
+        # Sample count
+        y += 30
+        cv2.putText(display, f"Samples: {self._sample_count}/{max_samples}", (x, y),
                      cv2.FONT_HERSHEY_SIMPLEX, 0.6, _WHITE, 2)
+        
+        # Ready to solve
+        y += 25
         min_needed = 12
         if self._sample_count >= max_samples:
-            cv2.putText(display, "PRESS S TO SOLVE", (430, y),
+            cv2.putText(display, "PRESS S TO SOLVE", (x, y),
                          cv2.FONT_HERSHEY_SIMPLEX, 0.55, _YELLOW, 2)
         elif self._sample_count >= min_needed:
-            cv2.putText(display, "READY TO SOLVE", (430, y),
+            cv2.putText(display, "READY TO SOLVE", (x, y),
                          cv2.FONT_HERSHEY_SIMPLEX, 0.55, _GREEN, 2)
 
         # Detection info
-        y += 28
+        y += 40
         m_color = _GREEN if n_markers > 0 else _RED
-        cv2.putText(display, f"ArUco: {n_markers}", (10, y),
+        cv2.putText(display, f"ArUco: {n_markers}", (x, y),
                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, m_color, 1)
 
+        y += 25
         c_color = _GREEN if n_charuco >= 6 else _ORANGE
-        cv2.putText(display, f"Charuco: {n_charuco}/6+", (150, y),
+        cv2.putText(display, f"Charuco: {n_charuco}/6+", (x, y),
                      cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_color, 1)
 
+        y += 25
         if board_pose_ok:
-            cv2.putText(display, f"Pose: OK  Dist: {dist_cm:.0f}cm", (310, y),
+            cv2.putText(display, f"Pose: OK  Dist: {dist_cm:.0f}cm", (x, y),
                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, _GREEN, 1)
         else:
-            cv2.putText(display, "Pose: --", (310, y),
+            cv2.putText(display, "Pose: --", (x, y),
                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, _GRAY, 1)
 
         # Solve status
-        y += 28
+        y += 40
         if self._solve_status:
             s_color = _GREEN if "SAVED" in self._solve_status else _YELLOW
             if "FAILED" in self._solve_status or "ERROR" in self._solve_status:
                 s_color = _RED
-            cv2.putText(display, self._solve_status, (10, y),
-                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, s_color, 1)
+            
+            # Text wrapping logic for small side panel
+            words = self._solve_status.split()
+            line = ""
+            for word in words:
+                if len(line) + len(word) > 28:
+                    cv2.putText(display, line, (x, y),
+                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, s_color, 1)
+                    y += 20
+                    line = word + " "
+                else:
+                    line += word + " "
+            if line:
+                cv2.putText(display, line, (x, y),
+                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, s_color, 1)
 
         # Keyboard shortcuts bar at bottom
         bar_y = h - 10
-        shortcuts = "SPACE: Pause/Resume  |  S: Solve & Save  |  R: Reset  |  Q: Quit"
+        shortcuts = "SPACE: Pause/Resume  |  S: Solve  |  R: Reset  |  Q: Quit"
         cv2.rectangle(display, (0, h - 30), (w, h), _BG, -1)
         cv2.putText(display, shortcuts, (10, bar_y),
                      cv2.FONT_HERSHEY_SIMPLEX, 0.4, _GRAY, 1)

@@ -60,6 +60,8 @@ perception:
 
   # ---- Visualization ----
   visualization:
+    max_process_fps: 10.0
+    max_annotated_width_px: 960
     annotated_image:
       layout: "side_by_side"   # side_by_side | rgb_only | depth_only
       show_compact_labels: true

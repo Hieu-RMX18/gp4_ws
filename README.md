@@ -261,12 +261,19 @@ cd ~/gp4_ws/hmi/frontend && npm run dev
 ### Camera Perception: Run D435i and Detect Objects
 
 Perception-only — does not command robot motion. Full runbook: [`src/gp4_perception/README.md`](src/gp4_perception/README.md).
+```bash 
+# Calib
+cd /home/hieu2/gp4_ws
+source install/setup.bash
+ros2 launch gp4_perception calibration_collect.launch.py serial:=943222073917
+
+```
 
 ```bash
 # Camera only
 ros2 launch gp4_perception camera.launch.py serial:=943222073917
 
-# Full perception stack (camera + detection)
+# Full perception stack (camera + unified visualization)
 ros2 launch gp4_perception perception_full.launch.py serial:=943222073917
 ```
 
@@ -274,18 +281,17 @@ ros2 launch gp4_perception perception_full.launch.py serial:=943222073917
 
 - `realsense2_camera_node` — color, depth, aligned point cloud, camera TF
 - `scene_processor` — ROI crop, plane removal, Euclidean clustering, MoveIt collision objects, `/perception/status`
-- `detection_visualizer` — RGB+depth HSV contour detection, temporal tracking, publishes `/perception/detections` (Detection3DArray), `/perception/annotated_image`, and debug topics
-- `preprocessing_visualizer` — optional debug overlay node
+- `unified_visualizer` — RGB+depth HSV contour detection, temporal tracking, preprocessing dashboard, publishes `/perception/detections` (Detection3DArray), `/perception/annotated_image`, and debug topics
 - `calibration_service` / `tf_publisher` — hand-eye extrinsics and camera→base_link TF
 
 Key output topics:
 
 | Topic | Publisher | Type |
 |-------|-----------|------|
-| `/perception/detections` | `detection_visualizer` | Detection3DArray |
-| `/perception/annotated_image` | `detection_visualizer` | Image |
-| `/perception/debug_dashboard_image` | `detection_visualizer` | Image |
-| `/perception/zoom_roi_image` | `detection_visualizer` | Image |
+| `/perception/detections` | `unified_visualizer` | Detection3DArray |
+| `/perception/annotated_image` | `unified_visualizer` | Image |
+| `/perception/debug_dashboard_image` | `unified_visualizer` | Image |
+| `/perception/zoom_roi_image` | `unified_visualizer` | Image |
 | `/perception/status` | `scene_processor` | String |
 
 ```bash

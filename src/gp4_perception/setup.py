@@ -28,6 +28,7 @@ setup(
             "scene_processor = gp4_perception.scene_processor:main",
             "detection_visualizer = gp4_perception.detection_visualizer:main",
             "preprocessing_visualizer = gp4_perception.preprocessing_visualizer:main",
+            "unified_visualizer = gp4_perception.unified_visualizer:main",
         ],
     },
 )

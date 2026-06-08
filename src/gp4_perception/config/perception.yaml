@@ -33,6 +33,8 @@ perception:
   centroid_jitter_max_mm: 15.0
   temporal_miss_tolerance_frames: 2
   detection_ttl_s: 2.0
+  pointcloud_processor:
+    processing_rate_hz: 8.0
   depth_noise:
     # Range-aware threshold. D435i noise grows with distance; one flat number is wrong.
     # Linear interpolation between the breakpoints below.

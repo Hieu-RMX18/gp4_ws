@@ -23,7 +23,7 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.time import Time
-from sensor_msgs.msg import CameraInfo, PointCloud2
+from sensor_msgs.msg import PointCloud2
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import Header
 from tf2_ros import Buffer, TransformListener
@@ -34,7 +34,7 @@ from vision_msgs.msg import (
     ObjectHypothesisWithPose,
 )
 
-from message_filters import ApproximateTimeSynchronizer, Subscriber
+from .latest_frame import LatestValueSlot
 from .query_perception_tool import load_extrinsics
 from .safety_guards import (
     check_reprojection_error,
@@ -155,22 +155,22 @@ class SceneProcessor(Node):
             depth=1,
         )
 
-        self._cloud_sub = Subscriber(
-            self,
+        self._cloud_sub = self.create_subscription(
             PointCloud2,
             "/camera/depth/color/points",
-            qos_profile=qos_profile,
+            self._on_cloud,
+            qos_profile,
         )
-        self._info_sub = Subscriber(
-            self,
-            CameraInfo,
-            "/camera/color/camera_info",
-            qos_profile=qos_profile,
+
+        pc_proc_cfg = self._cfg.get("pointcloud_processor", {})
+        self._cloud_processing_rate_hz = float(pc_proc_cfg.get("processing_rate_hz", 8.0))
+        self._latest_cloud: LatestValueSlot = LatestValueSlot()
+        self._last_cloud_callback_time: float = time.monotonic()
+        self._last_cloud_processed_time: float = time.monotonic()
+        self._cloud_worker_timer = self.create_timer(
+            1.0 / max(self._cloud_processing_rate_hz, 0.1),
+            self._process_latest_cloud,
         )
-        self._sync = ApproximateTimeSynchronizer(
-            [self._cloud_sub, self._info_sub], queue_size=10, slop=0.05
-        )
-        self._sync.registerCallback(self._on_synced)
 
         self._last_transform = None
 
@@ -219,15 +219,32 @@ class SceneProcessor(Node):
         return [SetParametersResult(successful=True)]
 
     def _check_camera_health(self) -> None:
-        elapsed = time.time() - self._last_cloud_time
-        if elapsed > 5.0:
+        now = time.monotonic()
+        input_age = now - self._last_cloud_callback_time
+        processed_age = now - self._last_cloud_processed_time
+        if input_age > 5.0:
             _LOGGER.warning(
-                "No point cloud received for %.1f s — check camera connection or QoS match",
-                elapsed,
+                "CLOUD_INPUT_STALE: no PointCloud2 callback for %.1f s", input_age
+            )
+        elif processed_age > 5.0:
+            _LOGGER.warning(
+                "CLOUD_PROCESSING_OVERRUN: latest cloud not processed for %.1f s",
+                processed_age,
             )
 
-    def _on_synced(self, cloud: PointCloud2, _: CameraInfo) -> None:
-        self._last_cloud_time = time.time()
+    def _on_cloud(self, cloud: PointCloud2) -> None:
+        self._last_cloud_callback_time = time.monotonic()
+        self._last_cloud_time = time.time()  # keep existing health check working
+        self._latest_cloud.put(cloud)
+
+    def _process_latest_cloud(self) -> None:
+        cloud = self._latest_cloud.take()
+        if cloud is None:
+            return
+        self._last_cloud_processed_time = time.monotonic()
+        self._process_cloud(cloud)
+
+    def _process_cloud(self, cloud: PointCloud2) -> None:
         if not self._calibration_allows_scene_output():
             return
 

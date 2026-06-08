@@ -64,6 +64,7 @@ from llm_gateway.react_planner import (
     WaitForStateTool,
     load_llm_backend_config,
 )
+from motoros2_interfaces.srv import ReadSingleIO, WriteSingleIO
 from llm_gateway.composite_tools import (
     ApproachObjectTool,
     EmitSequenceTool,
@@ -341,6 +342,16 @@ class LLMGatewayNode(Node):
         self._get_object_positions_client = self.create_client(
             GetObjectPositions,
             "/perception/get_object_positions",
+            callback_group=callback_group,
+        )
+        self._write_single_io_client = self.create_client(
+            WriteSingleIO,
+            self._gripper_adapter._config.write_single_io_service,
+            callback_group=callback_group,
+        )
+        self._read_single_io_client = self.create_client(
+            ReadSingleIO,
+            self._gripper_adapter._config.read_single_io_service,
             callback_group=callback_group,
         )
 
@@ -1062,6 +1073,23 @@ class LLMGatewayNode(Node):
             return result.get("payload") or {}
         return {}
 
+
+    def _read_gripper_feedback(self) -> bool:
+        """Read gripper closed feedback; returns True if grasped, False otherwise."""
+        config = self._gripper_adapter._config
+        if not config.verified():
+            return False
+        client = getattr(self, "_read_single_io_client", None)
+        if client is None or not client.service_is_ready():
+            return False
+        from motoros2_interfaces.srv import ReadSingleIO
+        request = ReadSingleIO.Request()
+        request.address = int(config.closed_input_address)
+        future = client.call_async(request)
+        done, response = self._wait_for_future_without_spinning(future, config.feedback_timeout_sec)
+        if not done or response is None or not response.success:
+            return False
+        return int(response.value) == int(config.closed_input_active_value)
     def _get_scene_snapshot_cache(self) -> _SceneSnapshotCache:
         cache = getattr(self, "_scene_snapshot_cache", None)
         if cache is None:

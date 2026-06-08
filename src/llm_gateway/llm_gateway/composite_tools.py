@@ -236,7 +236,30 @@ class GripperIoAdapter:
             return GripperResult(ok=False, error="verify_config_required")
         if self._robot_mode_fn() != "IDLE":
             return GripperResult(ok=False, error="robot_not_idle")
-        return GripperResult(ok=False, error="runtime_unavailable")
+        
+        # Call WriteSingleIO service when config is verified and robot is idle
+        client = getattr(self._node, "_write_single_io_client", None)
+        if client is None or not client.service_is_ready():
+            return GripperResult(ok=False, error="runtime_unavailable")
+        
+        try:
+            from motoros2_interfaces.srv import WriteSingleIO
+            request = WriteSingleIO.Request()
+            request.address = int(address)
+            request.value = int(value)
+            future = client.call_async(request)
+            # Synchronous wait (node has _wait_for_future_without_spinning)
+            wait_fn = getattr(self._node, "_wait_for_future_without_spinning", None)
+            if not callable(wait_fn):
+                return GripperResult(ok=False, error="runtime_unavailable")
+            done, response = wait_fn(future, self._config.feedback_timeout_sec)
+            if not done or response is None:
+                return GripperResult(ok=False, error="io_timeout")
+            if not response.success:
+                return GripperResult(ok=False, error=f"io_failed: {response.message}")
+            return GripperResult(ok=True)
+        except Exception as exc:
+            return GripperResult(ok=False, error=f"io_exception: {exc}")
 
 
 @dataclass(frozen=True)

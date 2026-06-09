@@ -268,11 +268,15 @@ def test_wait():
     assert cmd["wait_duration_sec"] == 3.0
 
 
-def test_wait_missing_duration_raises():
+def test_wait_missing_duration_defaults_to_two_seconds():
+    """When LLM omits wait_duration_sec, the router defaults to 2.0 s."""
     router = _router()
 
-    with pytest.raises(ValueError, match="wait_duration_sec"):
-        router.route({"intent": "wait"})
+    result = router.route({"intent": "wait"})
+
+    cmd = result.commands[0]
+    assert cmd["primitive_type"] == "WAIT"
+    assert cmd["wait_duration_sec"] == 2.0
 
 
 # ── move_relative ────────────────────────────────────────────────────────────

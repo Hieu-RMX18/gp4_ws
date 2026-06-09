@@ -1,7 +1,7 @@
 """Source-level ReAct gateway pipeline tests.
 
 These tests avoid DDS setup but exercise the same process_intent ->
-_process_llm_payload path used by LLMGatewayNode after ReAct returns Semantic IR.
+_process_llm_payload path used by LLMGatewayNode after ReAct returns FactoryTask.
 """
 
 from __future__ import annotations
@@ -50,6 +50,84 @@ class _RecordingLLMClient:
             raise self.error
         return self.response
 
+def _skill_node(name, args=None):
+    return {"type": "skill", "name": name, "args": dict(args or {})}
+
+def _factory_task(task_id="task", root=None):
+    return {
+        "task_type": "factory_task",
+        "version": "1.0",
+        "task_id": task_id,
+        "root": root or _skill_node("go_home"),
+    }
+
+def _factory_task_from_semantic_ir(task_id, payload):
+    if not isinstance(payload, dict):
+        return payload
+    if payload.get("task_type") == "factory_task" or "error" in payload:
+        return payload
+    intent = payload.get("intent")
+    if intent == "sequence":
+        return _factory_task(
+            task_id,
+            {
+                "type": "sequence",
+                "children": [
+                    _factory_task_from_semantic_node(step)
+                    for step in payload.get("steps", [])
+                ],
+            },
+        )
+    return _factory_task(task_id, _factory_task_from_semantic_node(payload))
+
+def _factory_task_from_semantic_node(payload):
+    intent = payload.get("intent")
+    args = {key: value for key, value in payload.items() if key != "intent"}
+    if intent == "go_home":
+        return _skill_node("go_home")
+    if intent == "move_named_pose":
+        return _skill_node("move_named_pose", args)
+    if intent == "move_to_named_pose":
+        return _skill_node("move_named_pose", args)
+    if intent == "absolute_move_ptp":
+        return _skill_node("move_cartesian", args)
+    if intent == "absolute_move_lin":
+        args = dict(args)
+        args["motion_type"] = "lin"
+        return _skill_node("move_cartesian", args)
+    if intent in {
+        "get_pose",
+        "wait",
+        "move_relative",
+        "move_joint",
+        "move_joint_delta",
+        "move_joints",
+        "set_speed",
+        "draw_shape",
+        "draw_text",
+        "stop",
+        "alarm_reset",
+    }:
+        return _skill_node(intent, args)
+    return _skill_node(str(intent or "unsupported"), args)
+
+def _review_payload(response):
+    return LLMParser().parse(response.semantic_ir_json)
+
+def _semantic_core(payload):
+    return {
+        key: value
+        for key, value in payload.items()
+        if key not in {"metadata", "_parse_source"}
+    }
+
+def _assert_react_factory_task_review(payload):
+    assert payload["_parse_source"] == "react_factory_task"
+    metadata = payload.get("metadata")
+    assert isinstance(metadata, dict)
+    assert metadata["factory_task"]["task_id"] == "react-task"
+    assert metadata["policy_decisions"][0]["decision"] == "allow"
+
 
 def _gateway_node_type():
     pytest.importorskip(
@@ -60,12 +138,14 @@ def _gateway_node_type():
     return LLMGatewayNode
 
 
-def _make_gateway_shell(react_result):
+def _make_gateway_shell(react_result, *, raw_react_result=False):
     LLMGatewayNode = _gateway_node_type()
     node = object.__new__(LLMGatewayNode)
     node._runtime_mode = "hardware"
     node._review_intent_requires_token = False
     node._react_enabled = True
+    if not raw_react_result:
+        react_result = _factory_task_from_semantic_ir("react-task", react_result)
     node._react_agent = _StaticReActAgent(react_result)
     node._llm_client = _LegacyClientMustNotRun()
     node._parser = LLMParser()
@@ -98,6 +178,20 @@ def _make_gateway_shell(react_result):
     return node, statuses, dispatched
 
 
+def test_default_react_tool_registry_keeps_semantic_ir_off_llm_tool_surface():
+    from llm_gateway.react_planner import build_default_react_tool_registry
+
+    registry = build_default_react_tool_registry()
+    tool_names = {tool["name"] for tool in registry.list_tools()}
+    description = registry.available_tools_description()
+
+    assert "emit_sequence" not in tool_names
+    assert "pick_object" not in tool_names
+    assert "approach_object" not in tool_names
+    assert "place_object" not in tool_names
+    assert "Semantic IR" not in description
+
+
 def test_react_semantic_ir_go_home_routes_through_intent_router():
     node, statuses, dispatched = _make_gateway_shell({"intent": "go_home"})
 
@@ -127,13 +221,184 @@ def test_review_intent_returns_semantic_ir_without_dispatching_motion():
 
     assert result.accepted is True
     assert result.error == ""
-    assert result.semantic_ir_json == (
-        '{"intent":"move_named_pose","pose_name":"ready","_parse_source":"react"}'
-    )
+    semantic_ir = _review_payload(result)
+    assert _semantic_core(semantic_ir) == {
+        "intent": "move_named_pose",
+        "pose_name": "ready",
+    }
+    _assert_react_factory_task_review(semantic_ir)
     assert node._react_agent.user_text == "move to ready"
     assert dispatched == []
     assert "routed" not in statuses
 
+
+def test_review_intent_compiles_factory_task_for_hmi_visible_policy_metadata():
+    node, statuses, dispatched = _make_gateway_shell(
+        {
+            "task_type": "factory_task",
+            "version": "1.0",
+            "task_id": "home-wait",
+            "root": {
+                "type": "sequence",
+                "children": [
+                    {"type": "skill", "name": "go_home", "args": {}},
+                    {"type": "skill", "name": "wait", "args": {"wait_duration_sec": 1.0}},
+                ],
+            },
+        }
+    )
+    request = SimpleNamespace(
+        raw_text="go home then wait",
+        runtime_mode="hardware",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token="",
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is True
+    assert result.error == ""
+    semantic_ir = LLMParser().parse(result.semantic_ir_json)
+    assert semantic_ir["intent"] == "sequence"
+    assert semantic_ir["steps"] == [
+        {"intent": "go_home"},
+        {"intent": "wait", "wait_duration_sec": 1.0},
+    ]
+    assert semantic_ir["metadata"]["factory_task"]["task_id"] == "home-wait"
+    assert semantic_ir["metadata"]["runtime_plan"]["type"] == "sequence"
+    assert semantic_ir["metadata"]["policy_decisions"][0]["decision"] == "allow"
+    assert semantic_ir["_parse_source"] == "react_factory_task"
+    assert node._react_agent.user_text == "go home then wait"
+    assert dispatched == []
+    assert "routed" not in statuses
+
+
+def test_review_intent_factory_task_move_to_object_uses_cached_world_model():
+    from llm_gateway.llm_gateway_node import _SceneSnapshotCache
+
+    node, statuses, dispatched = _make_gateway_shell(
+        {
+            "task_type": "factory_task",
+            "version": "1.0",
+            "task_id": "move-apple",
+            "root": {
+                "type": "skill",
+                "name": "move_to_object",
+                "args": {"object_ref": "apple"},
+            },
+        }
+    )
+    node._scene_snapshot_cache = _SceneSnapshotCache(
+        ttl_sec=2.0, now_fn=lambda: 10.0
+    )
+    node._scene_snapshot_cache.store(
+        {"class_filter": "apple", "frame": "base_link"},
+        {
+            "detections": [
+                {
+                    "class_id": "apple",
+                    "frame_id": "base_link",
+                    "position": {"x": 0.31, "y": 0.12, "z": 0.24},
+                    "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                }
+            ],
+            "calibration": {"valid": True},
+        },
+    )
+    request = SimpleNamespace(
+        raw_text="move to apple",
+        runtime_mode="hardware",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token="",
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is True
+    assert result.error == ""
+    semantic_ir = LLMParser().parse(result.semantic_ir_json)
+    assert semantic_ir["intent"] == "absolute_move_ptp"
+    assert semantic_ir["target_pose"] == {
+        "position": {"x": 0.31, "y": 0.12, "z": 0.24},
+        "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+    }
+    assert semantic_ir["reference_frame"] == "base_link"
+    assert semantic_ir["_parse_source"] == "react_factory_task"
+    assert dispatched == []
+    assert "routed" not in statuses
+
+
+def test_review_intent_accepts_runtime_control_factory_task_with_runtime_plan_sentinel():
+    """Runtime-control FactoryTasks (fallback/retry/repeat) are now accepted.
+    The gateway produces a runtime-execution sentinel IR carrying the full task tree
+    so TaskRuntime can execute it while the HMI shows the plan."""
+    node, statuses, dispatched = _make_gateway_shell(
+        {
+            "task_type": "factory_task",
+            "version": "1.0",
+            "task_id": "fallback-home",
+            "root": {
+                "type": "fallback",
+                "children": [
+                    {"type": "skill", "name": "move_named_pose", "args": {"pose_name": "poseA"}},
+                    {"type": "skill", "name": "go_home", "args": {}},
+                ],
+            },
+        }
+    )
+    request = SimpleNamespace(
+        raw_text="try poseA, otherwise go home",
+        runtime_mode="hardware",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token="",
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is True, f"Runtime-control FactoryTask must be accepted; error: {result.error}"
+    payload = LLMParser().parse(result.semantic_ir_json)
+    metadata = payload.get("metadata") or {}
+    assert "runtime_plan" in metadata, "Runtime-control FactoryTask must include runtime_plan in metadata"
+    assert metadata["runtime_plan"]["type"] == "fallback"
+    assert metadata["factory_task"]["task_id"] == "fallback-home"
+    assert payload.get("_factory_task_runtime") is True
+    policy = metadata.get("policy_decisions", [])
+    assert policy[0]["decision"] == "allow"
+    assert dispatched == []
+
+
+def test_review_intent_rejects_react_semantic_ir_final_payload():
+    node, statuses, dispatched = _make_gateway_shell(
+        {"intent": "move_named_pose", "pose_name": "ready"},
+        raw_react_result=True,
+    )
+    request = SimpleNamespace(
+        raw_text="move to ready",
+        runtime_mode="hardware",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token="",
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is False
+    assert '"error":"REACT_HANDOFF"' in result.semantic_ir_json
+    assert "FactoryTask" in result.error
+    assert node._react_agent.user_text == "move to ready"
+    assert dispatched == []
+    assert "routed" not in statuses
 
 def test_review_intent_react_path_does_not_call_legacy_llm_when_llm_is_down():
     node, statuses, dispatched = _make_gateway_shell(
@@ -154,9 +419,12 @@ def test_review_intent_react_path_does_not_call_legacy_llm_when_llm_is_down():
 
     assert result.accepted is True
     assert result.error == ""
-    assert result.semantic_ir_json == (
-        '{"intent":"move_named_pose","pose_name":"ready","_parse_source":"react"}'
-    )
+    semantic_ir = _review_payload(result)
+    assert _semantic_core(semantic_ir) == {
+        "intent": "move_named_pose",
+        "pose_name": "ready",
+    }
+    _assert_react_factory_task_review(semantic_ir)
     assert node._llm_client.calls == []
     assert node._react_agent.user_text == "move to ready"
     assert dispatched == []
@@ -300,7 +568,7 @@ def test_review_intent_reported_sequence_uses_react_base_link_path():
     import json
 
     semantic_ir = json.loads(result.semantic_ir_json)
-    assert semantic_ir["_parse_source"] == "react"
+    _assert_react_factory_task_review(semantic_ir)
     assert [step["intent"] for step in semantic_ir["steps"]] == [
         "move_named_pose",
         "move_named_pose",
@@ -346,9 +614,9 @@ def test_review_intent_home_motion_uses_react_without_pose_tool(raw_text):
 
     assert result.accepted is True
     assert result.error == ""
-    assert result.semantic_ir_json == (
-        '{"intent":"go_home","_parse_source":"react"}'
-    )
+    semantic_ir = _review_payload(result)
+    assert _semantic_core(semantic_ir) == {"intent": "go_home"}
+    _assert_react_factory_task_review(semantic_ir)
     assert node._react_agent.user_text == raw_text
     assert dispatched == []
     assert "routed" not in statuses
@@ -395,7 +663,7 @@ def test_review_intent_home_motion_uses_react_without_pose_tool(raw_text):
             '{"intent":"move_relative","delta":{"x":0.0,"y":-0.01,"z":0.0},"reference_frame":"base_link","_parse_source":"react"}',
         ),
         (
-            "move joint 2 5 deg",
+            "move joint l 5 deg",
             {"intent": "move_joint", "joint_index": 1, "joint_angle": 0.08726646259971647},
             '{"intent":"move_joint","joint_index":1,"joint_angle":0.08726646259971647,"_parse_source":"react"}',
         ),
@@ -436,7 +704,11 @@ def test_review_intent_operator_motion_text_uses_react(
 
     assert result.accepted is True
     assert result.error == ""
-    assert result.semantic_ir_json == expected_semantic_ir_json
+    expected = LLMParser().parse(expected_semantic_ir_json)
+    expected.pop("_parse_source", None)
+    semantic_ir = _review_payload(result)
+    assert _semantic_core(semantic_ir) == expected
+    _assert_react_factory_task_review(semantic_ir)
     assert node._react_agent.user_text == raw_text
     assert dispatched == []
     assert "routed" not in statuses
@@ -491,10 +763,13 @@ def test_review_intent_relative_down_text_uses_react_semantic_ir(raw_text):
 
     assert result.accepted is True
     assert result.error == ""
-    assert result.semantic_ir_json == (
-        '{"intent":"move_relative","delta":{"x":0.0,"y":0.0,"z":-0.02},'
-        '"reference_frame":"base_link","_parse_source":"react"}'
-    )
+    semantic_ir = _review_payload(result)
+    assert _semantic_core(semantic_ir) == {
+        "intent": "move_relative",
+        "delta": {"x": 0.0, "y": 0.0, "z": -0.02},
+        "reference_frame": "base_link",
+    }
+    _assert_react_factory_task_review(semantic_ir)
     assert node._react_agent.calls == [raw_text]
     assert dispatched == []
     assert "routed" not in statuses
@@ -613,7 +888,7 @@ def test_review_intent_resolves_react_tool_relative_move_before_routing():
     assert semantic_ir["reference_frame"] == "base_link"
     assert semantic_ir["delta"]["x"] == pytest.approx(0.0, abs=1e-8)
     assert semantic_ir["delta"]["y"] == pytest.approx(0.05)
-    assert semantic_ir["_parse_source"] == "react"
+    assert semantic_ir["_parse_source"] == "react_factory_task"
     assert dispatched == []
     assert "routed" not in statuses
 
@@ -666,7 +941,7 @@ def test_review_intent_resolves_react_joint_delta_before_routing():
     assert semantic_ir["intent"] == "move_joint"
     assert semantic_ir["joint_index"] == 0
     assert semantic_ir["joint_angle"] == pytest.approx(0.1 + 0.2617993877991494)
-    assert semantic_ir["_parse_source"] == "react"
+    assert semantic_ir["_parse_source"] == "react_factory_task"
     assert dispatched == []
     assert "routed" not in statuses
 
@@ -697,6 +972,58 @@ def test_review_intent_joint_delta_fails_closed_with_clear_state_reason():
     assert "relative joint move" in result.error
     assert "current joint positions unavailable" in result.error
 
+
+def test_review_intent_direct_vietnamese_joint_delta_uses_current_joint_state():
+    node, statuses, dispatched = _make_gateway_shell({"intent": "go_home"})
+    node._latest_joint_positions_rad = [0.0, 0.0, 0.2, 0.0, 0.0, 0.0]
+    request = SimpleNamespace(
+        raw_text="xoay khớp số 3 +15 độ",
+        runtime_mode="hardware",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token="",
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is True
+    semantic_ir = LLMParser().parse(result.semantic_ir_json)
+    assert semantic_ir["intent"] == "move_joint"
+    assert semantic_ir["joint_index"] == 2
+    assert semantic_ir["joint_angle"] == pytest.approx(0.2 + 0.2617993877991494)
+    assert semantic_ir["_parse_source"] == "direct_fast_path"
+    assert node._react_agent.user_text is None
+    assert dispatched == []
+    assert "routed" not in statuses
+
+def test_review_intent_direct_vietnamese_absolute_joint_keeps_requested_joint():
+    node, statuses, dispatched = _make_gateway_shell({"intent": "go_home"})
+    request = SimpleNamespace(
+        raw_text="xoay khớp số 3 sang góc 45 độ",
+        runtime_mode="hardware",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token="",
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is True
+    semantic_ir = LLMParser().parse(result.semantic_ir_json)
+    assert semantic_ir == {
+        "intent": "move_joint",
+        "joint_index": 2,
+        "joint_angle": 45.0,
+        "angular_unit": "deg",
+        "_parse_source": "direct_fast_path",
+    }
+    assert node._react_agent.user_text is None
+    assert dispatched == []
+    assert "routed" not in statuses
 
 @pytest.mark.parametrize(
     ("raw_text", "expected_semantic_ir_json"),
@@ -747,7 +1074,11 @@ def test_review_intent_draw_commands_use_react_without_regex_validation(
 
     assert result.accepted is True
     assert result.error == ""
-    assert result.semantic_ir_json == expected_semantic_ir_json
+    expected = LLMParser().parse(expected_semantic_ir_json)
+    expected.pop("_parse_source", None)
+    semantic_ir = _review_payload(result)
+    assert _semantic_core(semantic_ir) == expected
+    _assert_react_factory_task_review(semantic_ir)
     assert node._react_agent.user_text == raw_text
     assert node._react_agent.calls == [raw_text]
     assert dispatched == []
@@ -894,14 +1225,14 @@ def test_review_intent_canonicalizes_legacy_move_to_named_pose_alias_in_sequence
     assert result.accepted is True
     assert result.error == ""
     semantic_ir = LLMParser().parse(result.semantic_ir_json)
-    assert semantic_ir == {
+    assert _semantic_core(semantic_ir) == {
         "intent": "sequence",
         "steps": [
             {"intent": "move_named_pose", "pose_name": "poseA"},
             {"intent": "go_home"},
         ],
-        "_parse_source": "react",
     }
+    _assert_react_factory_task_review(semantic_ir)
     assert node._react_agent.user_text == "di ve toi poseA roi ve home"
     assert dispatched == []
     assert "routed" not in statuses
@@ -1249,7 +1580,7 @@ def test_review_intent_vietnamese_draw_circle_uses_react_path():
     assert result.error == ""
     assert "draw_shape" in result.semantic_ir_json
     assert '"params":{"radius":5.0}' in result.semantic_ir_json
-    assert '"_parse_source":"react"' in result.semantic_ir_json
+    assert '"_parse_source":"react_factory_task"' in result.semantic_ir_json
     assert node._llm_client.calls == []
     assert node._react_agent.user_text == "vẽ hình tròn bán kính 5cm"
     assert dispatched == []
@@ -1286,7 +1617,7 @@ def test_review_intent_vietnamese_draw_circle_with_plane_suffix_uses_react_path(
     assert result.error == ""
     assert "draw_shape" in result.semantic_ir_json
     assert '"params":{"radius":5.0}' in result.semantic_ir_json
-    assert '"_parse_source":"react"' in result.semantic_ir_json
+    assert '"_parse_source":"react_factory_task"' in result.semantic_ir_json
     assert node._llm_client.calls == []
     assert node._react_agent.user_text == "vẽ hình tròn bán kính 5cm trong mặt phẳng hiện tại"
     assert dispatched == []
@@ -1327,3 +1658,53 @@ def test_gateway_react_state_callbacks_update_state_injector():
     assert node._latest_joint_positions_rad == joint_positions
     assert snapshot["mode"] == "MOVING"
     assert snapshot["active_alarms"] == ["42"]
+
+
+def test_review_intent_factory_task_with_retry_fallback_produces_runtime_plan_sentinel():
+    """A FactoryTask with retry/fallback roots (runtime-control) should return a
+    runtime-execution sentinel IR, not fail with FactoryTaskError."""
+    node, statuses, dispatched = _make_gateway_shell(
+        _factory_task(
+            "pick-with-fallback",
+            {
+                "type": "fallback",
+                "children": [
+                    {
+                        "type": "retry",
+                        "count": 2,
+                        "children": [
+                            {"type": "skill", "name": "pick_object", "args": {"object": "apple"}}
+                        ],
+                    },
+                    {"type": "skill", "name": "go_home", "args": {}},
+                ],
+            },
+        ),
+        raw_react_result=True,
+    )
+    request = SimpleNamespace(
+        raw_text="pick the apple with fallback to home",
+        runtime_mode="hardware",
+        session_id="session-a",
+        operator_id="operator-a",
+        command_id="command-a",
+        review_token="",
+    )
+    response = SimpleNamespace(accepted=False, error="", semantic_ir_json="")
+
+    result = node._on_review_intent(request, response)
+
+    assert result.accepted is True, f"Expected accepted; error: {result.error}"
+    payload = LLMParser().parse(result.semantic_ir_json)
+    metadata = payload.get("metadata") or {}
+    assert "runtime_plan" in metadata, "Runtime-control FactoryTask must have runtime_plan in metadata"
+    assert "factory_task" in metadata, "Runtime-control FactoryTask must expose factory_task info"
+    runtime_plan = metadata["runtime_plan"]
+    assert runtime_plan["type"] == "fallback", "Top-level node type must be preserved"
+    assert metadata.get("_factory_task_runtime") is True or payload.get("_factory_task_runtime") is True, (
+        "Sentinel must set _factory_task_runtime=True"
+    )
+    policy = metadata.get("policy_decisions", [])
+    assert len(policy) >= 1
+    assert policy[0]["decision"] == "allow"
+    assert "retry/fallback/replan" in policy[0]["reason"]

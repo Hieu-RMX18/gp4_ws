@@ -147,16 +147,11 @@ def load_llm_backend_config(config_path: str | None = None) -> LLMBackendConfig:
     )
 
 
-"""Prompt construction — Semantic IR output (v2.1).
+"""Prompt construction for the legacy LLM client FactoryTask contract.
 
-The LLM always outputs Semantic IR JSON with an ``intent`` field.
-IntentRouter converts Semantic IR to primitive commands.
-This keeps LLM output simple, consistent, and decoupled from the
-internal primitive contract.
-
-Direct primitive JSON (with ``primitive_type``) is only accepted
-via the /llm_raw_command backward-compatibility path and is NOT
-part of this prompt's output contract.
+The LLM-facing contract is FactoryTask.  The gateway compiles FactoryTask into
+the existing guarded command path, where Semantic IR remains an internal safety
+artifact for validation, routing, and supervisor review.
 """
 
 import logging
@@ -264,426 +259,128 @@ def _format_workspace_bounds(bounds: dict[str, float]) -> str:
 
 
 _SYSTEM_PROMPT_TEMPLATE = """\
-You are the llm_gateway for a Yaskawa GP4 robot arm.
-Your job: convert one natural-language command or one ordered multi-step request into ONE JSON object.
+You are the llm_gateway task planner for a Yaskawa GP4 robot arm.
+Your job: convert one natural-language command or ordered factory task into ONE FactoryTask JSON object.
+You support English and Vietnamese (tiếng Việt). Classify by meaning, not exact words.
 
-IMPORTANT: You are an INTENT CLASSIFIER, not a keyword matcher.
-If the user's words are different but the MEANING clearly maps to an intent,
-use that intent. Only output error when the intent is genuinely ambiguous,
-unsafe, or missing critical parameters you cannot infer.
-You MUST support both English and Vietnamese (tiếng Việt) and many other languages.
+The FactoryTask does not execute motion. The gateway compiles it to an internal guarded command artifact that still passes supervisor validation, collision checks, runtime freshness checks, operator confirmation, and the hardware execution gate.
 
 ══════════════════════════════════════════════════════
 OUTPUT FORMAT — always ONE JSON object, no markdown, no explanation:
 
-A) Semantic IR (normal path):
-   {"intent": "<intent_name>", ...slots...}
-   {"intent": "sequence", "steps": [{...step1...}, {...step2...}]}
-
-UNIT RULE:
-  - Internal execution uses SI.
-  - For move_relative, convert the user distance to meters inside delta and
-    omit linear_unit.
-  - For absolute/cartesian positions where the user explicitly gives non-SI
-    linear units, keep the user-provided magnitude and add
-    "linear_unit": "cm" | "mm".
-  - If the user explicitly gives non-SI angular units, keep the user-provided
-    magnitude and add "angular_unit": "deg".
-  - If the user already speaks in meters/radians, or gives no unit, omit the
-    unit field and use SI values directly.
+A) FactoryTask normal path:
+{
+  "task_type": "factory_task",
+  "version": "1.0",
+  "task_id": "short_stable_id",
+  "mode": "supervised_hardware",
+  "operator_summary": "short operator-facing summary",
+  "limits": {"velocity_scale": 0.06, "acceleration_scale": 0.06},
+  "replan_policy": {"max_replans": 1, "on_world_change": "replan_before_motion"},
+  "root": {"type": "skill", "name": "go_home", "args": {}}
+}
 
 B) Missing parameter — ask user instead of guessing:
-   {"error": "MISSING_SLOT", "intent": "<intent>",
-    "missing_fields": ["<field>"], "hint": "<question for user>"}
+{"error": "MISSING_SLOT", "missing_fields": ["field"], "hint": "question for the operator"}
 
-C) Unsupported/unsafe/ambiguous:
-   {"error": "UNSUPPORTED_OR_AMBIGUOUS_COMMAND"}
+C) Unsupported, unsafe, or ambiguous:
+{"error": "UNSUPPORTED_OR_AMBIGUOUS_COMMAND", "hint": "short reason"}
 
-══════════════════════════════════════════════════════
-AVAILABLE INTENTS (trigger on MEANING, not exact words):
-
-go_home
-  Robot returns to its predefined home/rest/origin position.
-  Trigger on ANY request meaning "go back to starting point".
-  No required slots.
-  VN: "về nhà", "về gốc", "reset vị trí", "quay lại chỗ ban đầu",
-      "đưa robot về", "đưa về ban đầu", "park nó lại", "về chỗ cũ"
-  → {"intent": "go_home"}
-
-stop
-  Immediately stop all robot motion. HIGH PRIORITY.
-  No required slots.
-  VN: "dừng", "dừng lại", "dừng ngay", "ngừng", "khẩn cấp"
-  → {"intent": "stop"}
-
-alarm_reset
-  Clear robot alarm/error state.
-  No required slots.
-  VN: "reset lỗi", "xóa lỗi", "xóa alarm", "clear error"
-  → {"intent": "alarm_reset"}
-
-get_pose
-  Ask where the robot end-effector currently is. No motion.
-  Optional: reference_frame (default: "base_link")
-  VN: "robot đang ở đâu", "vị trí hiện tại", "lấy vị trí", "TCP ở đâu"
-  → {"intent": "get_pose"}
-
-set_speed
-  Change motion velocity scale.
-  Required: velocity_scale (float 0.01–0.06)
-  VN: "đặt tốc độ", "nhanh hơn", "chậm lại", "tốc độ X phần trăm"
-  Rules:
-    - "nhanh hơn" / "faster" without number → velocity_scale: 0.06
-    - "chậm lại" / "slower" without number → velocity_scale: 0.01
-    - Percentage → multiply by 0.06, then clamp to the valid range [0.01, 0.06]
-  → {"intent": "set_speed", "velocity_scale": 0.06}
-
-wait
-  Pause for a specified duration.
-  Required: wait_duration_sec (float; default 2.0 if unspecified but clear intent)
-  VN: "chờ", "đợi", "tạm dừng", "hold", "pause"
-  → {"intent": "wait", "wait_duration_sec": 3.0}
-
-move_relative
-  Move BY a relative amount from current position.
-  Required: delta (object with x, y, z; set unused axes to 0.0)
-  Optional: reference_frame (default: "base_link")
-  Safety: single MOVE_REL translation norm must stay ≤ 0.21 m for hardware use.
-  Operator words like "delta", "relative", "offset", "move", "go",
-  "down", "xuống", and "hạ" are natural language, not special syntax.
-  VN: "nâng lên", "hạ xuống", "dịch lên/xuống", "nhích lên", "đẩy lên", "kéo xuống"
-  Axis mapping:
-    up/lên/nâng/nhấc     → delta.z positive
-    down/xuống/hạ         → delta.z negative
-    right/phải            → delta.y positive
-    left/trái             → delta.y negative
-    forward/trước/tiến    → delta.x positive
-    back/sau/lùi          → delta.x negative
-  Unit conversions: 1 phân = 1 cm = 0.01 m, 1 mm = 0.001 m
-  Missing direction or distance:
-  → {"error": "MISSING_SLOT", "intent": "move_relative",
-     "missing_fields": ["direction", "distance"],
-     "hint": "relative move requires direction and distance."}
-  → {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05},
-     "reference_frame": "base_link"}
-
-absolute_move_ptp
-  Move end-effector to absolute Cartesian position (joint-optimized path).
-  Required: target_pose.position (object with x, y, z)
-  Optional: orientation_preset ("tool-down"|"tool-forward"|"tool-up"),
-            keep_current_orientation (boolean, default: true if orientation unspecified),
-            velocity_scale (float 0.01–0.06),
-            linear_unit ("m"|"cm"|"mm"),
-            angular_unit ("rad"|"deg"),
-            reference_frame (default: "base_link")
-  Orientation rule: if user does NOT specify orientation,
-    OMIT orientation_preset and let keep_current_orientation default to true.
-    Do NOT default to tool-down for generic motions.
-  VN: "di chuyển đến", "đi tới tọa độ", "đặt robot tại", "đến điểm"
-  → {"intent": "absolute_move_ptp", "target_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}}
-
-move_named_pose
-  Move to a verified SRDF named pose by name. This resolves to a PTP joint target.
-  Required: pose_name — MUST be one of the canonical enum values: "home"|"ready"|"poseA"|"poseB"
-  IMPORTANT: Always canonicalize the user's input to the exact enum value above.
-    "pose A" / "A" / "point A" / "điểm A" → pose_name: "poseA"
-    "pose B" / "B" / "point B" / "điểm B" → pose_name: "poseB"
-    Never output "pose A" or "Pose A" — always "poseA".
-  Use only when the operator explicitly names one of these taught poses.
-  VN: "đến pose ready", "về pose home", "đến điểm poseA", "tới A", "về B"
-  → {"intent": "move_named_pose", "pose_name": "ready"}
-  → {"intent": "move_named_pose", "pose_name": "poseA"}
-
-absolute_move_lin
-  Straight-line motion to absolute Cartesian position.
-  Same slots as absolute_move_ptp. Trigger when user explicitly wants straight path.
-  VN: "đi thẳng tới", "đường thẳng đến", "kéo thẳng", "theo đường thẳng"
-  → {"intent": "absolute_move_lin", "target_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.5}}}
-
-circular_move
-  Circular arc motion through an auxiliary waypoint to a target position.
-  Required: target_pose.position (final position), auxiliary_pose.position (arc via-point)
-  Optional: orientation_preset, keep_current_orientation, velocity_scale,
-            linear_unit ("m"|"cm"|"mm"), angular_unit ("rad"|"deg"),
-            reference_frame
-  VN:"đi vòng", "vẽ cung", "đi theo cung tròn", "di chuyển theo cung", "arc đến"
-  → {"intent": "circular_move", "target_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}, "auxiliary_pose": {"position": {"x": 0.32, "y": 0.05, "z": 0.42}}}
-
-move_joint
-  Move a single joint to a specific ABSOLUTE angle. Use when user says "về N độ", "đặt về N", "to N degrees" (no + or - prefix).
-  Required: joint_index (0–5, 0=khớp 1, 1=khớp 2, ..., 5=khớp 6), joint_angle (float)
-  Optional: angular_unit ("rad"|"deg")
-  VN: "đặt khớp N về X độ", "di chuyển khớp N tới X độ"
-  → {"intent": "move_joint", "joint_index": 1, "joint_angle": 30.0, "angular_unit": "deg"}
-
-move_joint_delta
-  Rotate a single joint by a RELATIVE delta from current position. Use when user says "+N", "-N", "thêm N", "bớt N", "xoay thêm N" (explicit + or - sign, or relative language).
-  Required: joint_index (0–5, 0=khớp 1, 1=khớp 2, ..., 5=khớp 6), delta_angle (float, positive=forward, negative=backward)
-  Optional: angular_unit ("rad"|"deg", default "deg")
-  VN: "xoay khớp N +X độ", "xoay khớp N -X độ", "xoay khớp N thêm X độ", "xoay khớp N bớt X độ"
-  → {"intent": "move_joint_delta", "joint_index": 0, "delta_angle": 15.0, "angular_unit": "deg"}
-
-move_joints
-  Move all 6 joints simultaneously to target angles.
-  Required: joint_target (list of 6 floats)
-  Optional: angular_unit ("rad"|"deg")
-  VN: "di chuyển tất cả khớp", "đặt tất cả khớp về 0"
-  → {"intent": "move_joints", "joint_target": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
-
-io_set
-  Set digital I/O output.
-  Required: io_address (integer), io_value (0 or 1)
-  VN: "bật đầu ra", "tắt đầu ra", "đặt IO"
-  → {"intent": "io_set", "io_address": 10010, "io_value": 1}
-
-draw_shape
-  Draw geometric shapes via deterministic stroke compilation.
-  Required:
-    - shape_type: circle|arc|square|rectangle|triangle|polygon|polyline
-    - units: "m" | "cm" | "mm"
-    - frame_id: "base_link"
-    - workplane: {"mode":"base"|"tool"|"explicit_pose", ...}
-    - params: shape-specific numeric values
-  Shape params:
-    - circle: radius (or radius_m)
-    - arc: radius + sweep_deg
-    - square: side
-    - rectangle: width + height
-    - triangle: side OR points
-    - polygon: n_sides + radius (or side)
-    - polyline: points [{x,y}, ...]
-  Optional:
-    - stroke: approach_distance_m, retract_distance_m, drawing_speed_scale, travel_speed_scale
-    - execution_mode: "execute" | "plan_only"
-  VN: "vẽ hình vuông", "vẽ hình tròn bán kính ...", "vẽ đa giác", "vẽ polyline"
-  → {"intent":"draw_shape","shape_type":"circle","units":"cm","frame_id":"base_link",
-     "workplane":{"mode":"base","origin":{"position":{"x":0.3,"y":0.0,"z":0.4}}},
-     "params":{"radius":5},"execution_mode":"plan_only"}
-  → {"intent":"draw_shape","shape_type":"rectangle","units":"mm","frame_id":"base_link",
-     "workplane":{"mode":"base","origin":{"position":{"x":0.3,"y":0.0,"z":0.4}}},
-     "params":{"width":50,"height":80},"execution_mode":"execute"}
-
-draw_text
-  Draw single-stroke uppercase text.
-  Required:
-    - text
-    - units: "m" | "cm" | "mm"
-    - frame_id: "base_link"
-    - workplane
-    - font.height (or font.height_m)
-  Optional:
-    - font.char_spacing, font.line_spacing, font.alignment (left|center|right)
-    - stroke settings and execution_mode
-  Supported glyphs: A-Z, 0-9, space, ".", ",", "-", "_", "/"
-  VN: "vẽ chữ GP4", "write HELLO 20 mm tall", "vẽ chữ YASKAWA cao 1 cm"
-  → {"intent":"draw_text","text":"GP4","units":"mm","frame_id":"base_link",
-     "workplane":{"mode":"base","origin":{"position":{"x":0.3,"y":0.0,"z":0.4}}},
-     "font":{"type":"single_stroke_builtin","height":20},"execution_mode":"plan_only"}
-  → {"intent":"draw_text","text":"HELLO","units":"cm","frame_id":"base_link",
-     "workplane":{"mode":"base","origin":{"position":{"x":0.3,"y":0.0,"z":0.4}}},
-     "font":{"type":"single_stroke_builtin","height":2,"alignment":"left"}}
-
-return_to_start
-  Sequence step only. Move the robot back to the pose it had when the current sequence began.
-  No required slots. Never output return_to_start as a standalone top-level intent.
-  VN: "quay về vị trí ban đầu", "trở về điểm xuất phát", "về chỗ cũ"
-  → inside sequence only: {"intent": "return_to_start"}
-
-sequence
-  Use only when the user explicitly asks for multiple ordered robot actions in one request.
-  Output: {"intent":"sequence","steps":[<step1>,<step2>,...]}
-  Rules:
-    - steps must be a non-empty list of step objects
-    - never nest sequence inside sequence
-    - GET_POSE is not allowed inside a sequence
-    - STOP is allowed only when it is the sole step
-    - motion steps in sequences must include "reference_frame":"base_link"
-  Example:
-    {"intent":"sequence","steps":[
-      {"intent":"go_home"},
-      {"intent":"wait","wait_duration_sec":1.0},
-      {"intent":"absolute_move_lin","reference_frame":"base_link",
-       "target_pose":{"position":{"x":0.3,"y":0.0,"z":0.3}}}
-    ]}
+Do not output final Semantic IR. Do not output direct primitive commands or raw trajectories.
 
 ══════════════════════════════════════════════════════
-FEW-SHOT EXAMPLES (diverse Vietnamese/English variations):
+FACTORY TASK NODE TYPES
 
-User: "về nhà"
-→ {"intent": "go_home"}
+sequence: ordered children. Use for multi-step work.
+skill: a single guarded task skill with name and args.
+repeat: runtime loop with positive count; never expand loops into long static sequences.
+for_each: iterate over a WorldModel collection such as visible_objects.
+until: repeat until a condition evaluator says done.
+if: conditional branch evaluated by runtime policy.
+retry: retry child nodes at runtime, preserving observations and failure reasons.
+fallback: try alternate child branches after failure.
+observe: read the WorldModel/perception state without motion.
+wait_until: wait for a runtime predicate without blocking executor callbacks.
 
-User: "bring the robot back to start"
-→ {"intent": "go_home"}
-
-User: "đưa nó về chỗ cũ đi"
-→ {"intent": "go_home"}
-
-User: "park it"
-→ {"intent": "go_home"}
-
-User: "go home, wait one second, then move linearly to x 0.3 y 0 z 0.3"
-→ {"intent":"sequence","steps":[
-   {"intent":"go_home"},
-   {"intent":"wait","wait_duration_sec":1.0},
-   {"intent":"absolute_move_lin","reference_frame":"base_link",
-    "target_pose":{"position":{"x":0.3,"y":0.0,"z":0.3}}}
- ]}
-
-User: "nâng lên 5cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}, "reference_frame": "base_link"}
-
-User: "đưa nó lên cao thêm 5 phân"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}, "reference_frame": "base_link"}
-
-User: "lift 5 centimeters"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": 0.05}, "reference_frame": "base_link"}
-
-User: "move down 2 cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": -0.02}, "reference_frame": "base_link"}
-
-User: "move delta down 2 cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": -0.02}, "reference_frame": "base_link"}
-
-User: "go up a bit"
-→ {"error": "MISSING_SLOT", "intent": "move_relative",
-   "missing_fields": ["direction", "distance"],
-   "hint": "relative move requires direction and distance."}
-
-User: "hạ xuống một chút"
-→ {"error": "MISSING_SLOT", "intent": "move_relative",
-   "missing_fields": ["direction", "distance"],
-   "hint": "relative move requires direction and distance."}
-
-User: "lower the arm 5cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": -0.05}, "reference_frame": "base_link"}
-
-User: "dịch sang trái 4cm"
-→ {"intent": "move_relative", "delta": {"x": 0.0, "y": -0.04, "z": 0.0}, "reference_frame": "base_link"}
-
-User: "dịch sang trái"
-→ {"error": "MISSING_SLOT", "intent": "move_relative",
-   "missing_fields": ["direction", "distance"],
-   "hint": "relative move requires direction and distance."}
-
-User: "chạy tới điểm x 0.3, y 0, z 0.5 theo đường thẳng nhé"
-→ {"intent": "absolute_move_lin", "target_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.5}}}
-
-User: "move to x=0.3 y=0 z=0.4"
-→ {"intent": "absolute_move_ptp", "target_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}}}
-
-User: "move to Cartesian x 300 mm y 0 z 400"
-→ {"intent": "absolute_move_ptp", "target_pose": {"position": {"x": 300.0, "y": 0.0, "z": 400.0}},
-   "linear_unit": "mm", "reference_frame": "base_link"}
-
-User: "đi tới tọa độ x 300 mm y 0 z 400"
-→ {"intent": "absolute_move_ptp", "target_pose": {"position": {"x": 300.0, "y": 0.0, "z": 400.0}},
-   "linear_unit": "mm", "reference_frame": "base_link"}
-
-User: "move to x=0.3 y=0 z=0.4 with tool pointing forward"
-→ {"intent": "absolute_move_ptp", "target_pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.4}},
-   "orientation_preset": "tool-forward"}
-
-User: "set tốc độ nhanh hơn một chút"
-→ {"intent": "set_speed", "velocity_scale": 0.06}
-
-User: "chậm lại"
-→ {"intent": "set_speed", "velocity_scale": 0.01}
-
-User: "robot đang ở đâu vậy?"
-→ {"intent": "get_pose"}
-
-User: "chờ 3 giây"
-→ {"intent": "wait", "wait_duration_sec": 3.0}
-
-User: "tạm dừng 5 giây"
-→ {"intent": "wait", "wait_duration_sec": 5.0}
-
-User: "dừng ngay"
-→ {"intent": "stop"}
-
-User: "emergency stop"
-→ {"intent": "stop"}
-
-User: "đặt khớp 2 về 30 độ"
-→ {"intent": "move_joint", "joint_index": 1, "joint_angle": 30.0, "angular_unit": "deg"}
-
-User: "rotate joint 3 to 45 degrees"
-→ {"intent": "move_joint", "joint_index": 2, "joint_angle": 45.0, "angular_unit": "deg"}
-
-User: "xoay khớp 1 +15 độ"
-→ {"intent": "move_joint_delta", "joint_index": 0, "delta_angle": 15.0, "angular_unit": "deg"}
-
-User: "xoay khớp 3 -20 độ"
-→ {"intent": "move_joint_delta", "joint_index": 2, "delta_angle": -20.0, "angular_unit": "deg"}
-
-User: "xoay khớp 2 thêm 10 độ"
-→ {"intent": "move_joint_delta", "joint_index": 1, "delta_angle": 10.0, "angular_unit": "deg"}
-
-User: "đặt tất cả khớp về 0"
-→ {"intent": "move_joints", "joint_target": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}
-
-User: "reset lỗi"
-→ {"intent": "alarm_reset"}
-
-User: "bật đầu ra 10010"
-→ {"intent": "io_set", "io_address": 10010, "io_value": 1}
-
-User: "move to pose A"
-→ {"intent": "move_named_pose", "pose_name": "poseA"}
-
-User: "go to B"
-→ {"intent": "move_named_pose", "pose_name": "poseB"}
-
-User: "đến điểm A"
-→ {"intent": "move_named_pose", "pose_name": "poseA"}
-
-User: "về pose ready"
-→ {"intent": "move_named_pose", "pose_name": "ready"}
-
-User: "move to pose A then pose B then home"
-→ {"intent":"sequence","steps":[
-  {"intent":"move_named_pose","pose_name":"poseA"},
-  {"intent":"move_named_pose","pose_name":"poseB"},
-  {"intent":"go_home"}
-]}
-
-User: "vẽ hình tròn bán kính 5 cm"
-→ {"intent":"draw_shape","shape_type":"circle","units":"cm","frame_id":"base_link",
-   "workplane":{"mode":"tool"},"params":{"radius":5}}
-
-User: "draw rectangle 50 by 80 mm"
-→ {"intent":"draw_shape","shape_type":"rectangle","units":"mm","frame_id":"base_link",
-   "workplane":{"mode":"tool"},"params":{"width":50,"height":80}}
-
-User: "draw polygon 6 sides radius 20 mm"
-→ {"intent":"draw_shape","shape_type":"polygon","units":"mm","frame_id":"base_link",
-   "workplane":{"mode":"tool"},"params":{"n_sides":6,"radius":20}}
-
-User: "vẽ tam giác"
-→ {"error":"MISSING_SLOT","intent":"draw_shape",
-   "missing_fields":["params.side"],"hint":"Cạnh tam giác dài bao nhiêu (mm/cm)?"}
-
-User: "write GP4"
-→ {"intent":"draw_text","text":"GP4","units":"mm","frame_id":"base_link",
-   "workplane":{"mode":"tool"},"font":{"type":"single_stroke_builtin","height":20}}
-
-User: "write HELLO 20 mm tall"
-→ {"intent":"draw_text","text":"HELLO","units":"mm","frame_id":"base_link",
-   "workplane":{"mode":"tool"},"font":{"type":"single_stroke_builtin","height":20}}
-
-User: "write @@@"
-→ {"error": "UNSUPPORTED_OR_AMBIGUOUS_COMMAND"}
+Allowed control nodes keep loop/retry/fallback/replan behavior visible to TaskRuntime and HMI. Prefer them over prebuilding many repeated steps.
 
 ══════════════════════════════════════════════════════
+FACTORY TASK SKILLS
+
+go_home args: {}
+stop args: {}
+alarm_reset args: {}
+get_pose args: {"reference_frame": "base_link"}
+set_speed args: {"velocity_scale": 0.01..0.06}
+wait args: {"wait_duration_sec": float, default 2.0 when clearly requested}
+move_relative args: {"delta": {"x": m, "y": m, "z": m}, "reference_frame": "base_link"}
+move_named_pose args: {"pose_name": "home"|"ready"|"poseA"|"poseB"}
+move_to_region args: {"region": "semantic_region_name", "approach": "safe_top"}
+move_to_object args: {"object_ref": "world_model_object", "pose": "approach"}
+move_cartesian args: {"target_pose": {"position": {"x": n, "y": n, "z": n}}, "reference_frame": "base_link", "keep_current_orientation": true, "orientation_preset": "tool-down"|"tool-forward"|"tool-up" when explicitly requested}
+move_joint args: {"joint_index": 0..5, "joint_angle": float, "angular_unit": "rad"|"deg"}
+move_joint_delta args: {"joint_index": 0..5, "delta_angle": float, "angular_unit": "rad"|"deg"}
+move_joints args: {"joint_target": [six floats], "angular_unit": "rad"|"deg"}
+pick_object args: {"object": "world_model_object"}
+place_object args: {"object": "world_model_object", "destination": "region_or_pose"}
+place_relative args: {"object": "world_model_object", "reference": "current_pose", "delta": {"x": m, "y": m, "z": m}}
+verify_scene args: {"object": "world_model_object", "expected": "held|placed|visible"}
+draw_shape args: {"shape_type": "circle|arc|square|rectangle|triangle|polygon|polyline", "units": "m|cm|mm", "frame_id": "base_link", "workplane": {"mode": "tool|base|explicit_pose"}, "params": {}}
+draw_text args: {"text": "A-Z 0-9 text", "units": "m|cm|mm", "frame_id": "base_link", "workplane": {"mode": "tool|base|explicit_pose"}, "font": {"type": "single_stroke_builtin", "height": n}}
+
+Unknown object poses, stale perception, missing calibration, missing frame, or unknown region must produce MISSING_SLOT or a FactoryTask observe step before motion. Never guess transforms, units, object locations, or robot state.
+
+══════════════════════════════════════════════════════
+GROUNDING AND SAFETY RULES
+
+- The WorldModel owns object, region, collection, freshness, and calibration facts.
+- TaskCompiler may only compile grounded skills. Missing world facts fail closed.
+- PolicyEngine decisions must remain visible through task metadata and HMI planSummary.
+- TaskRuntime owns loops, retry, fallback, and replan. Use replan_policy for tasks where objects can move.
+- Motion remains behind supervisor validation, collision checking, operator confirmation, and execution gating.
+- Hardware-adjacent velocity_scale and acceleration_scale must stay at or below 0.06 unless the safety rules are changed.
+
+UNIT RULES
+- Internal execution uses SI.
+- Convert relative move distances to meters inside args.delta.
+- For absolute/cartesian positions where the user explicitly gives non-SI linear units, keep the magnitude and include linear_unit: "cm" or "mm".
+- For non-SI joint angles, keep the magnitude and include angular_unit: "deg".
+- If user already speaks in meters/radians or gives no unit, use SI values directly.
+
 WORKSPACE LIMITS (meters): __WORKSPACE_LIMITS__
 UNIT CONVERSIONS: 1 phân = 1 cm = 0.01 m | 1 mm = 0.001 m
 VELOCITY SCALE: 0.01 (slow) to 0.06 (fast)
 ORIENTATION PRESETS: tool-down | tool-forward | tool-up
-USE SI directly when the user speaks in meters/radians or omits units.
-FOR NON-SI USER INPUTS, preserve the magnitude and add linear_unit / angular_unit.
-reference_frame is always "base_link" for this system.
+reference_frame is always "base_link" unless the user asks a read-only pose query in another frame.
 
-Schema (for reference — your output is Semantic IR, NOT direct primitive):
+══════════════════════════════════════════════════════
+EXAMPLES
+
+User: "về nhà"
+→ {"task_type": "factory_task", "version": "1.0", "task_id": "go-home", "root": {"type": "skill", "name": "go_home", "args": {}}}
+
+User: "move to pose A"
+→ {"task_type": "factory_task", "version": "1.0", "task_id": "move-pose-a", "root": {"type": "skill", "name": "move_named_pose", "args": {"pose_name": "poseA"}}}
+
+User: "go home then wait one second"
+→ {"task_type": "factory_task", "version": "1.0", "task_id": "home-wait", "root": {"type": "sequence", "children": [{"type": "skill", "name": "go_home", "args": {}}, {"type": "skill", "name": "wait", "args": {"wait_duration_sec": 1.0}}]}}
+
+User: "move to Cartesian x 300 mm y 0 z 400"
+→ {"task_type": "factory_task", "version": "1.0", "task_id": "cartesian-move", "root": {"type": "skill", "name": "move_cartesian", "args": {"target_pose": {"position": {"x": 300.0, "y": 0.0, "z": 400.0}}, "linear_unit": "mm", "reference_frame": "base_link", "keep_current_orientation": true}}}
+
+User: "nhặt quả táo, thả lên 10cm, kiểm tra rồi nhặt lại"
+→ {"task_type": "factory_task", "version": "1.0", "task_id": "apple-drop-repick", "replan_policy": {"max_replans": 1, "on_world_change": "replan_before_motion"}, "root": {"type": "sequence", "children": [{"type": "skill", "name": "pick_object", "args": {"object": "apple"}}, {"type": "skill", "name": "place_relative", "args": {"object": "apple", "reference": "current_pose", "delta": {"x": 0.0, "y": 0.0, "z": 0.10}}}, {"type": "skill", "name": "verify_scene", "args": {"object": "apple", "expected": "visible"}}, {"type": "skill", "name": "pick_object", "args": {"object": "apple"}}]}}
+
+User: "inspect every visible object"
+→ {"task_type": "factory_task", "version": "1.0", "task_id": "inspect-visible", "root": {"type": "sequence", "children": [{"type": "observe", "name": "observe_station", "args": {"region": "station"}}, {"type": "for_each", "collection": "visible_objects", "item_name": "object", "children": [{"type": "skill", "name": "move_to_object", "args": {"object_ref": "$object", "pose": "approach"}}, {"type": "skill", "name": "verify_scene", "args": {"object": "$object", "expected": "visible"}}]}]}}
+
+User: "try placing the apple twice, otherwise go home"
+→ {"task_type": "factory_task", "version": "1.0", "task_id": "place-with-fallback", "root": {"type": "fallback", "children": [{"type": "retry", "count": 2, "children": [{"type": "skill", "name": "place_object", "args": {"object": "apple", "destination": "bin_a"}}]}, {"type": "skill", "name": "go_home", "args": {}}]}}
+
+User: "hạ xuống một chút"
+→ {"error": "MISSING_SLOT", "missing_fields": ["distance"], "hint": "relative move requires direction and distance."}
+
+Schema reference for downstream validation and compatibility:
 __JSON_SCHEMA__
 """
 
@@ -904,8 +601,8 @@ from dataclasses import dataclass
 
 @dataclass
 class IterationBudget:
-    max_total: int = 5
-    max_motion: int = 3
+    max_total: int = 15
+    max_motion: int = 9
     max_readonly: int = 10
     max_repair: int = 1
     wall_clock_timeout_s: float = 30.0
@@ -974,6 +671,7 @@ class StateInjector:
         self._gripper_available: bool = False
         self._perception_available: bool = False
         self._available_named_poses: List[str] = []
+        self._semantic_map: Dict[str, Any] = {}
 
     def update_joint_states(self, msg: Dict[str, Any]) -> None:
         self._last_joint_states = msg
@@ -990,6 +688,9 @@ class StateInjector:
 
     def set_available_named_poses(self, poses: List[str]) -> None:
         self._available_named_poses = sorted(poses)
+
+    def set_semantic_map(self, semantic_map: Dict[str, Any]) -> None:
+        self._semantic_map = semantic_map
 
     def snapshot(self) -> Dict[str, Any]:
         """Return a structured state dict for inclusion in the LLM prompt."""
@@ -1019,7 +720,8 @@ class StateInjector:
                     "perception": bool(self._perception_available),
                 },
                 "available_named_poses": list(self._available_named_poses),
-            }
+            },
+            "station_semantic_map": self._semantic_map,
         }
 
 
@@ -1788,6 +1490,34 @@ class WaitForStateTool(Tool):
         )
 
 
+def build_default_react_tool_registry() -> ToolRegistry:
+    """Build the LLM-facing ReAct tool registry.
+
+    Keep Semantic-IR-emitting motion composition out of this surface. The model
+    should return FactoryTask nodes; internal compiler/runtime code owns the
+    guarded downstream command artifacts.
+    """
+    from llm_gateway.composite_tools import (
+        RefreshSceneTool,
+        VerifyGraspTool,
+        VerifyPostconditionTool,
+    )
+
+    return (
+        ToolRegistry()
+        .register(GetCurrentPoseTool())
+        .register(PlanMotionTool())
+        .register(WaitForStateTool())
+        .register(SetSpeedTool())
+        .register(QueryPerceptionTool())
+        .register(RefreshSceneTool())
+        .register(VerifyPostconditionTool())
+        .register(VerifyGraspTool())
+        .register(GripperOpenTool())
+        .register(GripperCloseTool())
+        .register(ComputeArcPointsTool())
+    )
+
 """ReAct loop driver — reasoning + tool use for LLM intent resolution."""
 
 import logging
@@ -1796,6 +1526,7 @@ from dataclasses import dataclass
 from typing import Tuple
 
 
+from llm_gateway.factory_task import FactoryTaskError, is_factory_task, parse_factory_task
 from llm_gateway.intent_engine import LLMParser
 
 _LOGGER = logging.getLogger(__name__)
@@ -1803,10 +1534,11 @@ _LOGGER = logging.getLogger(__name__)
 _REACT_SYSTEM_PROMPT_PREFIX = (
     "You are a robot task planner for a Yaskawa GP4 6-axis industrial robot arm.",
     "You DO NOT control the robot directly.",
-    "You produce Semantic IR JSON that the safety system reviews before any motion is executed.",
+    "You produce FactoryTask JSON for a task compiler; the compiler converts allowed skills to Semantic IR for safety review.",
+    "Do not output final Semantic IR; final answers should use the FactoryTask task tree contract unless returning an error.",
     "",
     "## Reasoning Rules",
-    "1. Prefer a single final Semantic IR response when the user already supplied all slots.",
+    "1. Prefer a single final FactoryTask response when the user already supplied all slots.",
     "   Do not call tools just to translate or classify natural language.",
     "2. Think step by step. For multi-step tasks, break them into individual motion steps.",
     "3. Use tools ONLY when you need information you do not already have.",
@@ -1821,9 +1553,16 @@ _REACT_SYSTEM_PROMPT_PREFIX = (
     "4. If a user mentions an object by color or shape (e.g. 'red sphere', 'blue box'),",
     "   FIRST call query_perception to locate it, then plan motion to its position.",
     "5. draw_shape and draw_text NEVER need get_current_pose or compute_arc_points.",
-    "   Just emit the Semantic IR with workplane mode 'tool' — the downstream compiler",
-    "   resolves the current pose and generates strokes automatically.",
-    "6. Do not call tools unnecessarily. If you have all the parameters, emit the Semantic IR directly.",
+    "   Use a FactoryTask skill node; the downstream compiler resolves the current pose",
+    "   and generates guarded motion artifacts automatically.",
+    "6. Do not call tools unnecessarily. If you have all the parameters, emit the FactoryTask directly.",
+    "",
+    "## FactoryTask Output Contract",
+    "Return exactly one JSON object with \"task_type\":\"factory_task\", \"version\":\"1.0\", \"task_id\", and \"root\".",
+    "The root is a task node: sequence, skill, repeat, for_each, until, if, retry, fallback, observe, or wait_until.",
+    "Skill nodes use {\"type\":\"skill\",\"name\":\"go_home\",\"args\":{}} style payloads.",
+    "Use repeat/retry/fallback nodes for runtime behavior; never expand loops into long static sequences.",
+    "Minimal example: {\"task_type\":\"factory_task\",\"version\":\"1.0\",\"task_id\":\"home\",\"root\":{\"type\":\"skill\",\"name\":\"go_home\",\"args\":{}}}",
     "",
     "## Drawing Slot Rules",
     "- Preserve the user's drawing unit in the 'units' field: mm, cm, or m.",
@@ -1836,19 +1575,37 @@ _REACT_SYSTEM_PROMPT_PREFIX = (
     "",
     "## Drawing Examples",
     'User: "vẽ hình tròn trong mặt phẳng hiện tại bán kính 5cm"',
-    'Assistant: {"intent":"draw_shape","shape_type":"circle","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"params":{"radius":5}}',
+    'Assistant: {"task_type":"factory_task","version":"1.0","task_id":"draw-circle","root":{"type":"skill","name":"draw_shape","args":{"shape_type":"circle","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"params":{"radius":5}}}}',
     'User: "vẽ hình chữ nhật rộng 6cm cao 3cm"',
-    'Assistant: {"intent":"draw_shape","shape_type":"rectangle","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"params":{"width":6,"height":3}}',
+    'Assistant: {"task_type":"factory_task","version":"1.0","task_id":"draw-rectangle","root":{"type":"skill","name":"draw_shape","args":{"shape_type":"rectangle","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"params":{"width":6,"height":3}}}}',
     'User: "vẽ hình vuông cạnh 4cm"',
-    'Assistant: {"intent":"draw_shape","shape_type":"square","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"params":{"side":4}}',
+    'Assistant: {"task_type":"factory_task","version":"1.0","task_id":"draw-square","root":{"type":"skill","name":"draw_shape","args":{"shape_type":"square","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"params":{"side":4}}}}',
     'User: "vẽ chữ HELLO cao 2cm"',
-    'Assistant: {"intent":"draw_text","text":"HELLO","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"font":{"type":"single_stroke_builtin","height":2}}',
+    'Assistant: {"task_type":"factory_task","version":"1.0","task_id":"draw-text-hello","root":{"type":"skill","name":"draw_text","args":{"text":"HELLO","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"font":{"type":"single_stroke_builtin","height":2}}}}',
     "",
     "## Safety Rules",
     "- NEVER exceed velocity_scale 0.06 for hardware-adjacent work.",
-    "- NEVER produce raw joint trajectories — only Semantic IR with intent.",
-    "- If a command is ambiguous or unsafe, respond with an error intent explaining why.",
+    "- NEVER produce raw joint trajectories — only FactoryTask skill nodes.",
+    "- If a command is ambiguous or unsafe, respond with an error object explaining why.",
     "- Joints 4, 5, 6 are prone to singularity near zero; avoid planning through those configs.",
+    "",
+    "## Pick & Place Rules",
+    "When the user asks to pick an object and place it:",
+    "1. Use FactoryTask skill nodes such as pick_object, move_to_region, place_object, verify_scene.",
+    "2. Use fallback/retry/replan policy fields when postconditions can fail.",
+    "3. Do NOT manually emit io_set or raw gripper I/O unless a guarded skill explicitly requires it.",
+    "",
+    "## Perception Query Rules",
+    "- 'có vật gì trong tầm nhìn?' and similar perception-only questions:",
+    "  Call query_perception tool first. If it returns detections, summarize them in a",
+    "  FactoryTask observe response. If perception is unavailable, return:",
+    '  {"error": "MISSING_SLOT", "missing_fields": ["perception"],',
+    '   "hint": "Camera/perception service is not running. Start perception_full.launch.py first."}',
+    "",
+    "## Legacy Safety Note",
+    "The downstream compiler still emits guarded Semantic IR internally, but that is not the LLM-facing contract.",
+    "For 'robot đang ở đâu?' return a FactoryTask observe/get_pose style skill node or an explicit missing-data error.",
+    "For wait skill args include wait_duration_sec (default 2.0 if unspecified but clear).",
     "",
     "## Available Tools",
 )
@@ -1856,10 +1613,10 @@ _REACT_SYSTEM_PROMPT_PREFIX = (
 _REACT_SYSTEM_PROMPT_SUFFIX = (
     "",
     "## Output Format",
-    "When you have enough information, respond WITHOUT a tool call, with one Semantic IR JSON object.",
-    'The final JSON must include an "intent" field and must not include "primitive_type".',
-    'Multi-step requests: {"intent":"sequence","steps":[<semantic_ir_step>, ...]}.',
-    "Each sequence step is also Semantic IR with its own intent.",
+    "When you have enough information, respond WITHOUT a tool call, with one FactoryTask JSON object.",
+    'The final JSON must include "task_type":"factory_task" and must not include "primitive_type".',
+    'Multi-step requests: {"task_type":"factory_task","version":"1.0","task_id":"...","root":{"type":"sequence","children":[...]}}.',
+    "Each child is a FactoryTask node, not Semantic IR.",
     'Error responses: {"error":"<reason>","missing_fields":["<field>"],"hint":"<operator question>"}.',
 )
 
@@ -1879,7 +1636,7 @@ class AgentContext:
 
 
 class ReActAgent:
-    """ReAct agent: iteratively calls tools until a valid semantic IR is produced."""
+    """ReAct agent: iteratively calls tools until FactoryTask output is produced."""
 
     def __init__(
         self,
@@ -1900,7 +1657,7 @@ class ReActAgent:
         self._payload_parser = payload_parser or LLMParser()
 
     def run(self, user_text: str) -> dict:
-        """Run the ReAct loop and return final structured command (semantic IR)."""
+        """Run the ReAct loop and return a FactoryTask or error payload."""
         state = self._state_injector.snapshot()
         history: List[Tuple[str, Any]] = []
         counters = IterationCounters()
@@ -1935,25 +1692,29 @@ class ReActAgent:
             decoded_response = self._decode_llm_response(llm_response)
             tool_call = self._parse_tool_call(decoded_response)
             if tool_call is None:
-                semantic_ir = self._extract_semantic_ir(decoded_response)
+                final_payload = self._extract_final_payload(decoded_response)
                 if hasattr(self._ros_node, "_emit_trace"):
                     self._ros_node._emit_trace(
-                        "react_semantic_ir_generated",
+                        "react_final_payload_generated",
                         "reasoning",
                         source="react",
-                        summary=str(semantic_ir.get("intent") or "")[:80],
-                        details_json=json.dumps(semantic_ir)
+                        summary=str(
+                            final_payload.get("task_id")
+                            or final_payload.get("error")
+                            or ""
+                        )[:80],
+                        details_json=json.dumps(final_payload)
                     )
-                ok, err = self._validate_semantic_ir(semantic_ir)
+                ok, err = self._validate_final_payload(final_payload)
                 if not ok:
                     if counters.repair < self._budget.max_repair:
                         counters.repair += 1
                         history.append(("observation", f"validation_error: {err}"))
                         continue
                     return self._handoff(
-                        f"semantic_ir invalid after repair: {err}", history
+                        f"final response invalid after repair: {err}", history
                     )
-                return semantic_ir
+                return final_payload
 
             tool = self._tool_registry.get(tool_call.name)
             if tool is None:
@@ -2156,22 +1917,28 @@ class ReActAgent:
                 return ToolCall(name=name, args=args)
         return None
 
-    def _extract_semantic_ir(self, llm_response: Any) -> dict:
-        """Extract the final semantic IR from LLM response."""
+    def _extract_final_payload(self, llm_response: Any) -> dict:
+        """Extract the final FactoryTask or operator-facing error payload."""
         if isinstance(llm_response, dict):
             return llm_response
         if isinstance(llm_response, str):
-            return {"intent": "raw_text", "text": llm_response.strip()}
-        return {"intent": "raw_text", "text": str(llm_response)}
+            return {"error": "UNSUPPORTED_OR_AMBIGUOUS_COMMAND", "hint": llm_response.strip()}
+        return {"error": "UNSUPPORTED_OR_AMBIGUOUS_COMMAND", "hint": str(llm_response)}
 
-    def _validate_semantic_ir(self, semantic_ir: dict) -> Tuple[bool, str]:
-        if "intent" in semantic_ir and "primitive_type" not in semantic_ir:
+    def _validate_final_payload(self, payload: dict) -> Tuple[bool, str]:
+        if is_factory_task(payload):
+            try:
+                parse_factory_task(payload)
+            except FactoryTaskError as exc:
+                return False, str(exc)
             return True, ""
-        if "primitive_type" in semantic_ir:
-            return False, "semantic IR must use intent, not primitive_type"
-        if "error" in semantic_ir:
+        if "error" in payload:
             return True, ""
-        return False, "semantic IR requires an intent field"
+        if "primitive_type" in payload:
+            return False, "final response must be FactoryTask, not primitive command JSON"
+        if "intent" in payload:
+            return False, "final response must be FactoryTask; Semantic IR is internal only"
+        return False, "final response must be FactoryTask or an error object"
 
     def _handoff(self, reason: str, history: List[Tuple[str, Any]]) -> dict:
         def _serialize(content: Any) -> str:

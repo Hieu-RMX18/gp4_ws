@@ -234,9 +234,9 @@ class FakeSupervisorAdapter:
             }
         if normalized == "move joint 2 +5 deg":
             return {
-                "intent": "move_joint",
+                "intent": "move_joint_delta",
                 "joint_index": 1,
-                "joint_angle": 10.0,
+                "delta_angle": 5.0,
                 "angular_unit": "deg",
             }
         if normalized in {
@@ -821,6 +821,48 @@ class SupervisorServiceTests(unittest.TestCase):
                 step["intentSource"] == "text" for step in response["sequence"]["steps"]
             )
         )
+
+    def test_gateway_review_factory_task_metadata_is_visible_in_sequence_summary(
+        self,
+    ) -> None:
+        self.adapter.set_review_result(
+            accepted=True,
+            adapter="fake-gateway-review",
+            semanticIr={
+                "intent": "sequence",
+                "steps": [
+                    {"intent": "go_home"},
+                    {"intent": "wait", "wait_duration_sec": 1.0},
+                ],
+                "metadata": {
+                    "factory_task": {"task_id": "home-wait", "mode": "supervised_hardware"},
+                    "runtime_plan": {"type": "sequence", "children": []},
+                    "policy_decisions": [
+                        {
+                            "node_path": "root",
+                            "decision": "allow",
+                            "reason": "runtime control remains behind supervisor validation",
+                            "risk_level": "medium",
+                        }
+                    ],
+                },
+            },
+        )
+        lease_token = self._acquire_lease()
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="perform the reviewed factory task",
+            mode="sim",
+        )
+
+        self.assertTrue(response["accepted"], msg=response)
+        summary = response["sequence"]["planSummary"]
+        self.assertEqual(summary["factoryTask"]["task_id"], "home-wait")
+        self.assertEqual(summary["factoryTaskRuntimePlan"]["type"], "sequence")
+        self.assertEqual(summary["factoryTaskPolicyDecisions"][0]["decision"], "allow")
 
     def test_gateway_review_sequence_return_to_start_uses_start_joints(
         self,

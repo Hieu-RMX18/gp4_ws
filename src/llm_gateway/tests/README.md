@@ -30,8 +30,10 @@ This tier covers:
 | `test_scene_cache.py`             | Scene snapshot cache: TTL, invalidation, world-change |
 | `test_gripper_adapter.py`         | Gripper adapter fail-closed behavior |
 | `test_closed_loop_react.py`       | PostconditionVerifier logic |
+| `test_factory_task_contract.py`   | FactoryTask schema, compiler, runtime-control sentinel, policy decisions |
 | `test_pick_white_workpiece_sim.py`| Sim integration: pick/place with mocked scene |
 | `test_react_tools.py`             | Source-level ReAct tool safety contracts      |
+| `test_react_gateway_pipeline.py`  | ReAct-to-gateway contract and FactoryTask repair paths |
 | `test_llm_backend.py`             | LLM backend config and retry behavior         |
 | `test_get_pose.py` (Tier 1 tests) | GET_POSE schema, normalizer, semantic, parser |
 

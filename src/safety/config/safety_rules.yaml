@@ -74,7 +74,7 @@ operational_joint_limits:
   joint_2_l: {min: -1.9198, max:  2.2689}  # = hardware L (asymmetric)
   joint_3_u: {min: -1.1344, max:  3.4906}  # = hardware U (asymmetric)
   joint_4_r: {min: -2.443, max:  2.443}   # +/-140 deg (hardware R is +/-200 deg, derated)
-  joint_5_b: {min: -1.80, max:  1.80}     # +/-103 deg (hardware B is +/-123 deg, derated; widened per operator 2026-05-17 for HOME margin)
+  joint_5_b: {min: -2.00, max:  2.00}     # +/-115 deg (hardware B is +/-123 deg, derated; widened per operator 2026-06-09 from 1.80 rad)
   joint_6_t:
     default:  {min: -3.142, max:  3.142}     # +/-180 deg (default safety envelope)
     # Extended +/-455 deg mode is disabled for the current hardware-debug wave.

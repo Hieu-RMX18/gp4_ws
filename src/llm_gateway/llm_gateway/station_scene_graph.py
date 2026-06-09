@@ -42,6 +42,9 @@ class StationSceneGraph:
         self._regions = data.get("regions") if isinstance(data.get("regions"), dict) else {}
         self._objects = data.get("objects") if isinstance(data.get("objects"), dict) else {}
 
+    def to_dict(self) -> dict[str, Any]:
+        return self._data
+
     @classmethod
     def from_file(cls, path: str | Path) -> "StationSceneGraph":
         return cls(load_station_semantic_map(path))
@@ -56,8 +59,41 @@ class StationSceneGraph:
             return ResolveResult(ok=False, error="needs_clarification")
         return self._resolve_named(query, zones)
 
-    def resolve_object(self, query: str) -> ResolveResult:
-        return self._resolve_named(query, self._objects)
+    def resolve_object(
+        self, query: str, live_scene: dict[str, Any] | None = None
+    ) -> ResolveResult:
+        """Resolve an object query against static config, then live perception.
+
+        Static objects registered in station_semantic_map.yaml are always
+        checked first.  When no static match is found **and** a live_scene
+        payload (from the perception service) is supplied, we scan the
+        ``detections`` list for a ``class_id`` that fuzzy-matches the query.
+        This allows users to request objects that the camera can see but
+        that were never pre-registered in config (e.g. "apple", "bolt").
+        """
+        static_result = self._resolve_named(query, self._objects)
+        if static_result.ok:
+            return static_result
+
+        # ── Dynamic fallback: search live perception detections ─────────
+        if isinstance(live_scene, dict):
+            detections = live_scene.get("detections", [])
+            if isinstance(detections, list):
+                normalized_query = _normalize(query)
+                for detection in detections:
+                    if not isinstance(detection, dict):
+                        continue
+                    class_id = str(detection.get("class_id", ""))
+                    if not class_id:
+                        continue
+                    if _normalize(class_id) == normalized_query:
+                        return ResolveResult(
+                            ok=True,
+                            name=class_id,
+                            payload={"dynamic": True, "class_id": class_id, "detection": detection},
+                        )
+
+        return static_result
 
     def runtime_geometry_ready(self, region_name: str) -> bool:
         region = self._regions.get(region_name)

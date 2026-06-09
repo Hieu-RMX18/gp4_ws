@@ -4,11 +4,11 @@
 - Branch: `upgrade-react-8626`
 - Source plan: `/home/hieu2/Documents/super-react-plan-8626.md`
 - Scope: `llm_gateway`, `safety`, `motion_core`/MoveIt integration points, gripper I/O adapter path, tests, docs
-- Status: Approved for spec writing by user; awaiting written-spec review before implementation planning
+- Status: Implementation in progress; FactoryTask is now the LLM-facing output contract.
 
 ## 1. Purpose
 
-The ReAct gateway currently exposes primitive motion and I/O intents, but it does not provide a semantic station model, strict region/object resolver, task compiler, composite pick/place tools, scene cache, verified gripper path, MTC-backed pick/place path, or closed-loop postcondition verification. This design turns the full Phase 1-8 plan into an implementable program while preserving the existing fail-closed robot-control boundary.
+The ReAct gateway exposes primitive motion and I/O intents, and the current upgrade adds semantic station grounding, a FactoryTask task-tree contract, scene-aware compilation, composite pick/place behavior, scene cache, gripper verification, optional MTC handoff, and closed-loop postcondition checks while preserving the existing fail-closed robot-control boundary.
 
 The final system must let an operator express pick/place goals in natural language or a strict goal DSL, resolve named station regions and objects deterministically, generate safe candidate poses, execute composite pick/place through validated Semantic IR or an MTC-backed service path, verify world-state changes, and stop safely when any required runtime fact is missing.
 
@@ -39,12 +39,13 @@ Implementation should happen in waves, but the accepted target is the full Phase
 
 ## 4. Architecture
 
-The edge architecture stays unchanged: LLM output and composite tools may propose structured goals, but motion still flows through Semantic IR, validation, planning, and supervised execution.
+The edge architecture stays unchanged: LLM output is constrained to FactoryTask JSON, and motion still flows through Semantic IR, validation, planning, and supervised execution.
 
 ```text
 operator text / goal DSL
   -> ReAct agent
-  -> task compiler in intent_engine.py
+  -> FactoryTask task tree
+  -> TaskCompiler / TaskRuntime policy checks
   -> StationSceneGraph resolver
   -> candidate pose generator in react_planner.py
   -> composite tools / optional MTC client

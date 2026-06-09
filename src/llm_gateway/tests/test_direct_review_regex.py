@@ -1,7 +1,8 @@
 """Unit tests for the narrowed direct review path.
 
-Free-form motion language belongs to the ReAct/LLM path. The only raw-text
-direct review shortcut left in llm_gateway is the protective stop command.
+Free-form motion language belongs to the ReAct/LLM path. Direct review only
+keeps protective stop and safety-critical deterministic commands whose wrong
+parse could move the wrong joint or enter station geometry.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ def direct_review():
     return LLMGatewayNode._direct_review_semantic_ir
 
 
-class TestDirectReviewProtectiveOnly:
+class TestDirectReviewDeterministicSafety:
     @pytest.mark.parametrize(
         "raw_text",
         ["stop", "stop motion", "cancel motion", "halt"],
@@ -25,11 +26,84 @@ class TestDirectReviewProtectiveOnly:
         assert direct_review(raw_text) == {"intent": "stop"}
 
     @pytest.mark.parametrize(
+        ("raw_text", "expected"),
+        [
+            (
+                "xoay khớp số 3 +15 độ",
+                {
+                    "intent": "move_joint_delta",
+                    "joint_index": 2,
+                    "delta_angle": 15.0,
+                    "angular_unit": "deg",
+                },
+            ),
+            (
+                "xoay khớp 3 thêm 15 độ",
+                {
+                    "intent": "move_joint_delta",
+                    "joint_index": 2,
+                    "delta_angle": 15.0,
+                    "angular_unit": "deg",
+                },
+            ),
+            (
+                "xoay khớp số 3 sang góc 45 độ",
+                {
+                    "intent": "move_joint",
+                    "joint_index": 2,
+                    "joint_angle": 45.0,
+                    "angular_unit": "deg",
+                },
+            ),
+            (
+                "rotate joint 3 by -20 degrees",
+                {
+                    "intent": "move_joint_delta",
+                    "joint_index": 2,
+                    "delta_angle": -20.0,
+                    "angular_unit": "deg",
+                },
+            ),
+        ],
+    )
+    def test_obvious_single_joint_commands_are_direct_and_indexed(
+        self, direct_review, raw_text, expected
+    ):
+        assert direct_review(raw_text) == expected
+
+    def test_station_navigation_uses_top_surface_clearance(self, direct_review):
+        class _SceneGraph:
+            def resolve_region(self, query):
+                assert query == "gá phôi"
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "ok": True,
+                        "payload": {
+                            "geometry": {
+                                "center": {"x": 0.28, "y": 0.18, "z": 0.12},
+                                "size": {"x": 0.22, "y": 0.12, "z": 0.10},
+                            },
+                            "zones": {"grasp_zone": {"default_clearance_m": 0.08}},
+                        },
+                    },
+                )()
+
+        result = direct_review("đi đến gá phôi", station_scene_graph=_SceneGraph())
+
+        assert result == {
+            "intent": "absolute_move_ptp",
+            "target_pose": {
+                "position": {"x": 0.28, "y": 0.18, "z": 0.25},
+            },
+        }
+
+    @pytest.mark.parametrize(
         "raw_text",
         [
             "move down 2 cm",
             "move delta down 2 cm",
-            "rotate joint s +15 degrees",
             "draw circle radius 5cm",
             "vẽ hình tròn bán kính 5cm",
             "go home",

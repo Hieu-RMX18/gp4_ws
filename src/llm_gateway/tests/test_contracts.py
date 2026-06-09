@@ -121,17 +121,13 @@ def test_normalizer_planner_defaults_cover_public_primitives():
         ), f"Normalizer missing planner default for motion primitive '{prim}'"
 
 
-def test_prompt_builder_mentions_all_semantic_intents():
-    """The system prompt must mention every frozen semantic intent.
-
-    v2.1 change: prompt outputs Semantic IR with 'intent' field, not
-    direct primitive_type. We verify intent names instead of primitive names.
-    """
+def test_prompt_builder_uses_factory_task_contract_not_semantic_ir():
+    """The LLM-facing prompt must request FactoryTask, not frozen Semantic IR."""
     prompt = build_system_prompt("{}")
-    for intent_name in FROZEN_SEMANTIC_INTENTS:
-        assert (
-            intent_name in prompt
-        ), f"Prompt builder does not mention semantic intent '{intent_name}'"
+    assert "FactoryTask" in prompt
+    assert '"task_type": "factory_task"' in prompt
+    assert "Semantic IR (normal path)" not in prompt
+    assert '"intent":"sequence"' not in prompt
 
 
 def test_intent_to_primitive_mapping_covers_all_primitives():

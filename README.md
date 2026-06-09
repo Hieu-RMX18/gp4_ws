@@ -1,7 +1,7 @@
 # Yaskawa GP4 / YRC1000micro — ROS 2 Agentic Robot Control
 
 [![ROS 2](https://img.shields.io/badge/ROS_2-Humble-blue.svg)](https://docs.ros.org/en/humble/)
-[![MoveIt 2](https://img.shields.io/badge/MoveIt_2-Rolling-green.svg)](https://moveit.ros.org/)
+[![MoveIt 2](https://img.shields.io/badge/MoveIt_2-Humble-green.svg)](https://moveit.ros.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 An end-to-end, deterministic LLM-driven motion planning and execution system for the **Yaskawa GP4** industrial robot arm with **YRC1000micro** controller. Built on **ROS 2 Humble + MoveIt 2 + MotoROS2**, translating natural language intents into collision-aware, hardware-safe robot actions.
@@ -20,6 +20,7 @@ An end-to-end, deterministic LLM-driven motion planning and execution system for
 8. [Example Commands](#example-commands)
 9. [HMI Web Interface](#hmi-web-interface)
 10. [Configuration](#configuration)
+11. [Testing & Validation](#testing--validation)
 
 ---
 
@@ -134,15 +135,9 @@ For D435i hand-eye calibration, refer to `docs/perception/d435i_hand_eye_calibra
 Hand-eye calibration was performed on 2026-05-23 (12 samples, 2.614mm reprojection
 error, PARK solver). Re-calibrate after any physical camera remount.
 
-### Known Open Items
-
-- **Perception Calibration:** D435i hand-eye calibration has been performed (2026-05-23, 12 samples, 2.614mm reprojection error). Re-calibrate if extrinsics drift or after any physical camera remount.
-
----
-
 ## Supported Primitives
 
-13 public primitives fully integrated across the 4-tier pipeline. 
+13 public primitives are represented across the 4-tier pipeline; hardware validation status is called out where it differs.
 Source of truth for implementation logic: `src/primitives/`.
 
 ### Motion
@@ -194,6 +189,27 @@ The gateway resolves pick/place goals through `src/llm_gateway/config/station_se
 
 ---
 
+### FactoryTask task planning
+
+The ReAct agent produces **FactoryTask** JSON as its final output, not raw Semantic IR. Semantic IR remains an internal compiler artifact only.
+
+| Component | File | Role |
+|-----------|------|------|
+| `FactoryTask` / `TaskNode` | `factory_task.py` | LLM-facing task tree contract (sequence, skill, repeat, for_each, retry, fallback, observe, wait_until) |
+| `WorldModel` | `factory_task.py` | Grounding layer; provides object poses and collections from live perception cache |
+| `PolicyEngine` | `factory_task.py` | Records a visible decision (`allow`, retry, fallback, replan) for every node at plan time |
+| `TaskCompiler` | `factory_task.py` | Translates static FactoryTask trees to guarded Semantic IR for supervisor review; rejects runtime-control nodes with a clear error |
+| `TaskRuntime` | `factory_task.py` | Executes FactoryTask control flow (retry, fallback, replan) via an injected skill executor; never bypasses safety validation |
+| `CompiledTask` | `factory_task.py` | Carries the resulting Semantic IR, the runtime plan, and the list of policy decisions for HMI display |
+
+**LLM output contract** — The system prompt instructs the model to emit a single FactoryTask JSON object. Final responses containing raw `intent` / Semantic IR are rejected and trigger a repair attempt. FactoryTask skill nodes such as `go_home`, `move_named_pose`, `pick_object`, `place_object`, `verify_scene`, `draw_shape`, and `draw_text` are the only valid skill names.
+
+**Runtime-control path** — When the FactoryTask root is a runtime-control node (`retry`, `fallback`, `repeat`, `for_each`), `TaskCompiler` raises `FactoryTaskError`. The gateway then returns a runtime-execution sentinel IR that carries the full task tree and visible policy decisions in `metadata.runtime_plan` / `metadata.policy_decisions`. The HMI `planSummary` exposes `factoryTask`, `factoryTaskRuntimePlan`, and `factoryTaskPolicyDecisions` keys so operators can inspect the plan before confirming.
+
+**Replan policy** — FactoryTask payloads may include `replan_policy.max_replans` to control how many replan cycles `TaskRuntime` will attempt when a skill returns `requests_replan=True`. The default is 1 attempt; failing that, execution halts and a `TaskRuntimeReport` is returned with all policy decisions recorded.
+
+---
+
 ## Prerequisites
 
 - **OS:** Ubuntu 22.04 LTS
@@ -234,7 +250,7 @@ source install/setup.bash
 # 7. HMI backend dependencies
 pip3 install --user -r hmi/requirements.txt
 
-# 7. HMI frontend
+# 8. HMI frontend
 cd ~/gp4_ws/hmi/frontend && npm ci
 ```
 
@@ -421,13 +437,3 @@ export ROS_DOMAIN_ID=0
 ---
 
 *Research/thesis/demo system — not ISO 10218 production certified. Treat as real-hardware-adjacent at all times.*
-
-Implemented multi-stage safety guard system:
-- **JointPositionGuard:** 3-stage placement (A: pre-downsample in PrimitiveRouterDispatch, B: QualityGate, C: hw_adapter dispatch boundary)
-- **ManipulabilityGuard:** Yoshikawa index via MoveIt Jacobian, wired into QualityGate Stage B
-- **WristFlipGuard:** Extended with cumulative rotation tracking per joint
-- **CI/CD:** Replaced stub jobs with real tool invocations (colcon build/test, pytest, clang-tidy, vulture)
-- **Validation:** Extended `tools/validate_safety_chain.py` with MOVE_REL workspace/forbidden-zone constant sync checks
-- **E2E Testing:** Added `tools/e2e/test_full_pipeline.py` for manual full-pipeline simulation testing
-- **J5 Limit:** Widened to ±1.80 rad (±103°) per operator approval 2026-05-17, accommodating home pose J5=-1.602 rad
-- **System commissioned:** Full pipeline running on real hardware (HMI → safety → MoveIt → hw_adapter → YRC1000micro)

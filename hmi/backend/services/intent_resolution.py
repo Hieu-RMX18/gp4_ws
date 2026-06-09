@@ -681,13 +681,16 @@ class IntentResolutionService(IntentNormalizationMixin):
             angle = float(joint_match.group(3))
             unit = (joint_match.group(4) or "deg").lower()
             if unit in {"deg", "degree", "degrees"}:
-                angle = math.radians(angle)
-            elif unit not in {"rad", "radian", "radians"}:
+                angular_unit = "deg"
+            elif unit in {"rad", "radian", "radians"}:
+                angular_unit = "rad"
+            else:
                 raise IntentResolutionError("joint angle unit must be deg or rad")
             return {
-                "primitive_type": "MOVE_JOINT",
+                "intent": "move_joint_delta",
                 "joint_index": joint_index,
-                "joint_angle": angle,
+                "delta_angle": angle,
+                "angular_unit": angular_unit,
             }
 
         # Multi-joint move (local fallback) - e.g., "rotate joints 1 2 by 10 deg"
@@ -700,16 +703,19 @@ class IntentResolutionService(IntentNormalizationMixin):
             angle = float(multi_joint_match.group(3))
             unit = (multi_joint_match.group(4) or "deg").lower()
             if unit in {"deg", "degree", "degrees"}:
-                angle = math.radians(angle)
-            elif unit not in {"rad", "radian", "radians"}:
+                angular_unit = "deg"
+            elif unit in {"rad", "radian", "radians"}:
+                angular_unit = "rad"
+            else:
                 raise IntentResolutionError("joint angle unit must be deg or rad")
             # Return semantic IR for sequence of joint moves
             steps = []
             for idx in joint_indices:
                 steps.append({
-                    "intent": "move_joint",
+                    "intent": "move_joint_delta",
                     "joint_index": idx,
-                    "joint_angle": angle,
+                    "delta_angle": angle,
+                    "angular_unit": angular_unit,
                 })
             return {"intent": "sequence", "steps": steps}
 

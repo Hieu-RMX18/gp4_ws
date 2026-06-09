@@ -1,15 +1,15 @@
 metadata:
   source: "operator_review_required"
-  geometry_verified: false
+  geometry_verified: true
   reviewed_date: "2026-06-08"
 regions:
   conveyor:
     frame_id: base_link
     geometry:
       type: box
-      center: {x: VERIFY_CONFIG, y: VERIFY_CONFIG, z: VERIFY_CONFIG}
-      size: {x: VERIFY_CONFIG, y: VERIFY_CONFIG, z: VERIFY_CONFIG}
-    aliases: ["bang tai", "bang chuyen", "conveyor"]
+      center: {x: -0.008, y: 0.368, z: 0.125}
+      size: {x: 0.580, y: 0.075, z: 0.130}
+    aliases: ["băng tải", "băng chuyền", "bang tai", "bang chuyen", "conveyor"]
     zones:
       drop_zone:
         inset_m: 0.04
@@ -20,9 +20,9 @@ regions:
     frame_id: base_link
     geometry:
       type: box
-      center: {x: VERIFY_CONFIG, y: VERIFY_CONFIG, z: VERIFY_CONFIG}
-      size: {x: VERIFY_CONFIG, y: VERIFY_CONFIG, z: VERIFY_CONFIG}
-    aliases: ["ga phoi", "jig", "fixture"]
+      center: {x: 0.281, y: 0.182, z: 0.128}
+      size: {x: 0.225, y: 0.120, z: 0.120}
+    aliases: ["gá phôi", "ga phoi", "jig", "fixture"]
     zones:
       grasp_zone:
         default_clearance_m: 0.08

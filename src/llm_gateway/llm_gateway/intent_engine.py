@@ -2881,6 +2881,15 @@ _NAMED_POSE_ALIASES: Dict[str, str] = {
     "điểm b": "poseB",
     "diem a": "poseA",
     "diem b": "poseB",
+    # Vietnamese "về X" (return to / go to X)
+    "về a": "poseA",
+    "về b": "poseB",
+    "ve a": "poseA",
+    "ve b": "poseB",
+    "về home": "home",
+    "về ready": "ready",
+    "ve home": "home",
+    "ve ready": "ready",
 }
 
 
@@ -2931,7 +2940,12 @@ class SkillCall:
     args: Dict[str, Any] = field(default_factory=dict)
 
 
-def compile_goal(goal_dsl: Dict[str, Any], *, scene_graph: Any) -> List[SkillCall]:
+def compile_goal(
+    goal_dsl: Dict[str, Any],
+    *,
+    scene_graph: Any,
+    live_scene: Dict[str, Any] | None = None,
+) -> List[SkillCall]:
     if not isinstance(goal_dsl, dict):
         return [SkillCall("needs_clarification", {"field": "goal", "query": "non_object"})]
     action = str(goal_dsl.get("action") or "").strip()
@@ -2940,7 +2954,7 @@ def compile_goal(goal_dsl: Dict[str, Any], *, scene_graph: Any) -> List[SkillCal
 
     object_query = str(goal_dsl.get("object") or "").strip()
     destination_query = str(goal_dsl.get("destination") or "").strip()
-    object_result = scene_graph.resolve_object(object_query)
+    object_result = scene_graph.resolve_object(object_query, live_scene=live_scene)
     if not object_result.ok:
         return [
             SkillCall("needs_clarification", {"field": "object", "query": object_query})
@@ -2977,10 +2991,12 @@ class IntentRouter(DrawRouterMixin):
         macro_policy_path: str | None = None,
         runtime_mode: str = "hardware",
         named_pose_srdf_path: str | None = None,
+        station_semantic_map: Dict[str, Any] | None = None,
     ) -> None:
         self._macro_policy = load_macro_policy(macro_policy_path)
         self._runtime_mode = str(runtime_mode).strip().lower() or "hardware"
         self._named_pose_targets = load_srdf_named_poses(named_pose_srdf_path)
+        self._station_semantic_map = station_semantic_map
 
     def route(self, payload: Dict[str, Any]) -> RouteResult:
         if not isinstance(payload, dict):
@@ -3073,11 +3089,15 @@ class IntentRouter(DrawRouterMixin):
                 "velocity_scale": float(payload["velocity_scale"]),
             }
         if intent == "wait":
-            if "wait_duration_sec" not in payload:
-                raise ValueError("wait requires wait_duration_sec.")
+            duration = payload.get("wait_duration_sec")
+            if duration is None:
+                # Default to 2.0 s when the LLM omits the field but the intent
+                # is clearly "wait".  Matches the system prompt contract:
+                # "default 2.0 if unspecified but clear intent".
+                duration = 2.0
             return {
                 "primitive_type": "WAIT",
-                "wait_duration_sec": float(payload["wait_duration_sec"]),
+                "wait_duration_sec": float(duration),
             }
         if intent == "stop":
             return {"primitive_type": "STOP"}
@@ -3110,23 +3130,49 @@ class IntentRouter(DrawRouterMixin):
         raw_pose = str(payload.get("pose_name") or payload.get("name") or "").strip()
         if not raw_pose:
             raise ValueError("move_named_pose requires pose_name.")
+
+        # 1. Check SRDF named poses first (Joint targets)
         pose_name = canonicalize_named_pose(raw_pose, self._named_pose_targets)
-        if pose_name is None:
-            raise ValueError(
-                f"unknown named pose '{raw_pose}'; "
-                f"available named poses: {sorted(self._named_pose_targets)}"
-            )
-        joint_target = self._named_pose_targets.get(pose_name)
-        if joint_target is None:
-            raise ValueError(
-                f"unknown named pose '{pose_name}'; "
-                f"available named poses: {sorted(self._named_pose_targets)}"
-            )
-        command = self._base_command("PTP", payload)
-        command["joint_target"] = list(joint_target)
-        command["planner_id"] = str(command.get("planner_id") or "PILZ_PTP")
-        command["reference_frame"] = _FRAME_BASE_LINK
-        return command
+        if pose_name is not None and pose_name in self._named_pose_targets:
+            joint_target = self._named_pose_targets.get(pose_name)
+            command = self._base_command("PTP", payload)
+            command["joint_target"] = list(joint_target)
+            command["planner_id"] = str(command.get("planner_id") or "PILZ_PTP")
+            command["reference_frame"] = _FRAME_BASE_LINK
+            return command
+
+        # 2. Check semantic map regions (Cartesian targets)
+        if self._station_semantic_map is not None:
+            from llm_gateway.station_scene_graph import StationSceneGraph
+            sg = StationSceneGraph(self._station_semantic_map)
+            region_res = sg.resolve_region(raw_pose)
+            if region_res.ok and isinstance(region_res.payload, dict):
+                region_data = region_res.payload
+                center = region_data.get("geometry", {}).get("center", {})
+                size = region_data.get("geometry", {}).get("size", {})
+
+                # Calculate safe approach point: Top of the bounding box + 10cm clearance
+                z_clearance = 0.10
+                safe_z = float(center.get("z", 0.0)) + float(size.get("z", 0.0)) / 2.0 + z_clearance
+
+                command = self._base_command("PTP", payload)
+                command["reference_frame"] = str(region_data.get("frame_id", _FRAME_BASE_LINK))
+                command["target_pose"] = {
+                    "position": {
+                        "x": float(center.get("x", 0.0)),
+                        "y": float(center.get("y", 0.0)),
+                        "z": safe_z
+                    }
+                }
+                # Keep current orientation to point downwards
+                command["keep_current_orientation"] = True
+                command["planner_id"] = str(command.get("planner_id") or "PILZ_PTP")
+                return command
+
+        raise ValueError(
+            f"unknown named pose or region '{raw_pose}'; "
+            f"available joint poses: {sorted(self._named_pose_targets)}"
+        )
 
     def _route_absolute_move(
         self, payload: Dict[str, Any], *, primitive_type: str

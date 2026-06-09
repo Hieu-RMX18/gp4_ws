@@ -9,6 +9,7 @@ explicit reason visible in pytest output.
 """
 
 import json
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -34,6 +35,7 @@ _SKIP_REASON = "requires colcon-sourced workspace with built interfaces"
 # Conditional imports — only available when interfaces is on PYTHONPATH.
 # Tests are skipped before these are referenced when _INTERFACES_AVAILABLE is False.
 if _INTERFACES_AVAILABLE:
+    import rclpy
     from rclpy.parameter import Parameter
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
@@ -50,6 +52,15 @@ class ImmediateFuture:
         if self._error is not None:
             raise self._error
         return self._result
+
+
+def _spin_until(node, predicate, timeout_sec: float = 2.0):
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        rclpy.spin_once(node, timeout_sec=0.05)
+    assert predicate()
 
 
 def test_gateway_full_flow_uses_sanitized_json():
@@ -416,6 +427,8 @@ def test_gateway_executes_sequence_step_by_step():
 
     node.process_intent("go home, wait, then move linearly")
 
+    _spin_until(node, lambda: "sequence_succeeded" in statuses)
+
     assert "routed" in statuses
     assert "sequence_valid" in statuses
     assert "sequence_step:1/3" in statuses
@@ -516,6 +529,8 @@ def test_gateway_aborts_sequence_after_first_failed_step_and_marks_manual_recove
     )
 
     node.process_intent("set io, go home, then move linearly")
+
+    _spin_until(node, lambda: "rejected:sequence_step_failed" in statuses)
 
     assert node._validate_client.call_async.call_count == 2
     assert node._execute_client.send_goal_async.call_count == 1

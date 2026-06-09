@@ -87,6 +87,29 @@ _COMMA_SEQUENCE_PREFIXES = {
 }
 
 
+def _factory_task_summary_fields(
+    structured_intent: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(structured_intent, dict):
+        return {}
+    metadata = structured_intent.get("metadata")
+    if not isinstance(metadata, dict):
+        return {}
+    summary: dict[str, Any] = {}
+    factory_task = metadata.get("factory_task")
+    if isinstance(factory_task, dict):
+        summary["factoryTask"] = dict(factory_task)
+    runtime_plan = metadata.get("runtime_plan")
+    if isinstance(runtime_plan, dict):
+        summary["factoryTaskRuntimePlan"] = dict(runtime_plan)
+    policy_decisions = metadata.get("policy_decisions")
+    if isinstance(policy_decisions, list):
+        summary["factoryTaskPolicyDecisions"] = [
+            dict(item) if isinstance(item, dict) else item
+            for item in policy_decisions
+        ]
+    return summary
+
 class SupervisorSequenceMixin:
     """Sequence parsing, routing, and summary helpers for SupervisorService."""
 
@@ -327,6 +350,7 @@ class SupervisorSequenceMixin:
             "requiresConfirmation": requires_confirmation,
             "stepCount": len(parsed_steps),
         }
+        summary.update(_factory_task_summary_fields(structured_intent))
         if diagnostics:
             summary["diagnostics"] = list(diagnostics)
         macro_name = str((route_metadata or {}).get("macro_name") or "").strip().lower()

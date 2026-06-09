@@ -75,54 +75,114 @@ def _make_agent(responses, tools=None, schema_validator=None, ros_node=None):
     )
     return agent
 
+def _skill_node(name, args=None):
+    return {"type": "skill", "name": name, "args": dict(args or {})}
 
-def test_agent_returns_final_semantic_ir():
-    agent = _make_agent([json.dumps({"intent": "go_home"})])
+def _factory_task(task_id="home", root=None):
+    return {
+        "task_type": "factory_task",
+        "version": "1.0",
+        "task_id": task_id,
+        "root": root or _skill_node("go_home"),
+    }
+
+
+def test_agent_rejects_final_semantic_ir_and_repairs_to_factory_task():
+    task = _factory_task("home")
+    agent = _make_agent([json.dumps({"intent": "go_home"}), json.dumps(task)])
+
     result = agent.run("go home")
-    assert result == {"intent": "go_home"}
+    assert result == task
+
+def test_agent_returns_final_factory_task():
+    factory_task = {
+        "task_type": "factory_task",
+        "version": "1.0",
+        "task_id": "home-wait",
+        "root": {
+            "type": "sequence",
+            "children": [
+                {"type": "skill", "name": "go_home", "args": {}},
+                {"type": "skill", "name": "wait", "args": {"wait_duration_sec": 1.0}},
+            ],
+        },
+    }
+    agent = _make_agent([json.dumps(factory_task)])
+
+    result = agent.run("go home then wait")
+
+    assert result == factory_task
+
+def test_react_prompt_describes_factory_task_output_contract():
+    agent = _make_agent([json.dumps(_factory_task("home"))])
+
+    messages = agent._build_prompt("go home", StateInjector().snapshot(), [])
+    system_prompt = messages[0]["content"]
+
+    assert "FactoryTask" in system_prompt
+    assert '"task_type":"factory_task"' in system_prompt
+    assert "Do not output final Semantic IR" in system_prompt
+
+def test_react_prompt_examples_do_not_expose_final_semantic_ir():
+    agent = _make_agent([json.dumps(_factory_task("home"))])
+
+    messages = agent._build_prompt("draw a circle", StateInjector().snapshot(), [])
+    system_prompt = messages[0]["content"]
+
+    assert 'Assistant: {"intent":' not in system_prompt
+    assert 'Assistant: {"intent":"draw_shape"' not in system_prompt
+    assert 'Assistant: {"intent":"draw_text"' not in system_prompt
+    assert '"intent": "get_pose"' not in system_prompt
+    assert "error intent" not in system_prompt
+    assert '"name":"draw_shape"' in system_prompt
+    assert '"name":"draw_text"' in system_prompt
 
 
-def test_agent_accepts_intent_router_semantic_ir_without_primitive_schema():
+def test_agent_rejects_intent_router_semantic_ir_without_primitive_schema():
     schema_validator = MagicMock()
     schema_validator.validate_against_schema.side_effect = AssertionError(
-        "semantic IR must be routed before primitive schema validation"
+        "legacy primitive schema validator must not be used for FactoryTask final output"
     )
     agent = _make_agent(
-        [json.dumps({"intent": "go_home"})],
+        [json.dumps({"intent": "go_home"}), json.dumps({"intent": "go_home"})],
         schema_validator=schema_validator,
     )
     result = agent.run("go home")
-    assert result == {"intent": "go_home"}
+    assert result.get("_handoff") is True
+    assert "FactoryTask" in result.get("reason", "")
 
 
-def test_agent_extracts_semantic_ir_from_openai_chat_wrapper():
+def test_agent_extracts_factory_task_from_openai_chat_wrapper():
+    task = _factory_task("home")
     response = {
         "choices": [
             {
                 "message": {
-                    "content": json.dumps({"intent": "go_home"}, separators=(",", ":"))
+                    "content": json.dumps(task, separators=(",", ":"))
                 }
             }
         ]
     }
     agent = _make_agent([json.dumps(response)])
     result = agent.run("go home")
-    assert result == {"intent": "go_home"}
+    assert result == task
 
 
 def test_agent_one_tool_call_then_final():
+    task = _factory_task("home")
     agent = _make_agent(
         [
             json.dumps({"tool_call": "echo", "args": {"msg": "hello"}}),
-            json.dumps({"intent": "go_home"}),
+            json.dumps(task),
         ],
         tools=[EchoTool()],
     )
     result = agent.run("go home")
-    assert result == {"intent": "go_home"}
+    assert result == task
 
 
 def test_agent_extracts_tool_call_from_openai_chat_tool_wrapper():
+    task = _factory_task("home")
     response = {
         "choices": [
             {
@@ -143,15 +203,16 @@ def test_agent_extracts_tool_call_from_openai_chat_tool_wrapper():
     agent = _make_agent(
         [
             json.dumps(response),
-            json.dumps({"intent": "go_home"}),
+            json.dumps(task),
         ],
         tools=[EchoTool()],
     )
     result = agent.run("go home")
-    assert result == {"intent": "go_home"}
+    assert result == task
 
 
 def test_agent_extracts_tool_call_from_openai_chat_function_wrapper():
+    task = _factory_task("home")
     response = {
         "choices": [
             {
@@ -167,39 +228,41 @@ def test_agent_extracts_tool_call_from_openai_chat_function_wrapper():
     agent = _make_agent(
         [
             json.dumps(response),
-            json.dumps({"intent": "go_home"}),
+            json.dumps(task),
         ],
         tools=[EchoTool()],
     )
     result = agent.run("go home")
-    assert result == {"intent": "go_home"}
+    assert result == task
 
 
 def test_agent_passes_ros_node_to_tool_context():
     tool = ContextProbeTool()
     ros_node = object()
+    task = _factory_task("home")
     agent = _make_agent(
         [
             json.dumps({"tool_call": "probe_context", "args": {}}),
-            json.dumps({"intent": "go_home"}),
+            json.dumps(task),
         ],
         tools=[tool],
         ros_node=ros_node,
     )
     result = agent.run("probe")
-    assert result == {"intent": "go_home"}
+    assert result == task
     assert tool.seen_ros_node is ros_node
 
 
 def test_agent_unknown_tool_continues():
+    task = _factory_task("home")
     agent = _make_agent(
         [
             json.dumps({"tool_call": "nonexistent", "args": {}}),
-            json.dumps({"intent": "go_home"}),
+            json.dumps(task),
         ]
     )
     result = agent.run("go home")
-    assert result == {"intent": "go_home"}
+    assert result == task
 
 
 def test_agent_budget_exceeded():
@@ -213,9 +276,10 @@ def test_agent_budget_exceeded():
 
 
 def test_agent_schema_invalid_then_repair():
+    task = _factory_task("home")
     responses = [
         json.dumps({"primitive_type": "INVALID_TYPE"}),
-        json.dumps({"intent": "go_home"}),
+        json.dumps(task),
     ]
     schema_validator = MagicMock()
     schema_validator.validate_against_schema.side_effect = [
@@ -238,7 +302,7 @@ def test_agent_schema_invalid_then_repair():
         schema_validator=schema_validator,
     )
     result = agent.run("go home")
-    assert result == {"intent": "go_home"}
+    assert result == task
 
 
 def test_agent_repair_exhausted_handoff():
@@ -262,69 +326,81 @@ def test_agent_repair_exhausted_handoff():
     )
     result = agent.run("loop")
     assert result.get("_handoff") is True
-    assert "semantic_ir invalid after repair" in result.get("reason", "")
+    assert "final response invalid after repair" in result.get("reason", "")
 
 
 def test_agent_rejects_primitive_json_as_final_output():
+    task = _factory_task("home")
     responses = [
         json.dumps({"primitive_type": "HOME"}),
-        json.dumps({"intent": "go_home"}),
+        json.dumps(task),
     ]
     agent = _make_agent(responses)
     result = agent.run("go home")
-    assert result == {"intent": "go_home"}
+    assert result == task
 
 
 # ── Complex multi-step reasoning tests ──────────────────────────────
 
 
 def test_agent_multi_step_sequence_a_b_home():
-    """ReAct produces a sequence for 'move to A, then B, then home'."""
-    semantic_ir = {
-        "intent": "sequence",
-        "steps": [
-            {
-                "intent": "absolute_move_ptp",
-                "target_pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.4}},
-                "reference_frame": "base_link",
-            },
-            {
-                "intent": "absolute_move_ptp",
-                "target_pose": {"position": {"x": 0.2, "y": -0.1, "z": 0.35}},
-                "reference_frame": "base_link",
-            },
-            {"intent": "go_home"},
-        ],
-    }
-    agent = _make_agent([json.dumps(semantic_ir)])
+    """ReAct produces a FactoryTask sequence for 'move to A, then B, then home'."""
+    task = _factory_task(
+        "move-a-b-home",
+        {
+            "type": "sequence",
+            "children": [
+                _skill_node(
+                    "move_cartesian",
+                    {
+                        "target_pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.4}},
+                        "reference_frame": "base_link",
+                    },
+                ),
+                _skill_node(
+                    "move_cartesian",
+                    {
+                        "target_pose": {"position": {"x": 0.2, "y": -0.1, "z": 0.35}},
+                        "reference_frame": "base_link",
+                    },
+                ),
+                _skill_node("go_home"),
+            ],
+        },
+    )
+    agent = _make_agent([json.dumps(task)])
     result = agent.run("move to x=0.3 y=0.1 z=0.4, then x=0.2 y=-0.1 z=0.35, then home")
-    assert result["intent"] == "sequence"
-    assert len(result["steps"]) == 3
-    assert result["steps"][0]["intent"] == "absolute_move_ptp"
-    assert result["steps"][2]["intent"] == "go_home"
+    assert result == task
+    assert len(result["root"]["children"]) == 3
+    assert result["root"]["children"][0]["name"] == "move_cartesian"
+    assert result["root"]["children"][2]["name"] == "go_home"
 
 
 def test_agent_sequence_home_wait_move():
     """Sequence: go home, wait 2s, move forward 5cm."""
-    semantic_ir = {
-        "intent": "sequence",
-        "steps": [
-            {"intent": "go_home"},
-            {"intent": "wait", "wait_duration_sec": 2.0},
-            {
-                "intent": "move_relative",
-                "delta": {"x": 5.0, "y": 0.0, "z": 0.0},
-                "linear_unit": "cm",
-                "reference_frame": "base_link",
-            },
-        ],
-    }
-    agent = _make_agent([json.dumps(semantic_ir)])
+    task = _factory_task(
+        "home-wait-forward",
+        {
+            "type": "sequence",
+            "children": [
+                _skill_node("go_home"),
+                _skill_node("wait", {"wait_duration_sec": 2.0}),
+                _skill_node(
+                    "move_relative",
+                    {
+                        "delta": {"x": 5.0, "y": 0.0, "z": 0.0},
+                        "linear_unit": "cm",
+                        "reference_frame": "base_link",
+                    },
+                ),
+            ],
+        },
+    )
+    agent = _make_agent([json.dumps(task)])
     result = agent.run("go home, wait 2 seconds, then move forward 5cm")
-    assert result["intent"] == "sequence"
-    assert len(result["steps"]) == 3
-    assert result["steps"][1]["intent"] == "wait"
-    assert result["steps"][2]["intent"] == "move_relative"
+    assert result == task
+    assert result["root"]["children"][1]["name"] == "wait"
+    assert result["root"]["children"][2]["name"] == "move_relative"
 
 
 def test_agent_perception_tool_then_motion():
@@ -357,38 +433,46 @@ def test_agent_perception_tool_then_motion():
     responses = [
         json.dumps({"tool_call": "query_perception", "args": {"class_filter": "red"}}),
         json.dumps(
-            {
-                "intent": "absolute_move_ptp",
-                "target_pose": {"position": {"x": 0.35, "y": 0.05, "z": 0.30}},
-                "reference_frame": "base_link",
-            }
+            _factory_task(
+                "move-red-object",
+                _skill_node(
+                    "move_to_object",
+                    {"object_ref": "red_sphere", "pose": "approach"},
+                ),
+            )
         ),
     ]
     agent = _make_agent(responses, tools=[FakePerceptionTool()])
     result = agent.run("move to the red object")
-    assert result["intent"] == "absolute_move_ptp"
-    assert result["target_pose"]["position"]["x"] == 0.35
+    assert result["task_type"] == "factory_task"
+    assert result["root"]["name"] == "move_to_object"
+    assert result["root"]["args"]["object_ref"] == "red_sphere"
 
 
-def test_agent_draw_circle_semantic_ir():
-    """ReAct produces draw_shape for 'draw circle 50mm'."""
-    semantic_ir = {
-        "intent": "draw_shape",
-        "shape_type": "circle",
-        "units": "mm",
-        "frame_id": "base_link",
-        "workplane": {"mode": "tool"},
-        "params": {"radius": 50},
-    }
-    agent = _make_agent([json.dumps(semantic_ir)])
+def test_agent_draw_circle_factory_task():
+    """ReAct produces a FactoryTask draw_shape skill for 'draw circle 50mm'."""
+    task = _factory_task(
+        "draw-circle",
+        _skill_node(
+            "draw_shape",
+            {
+                "shape_type": "circle",
+                "units": "mm",
+                "frame_id": "base_link",
+                "workplane": {"mode": "tool"},
+                "params": {"radius": 50},
+            },
+        ),
+    )
+    agent = _make_agent([json.dumps(task)])
     result = agent.run("draw circle radius 50mm")
-    assert result["intent"] == "draw_shape"
-    assert result["shape_type"] == "circle"
-    assert result["params"]["radius"] == 50
+    assert result == task
+    assert result["root"]["name"] == "draw_shape"
+    assert result["root"]["args"]["params"]["radius"] == 50
 
 
-def test_agent_arc_tool_then_circular_move():
-    """ReAct uses compute_arc_points tool, then produces circular_move intent."""
+def test_agent_arc_tool_then_factory_task_draw_shape():
+    """ReAct can use a helper tool, then still produce FactoryTask output."""
 
     class FakeArcTool(Tool):
         name = "compute_arc_points"
@@ -430,18 +514,26 @@ def test_agent_arc_tool_then_circular_move():
             }
         ),
         json.dumps(
-            {
-                "intent": "circular_move",
-                "target_pose": {"position": {"x": 0.25, "y": 0.0, "z": 0.4}},
-                "auxiliary_pose": {"position": {"x": 0.3, "y": 0.05, "z": 0.4}},
-                "reference_frame": "base_link",
-            }
+            _factory_task(
+                "draw-arc",
+                _skill_node(
+                    "draw_shape",
+                    {
+                        "shape_type": "arc",
+                        "units": "m",
+                        "frame_id": "base_link",
+                        "workplane": {"mode": "tool"},
+                        "params": {"radius": 0.05},
+                    },
+                ),
+            )
         ),
     ]
     agent = _make_agent(responses, tools=[FakeArcTool()])
     result = agent.run("draw a semicircular arc radius 50mm")
-    assert result["intent"] == "circular_move"
-    assert result["target_pose"]["position"]["x"] == 0.25
+    assert result["task_type"] == "factory_task"
+    assert result["root"]["name"] == "draw_shape"
+    assert result["root"]["args"]["shape_type"] == "arc"
 
 
 def test_agent_llm_error_produces_handoff():

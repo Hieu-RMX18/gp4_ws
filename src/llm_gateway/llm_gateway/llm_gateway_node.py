@@ -9,8 +9,10 @@ from dataclasses import dataclass, field
 import json
 import math
 import os
+import re
 import time
 from typing import Any, Dict, List
+import unicodedata
 
 import rclpy
 from industrial_msgs.msg import RobotStatus, TriState
@@ -47,42 +49,100 @@ from llm_gateway.intent_engine import (
     prepare_execution_command as _pipeline_prepare_execution_command,
     prepare_semantic_ir_for_routing as _pipeline_prepare_semantic_ir_for_routing,
 )
+from llm_gateway.factory_task import (
+    TaskCompiler,
+    WorldModel,
+    is_factory_task,
+    parse_factory_task,
+)
 from llm_gateway.react_planner import (
-    ComputeArcPointsTool,
-    GetCurrentPoseTool,
-    GripperCloseTool,
-    GripperOpenTool,
     IterationBudget,
     OpenAICompatibleLLMClient,
-    PlanMotionTool,
-    QueryPerceptionTool,
     ReActAgent,
-    SetSpeedTool,
     StateInjector,
-    SubmitMotionTool,
-    ToolRegistry,
-    WaitForStateTool,
+    build_default_react_tool_registry,
     load_llm_backend_config,
 )
 from motoros2_interfaces.srv import ReadSingleIO, WriteSingleIO
 from llm_gateway.composite_tools import (
-    ApproachObjectTool,
-    EmitSequenceTool,
     GripperConfig,
     GripperIoAdapter,
-    PickObjectTool,
-    PlaceObjectTool,
-    RefreshSceneTool,
-    VerifyGraspTool,
-    VerifyPostconditionTool,
 )
 from llm_gateway.semantic_ir_contract import validate_semantic_ir_contract
 
 
 EXECUTOR_SHUTDOWN_TIMEOUT_SEC = 2.0
 _DIRECT_STOP_REVIEW_TEXTS = {"stop", "stop motion", "cancel motion", "halt"}
+_STATION_NAV_PREFIXES = (
+    "đi đến ", "di đến ", "đi den ", "di den ",
+    "đến ", "den ", "tới ", "toi ",
+    "go to ", "move to ", "navigate to ",
+)
 _REVIEW_CACHE_VERSION = "react_semantic_review_v1"
 _REVIEW_CACHE_MAX_ENTRIES = 128
+
+def _fold_review_text(value: str) -> str:
+    folded = unicodedata.normalize("NFD", str(value or ""))
+    folded = "".join(
+        char for char in folded if unicodedata.category(char) != "Mn"
+    )
+    return " ".join(folded.replace("đ", "d").replace("Đ", "D").lower().split())
+
+def _direct_joint_review_semantic_ir(intent_text: str) -> Dict[str, Any] | None:
+    folded = _fold_review_text(intent_text).strip(" .!?")
+    if not folded:
+        return None
+
+    joint_match = re.search(r"(?:\bkhop\b|\bjoint\b)\s+(?:so\s+)?([1-6])\b", folded)
+    if joint_match is None:
+        return None
+    joint_index = int(joint_match.group(1)) - 1
+
+    unit_pattern = r"(?:do|deg|degree|degrees|rad|radian|radians)"
+    explicit_sign = re.search(
+        rf"([+-])\s*(\d+(?:\.\d+)?)\s*({unit_pattern})\b", folded
+    )
+    relative_word = re.search(
+        rf"\b(them|bot|by)\s+([+-]?\d+(?:\.\d+)?)\s*({unit_pattern})\b",
+        folded,
+    )
+    if explicit_sign is not None or relative_word is not None:
+        if explicit_sign is not None:
+            sign = -1.0 if explicit_sign.group(1) == "-" else 1.0
+            angle = sign * float(explicit_sign.group(2))
+            unit = explicit_sign.group(3)
+        else:
+            word = relative_word.group(1)
+            angle = float(relative_word.group(2))
+            if word == "bot":
+                angle = -abs(angle)
+            unit = relative_word.group(3)
+        return {
+            "intent": "move_joint_delta",
+            "joint_index": joint_index,
+            "delta_angle": angle,
+            "angular_unit": "rad" if unit.startswith("rad") else "deg",
+        }
+
+    absolute_match = re.search(
+        rf"\b(?:sang|toi|ve|to)\s+(?:goc\s+)?([+-]?\d+(?:\.\d+)?)\s*({unit_pattern})\b",
+        folded,
+    )
+    if absolute_match is None:
+        absolute_match = re.search(
+            rf"(?:\bkhop\b|\bjoint\b)\s+(?:so\s+)?[1-6]\s+([+-]?\d+(?:\.\d+)?)\s*({unit_pattern})\b",
+            folded,
+        )
+    if absolute_match is None:
+        return None
+
+    unit = absolute_match.group(2)
+    return {
+        "intent": "move_joint",
+        "joint_index": joint_index,
+        "joint_angle": float(absolute_match.group(1)),
+        "angular_unit": "rad" if unit.startswith("rad") else "deg",
+    }
 
 
 @dataclass
@@ -119,6 +179,14 @@ class _SceneSnapshotCache:
         stored = dict(payload)
         stored["cache_hit"] = False
         self._entries[self._key(args)] = (self._now_fn(), stored)
+
+    def snapshots(self) -> List[Dict[str, Any]]:
+        snapshots: List[Dict[str, Any]] = []
+        for class_filter, frame in list(self._entries.keys()):
+            payload = self.get({"class_filter": class_filter, "frame": frame})
+            if payload is not None:
+                snapshots.append(payload)
+        return snapshots
 
     def invalidate(self) -> None:
         self._entries.clear()
@@ -201,7 +269,12 @@ class LLMGatewayNode(Node):
         runtime_mode = self._resolve_runtime_mode()
         self._runtime_mode = runtime_mode
         self._review_intent_requires_token = False
-        self._intent_router = intent_router or IntentRouter(runtime_mode=runtime_mode)
+        self._station_scene_graph = self._load_station_scene_graph_safe()
+        semantic_map = self._station_scene_graph.to_dict() if self._station_scene_graph else None
+        self._intent_router = intent_router or IntentRouter(
+            runtime_mode=runtime_mode,
+            station_semantic_map=semantic_map
+        )
         self._sequence_validator = sequence_validator or SequenceValidator(
             schema_validator=self._schema_validator,
             normalizer=self._normalizer,
@@ -221,37 +294,23 @@ class LLMGatewayNode(Node):
         # ── ReAct agent init (W3) ─────────────────────────────────────────────
         self._react_enabled = self._load_react_enabled()
         self._react_state_injector = StateInjector()
+        poses = []
         try:
-            self._react_state_injector.set_available_named_poses(
-                list(_load_srdf_named_poses().keys())
-            )
+            poses.extend(list(_load_srdf_named_poses().keys()))
         except Exception:
             pass
+        if self._station_scene_graph is not None:
+            self._react_state_injector.set_semantic_map(self._station_scene_graph.to_dict())
+            if hasattr(self._station_scene_graph, "_regions"):
+                poses.extend(self._station_scene_graph._regions.keys())
+        self._react_state_injector.set_available_named_poses(poses)
         if self._react_enabled:
-            tool_registry = (
-                ToolRegistry()
-                .register(GetCurrentPoseTool())
-                .register(PlanMotionTool())
-                .register(SubmitMotionTool())
-                .register(WaitForStateTool())
-                .register(SetSpeedTool())
-                .register(QueryPerceptionTool())
-                .register(EmitSequenceTool())
-                .register(RefreshSceneTool())
-                .register(PickObjectTool())
-                .register(ApproachObjectTool())
-                .register(PlaceObjectTool())
-                .register(VerifyPostconditionTool())
-                .register(VerifyGraspTool())
-                .register(GripperOpenTool())
-                .register(GripperCloseTool())
-                .register(ComputeArcPointsTool())
-            )
+            tool_registry = build_default_react_tool_registry()
             budget = IterationBudget(
                 max_total=5,
                 max_motion=3,
                 max_readonly=10,
-                max_repair=1,
+                max_repair=2,
                 wall_clock_timeout_s=30.0,
             )
             self._react_agent = ReActAgent(
@@ -384,6 +443,17 @@ class LLMGatewayNode(Node):
         self.publish_status(self._last_status)
         self.get_logger().info(f"LLMGatewayNode ready (runtime_mode={runtime_mode}).")
 
+    @staticmethod
+    def _load_station_scene_graph_safe():
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            from llm_gateway.station_scene_graph import StationSceneGraph
+            pkg_share = get_package_share_directory("llm_gateway")
+            path = os.path.join(pkg_share, "config", "station_semantic_map.yaml")
+            return StationSceneGraph.from_file(path)
+        except Exception:
+            return None
+
     def _declare_parameters(self) -> None:
         self.declare_parameter("schema_path", "")
         self.declare_parameter("llm_config_path", "")
@@ -471,12 +541,46 @@ class LLMGatewayNode(Node):
         *,
         allow_sequence: bool = True,
         runtime_mode: str = "",
+        station_scene_graph=None,
     ) -> Dict[str, Any] | None:
         _ = allow_sequence, runtime_mode
         normalized = " ".join(str(intent_text or "").strip().lower().split())
         normalized = normalized.strip(" .!?")
         if normalized in _DIRECT_STOP_REVIEW_TEXTS:
             return {"intent": "stop"}
+
+        joint_review = _direct_joint_review_semantic_ir(normalized)
+        if joint_review is not None:
+            return joint_review
+
+        if station_scene_graph is not None:
+            stripped = normalized
+            for prefix in _STATION_NAV_PREFIXES:
+                if stripped.startswith(prefix):
+                    stripped = stripped[len(prefix):].strip()
+                    break
+            result = station_scene_graph.resolve_region(stripped)
+            if result.ok and result.payload:
+                geometry = result.payload.get("geometry", {})
+                center = geometry.get("center", {})
+                size = geometry.get("size", {})
+                x = float(center.get("x", 0.0))
+                y = float(center.get("y", 0.0))
+                z = float(center.get("z", 0.0))
+                size_z = float(size.get("z", 0.0))
+                zones = result.payload.get("zones", {})
+                clearance = 0.10
+                for zone_data in zones.values():
+                    if isinstance(zone_data, dict) and "default_clearance_m" in zone_data:
+                        clearance = float(zone_data["default_clearance_m"])
+                        break
+                safe_z = z + (size_z / 2.0) + clearance
+                return {
+                    "intent": "absolute_move_ptp",
+                    "target_pose": {
+                        "position": {"x": x, "y": y, "z": round(safe_z, 4)},
+                    },
+                }
         return None
 
     @staticmethod
@@ -545,7 +649,9 @@ class LLMGatewayNode(Node):
             return cached_review
 
         direct_review = self._direct_review_semantic_ir(
-            intent_text, runtime_mode=self._runtime_mode
+            intent_text,
+            runtime_mode=self._runtime_mode,
+            station_scene_graph=getattr(self, "_station_scene_graph", None),
         )
         if direct_review is not None:
             self._emit_trace(
@@ -561,9 +667,19 @@ class LLMGatewayNode(Node):
         if self._react_enabled and self._react_agent is not None:
             react_result = self._react_agent.run(intent_text)
             if not react_result.get("_handoff"):
-                enriched_result = dict(react_result)
-                enriched_result["_parse_source"] = "react"
-                return enriched_result
+                if is_factory_task(react_result):
+                    return self._compile_factory_task_review_result(
+                        react_result, parse_source="react_factory_task"
+                    )
+                if "error" in react_result:
+                    enriched_result = dict(react_result)
+                    enriched_result["_parse_source"] = "react"
+                    return enriched_result
+                return {
+                    "error": "REACT_HANDOFF",
+                    "message": "ReAct returned a non-FactoryTask final payload.",
+                    "hint": "ReAct final output must be FactoryTask; Semantic IR is internal to the gateway compiler.",
+                }
             reason = react_result.get("reason", "unknown")
             return {
                 "error": "REACT_HANDOFF",
@@ -575,9 +691,148 @@ class LLMGatewayNode(Node):
         llm_response = self._llm_client.generate_response(intent_text)
         self._emit_trace("llm_response_received", "reasoning", source="llm")
         parsed = self._parser.parse(llm_response)
+        if is_factory_task(parsed):
+            return self._compile_factory_task_review_result(
+                parsed, parse_source="llm_factory_task"
+            )
         parsed["_parse_source"] = "llm"
         self._emit_trace("parsed", "parsing", source="llm")
         return parsed
+
+    def _compile_factory_task_review_result(
+        self, payload: Dict[str, Any], *, parse_source: str
+    ) -> Dict[str, Any]:
+        from llm_gateway.factory_task import FactoryTaskError as _FTError
+        task = parse_factory_task(payload)
+        try:
+            compiled = TaskCompiler(world_model=self._factory_task_world_model()).compile(task)
+        except _FTError as exc:
+            # Runtime-control FactoryTasks (retry/fallback/repeat/for_each) cannot be
+            # statically compiled to Semantic IR. Return a runtime-execution sentinel
+            # that carries the full task tree for TaskRuntime and is visible in the HMI.
+            runtime_plan = self._factory_task_runtime_plan(payload)
+            semantic_ir: Dict[str, Any] = {
+                "intent": "get_pose",
+                "metadata": {
+                    "factory_task": {
+                        "task_id": task.task_id,
+                        "version": task.version,
+                        "mode": task.mode,
+                        "operator_summary": task.operator_summary,
+                    },
+                    "runtime_plan": runtime_plan,
+                    "policy_decisions": [
+                        {
+                            "node_path": "root",
+                            "node_type": task.root.type,
+                            "node_name": task.root.name or task.root.type,
+                            "decision": "allow",
+                            "reason": "runtime control preserved; TaskRuntime executes retry/fallback/replan",
+                            "risk_level": "medium",
+                        }
+                    ],
+                    "runtime_control_reason": str(exc),
+                },
+                "_parse_source": parse_source,
+                "_factory_task_runtime": True,
+            }
+            self._emit_trace(
+                "factory_task_runtime_plan",
+                "planning",
+                source=parse_source,
+                summary=task.task_id[:80],
+                details_json=json.dumps({"runtime_control_reason": str(exc)[:120]}),
+            )
+            return semantic_ir
+        semantic_ir = dict(compiled.semantic_ir)
+        semantic_ir["_parse_source"] = parse_source
+        self._emit_trace(
+            "factory_task_compiled",
+            "planning",
+            source=parse_source,
+            summary=task.task_id[:80],
+            details_json=json.dumps(semantic_ir.get("metadata") or {}),
+        )
+        return semantic_ir
+
+    @staticmethod
+    def _factory_task_runtime_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract the runtime plan tree from the FactoryTask payload for HMI visibility."""
+        root = payload.get("root") or {}
+        def _plan_node(node: Any) -> Dict[str, Any]:
+            if not isinstance(node, dict):
+                return {"type": "unknown"}
+            plan: Dict[str, Any] = {"type": node.get("type", "")}
+            if node.get("name"):
+                plan["name"] = node["name"]
+            if node.get("args"):
+                plan["args"] = dict(node["args"])
+            if node.get("count") is not None:
+                plan["count"] = node["count"]
+            if node.get("collection"):
+                plan["collection"] = node["collection"]
+                plan["item_name"] = node.get("item_name", "item")
+            if node.get("replan_policy"):
+                plan["replan_policy"] = dict(node["replan_policy"])
+            children = node.get("children") or []
+            if children:
+                plan["children"] = [_plan_node(c) for c in children]
+            return plan
+        return _plan_node(root)
+
+    def _factory_task_world_model(self) -> WorldModel:
+        objects: Dict[str, Dict[str, Any]] = {}
+        visible_objects: List[Dict[str, Any]] = []
+        for snapshot in self._get_scene_snapshot_cache().snapshots():
+            for detection in snapshot.get("detections", []):
+                grounded = self._factory_task_object_from_detection(detection)
+                if grounded is None:
+                    continue
+                visible_objects.append(grounded)
+                for key in self._factory_task_object_keys(grounded):
+                    objects.setdefault(key, grounded)
+        return WorldModel(
+            objects=objects,
+            collections={"visible_objects": visible_objects},
+        )
+
+    @staticmethod
+    def _factory_task_object_from_detection(
+        detection: Dict[str, Any]
+    ) -> Dict[str, Any] | None:
+        if not isinstance(detection, dict):
+            return None
+        class_id = str(detection.get("class_id") or "").strip()
+        if not class_id:
+            return None
+        position = detection.get("position")
+        if not isinstance(position, dict):
+            return None
+        orientation = detection.get("orientation")
+        if not isinstance(orientation, dict):
+            orientation = {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+        return {
+            "id": class_id,
+            "name": class_id,
+            "label": str(detection.get("label") or class_id),
+            "class_id": class_id,
+            "frame_id": str(detection.get("frame_id") or "base_link"),
+            "pose": {
+                "position": dict(position),
+                "orientation": dict(orientation),
+            },
+            "size": dict(detection.get("size") or {}),
+            "score": float(detection.get("score") or 0.0),
+        }
+
+    @staticmethod
+    def _factory_task_object_keys(grounded: Dict[str, Any]) -> tuple[str, ...]:
+        keys: List[str] = []
+        for field_name in ("id", "name", "label", "class_id"):
+            value = str(grounded.get(field_name) or "").strip()
+            if value and value not in keys:
+                keys.append(value)
+        return tuple(keys)
 
     def _review_cache_key(self, intent_text: str) -> str:
         normalized = " ".join(str(intent_text or "").strip().lower().split())
@@ -916,9 +1171,13 @@ class LLMGatewayNode(Node):
             )
         ):
             try:
-                routed = IntentRouter(runtime_mode=effective_runtime_mode).route(
-                    semantic_ir
-                )
+                canonical = self._canonicalize_semantic_ir_aliases(semantic_ir)
+                station_scene_graph = getattr(self, "_station_scene_graph", None)
+                semantic_map = station_scene_graph.to_dict() if station_scene_graph else None
+                routed = IntentRouter(
+                    runtime_mode=effective_runtime_mode,
+                    station_semantic_map=semantic_map
+                ).route(canonical)
             except Exception as exc:
                 response.accepted = False
                 response.error = self._review_exception_message(exc)
@@ -975,8 +1234,28 @@ class LLMGatewayNode(Node):
                 key: LLMGatewayNode._canonicalize_semantic_ir_aliases(value)
                 for key, value in payload.items()
             }
-            if canonical.get("intent") == "move_to_named_pose":
+            intent = str(canonical.get("intent") or "").strip()
+            if intent == "move_to_named_pose":
                 canonical["intent"] = "move_named_pose"
+                intent = "move_named_pose"
+
+            if intent == "move_named_pose":
+                if "pose_name" not in canonical:
+                    if "pose" in canonical:
+                        canonical["pose_name"] = canonical.pop("pose")
+                    elif "region" in canonical:
+                        canonical["pose_name"] = canonical.pop("region")
+            elif intent == "get_current_pose":
+                canonical["intent"] = "get_pose"
+            elif intent == "move_linear":
+                canonical["intent"] = "absolute_move_lin"
+            elif intent in {"move_joint", "move_joint_delta"}:
+                if "joint_index" not in canonical and "joint" in canonical:
+                    canonical["joint_index"] = canonical.pop("joint")
+                if "joint_angle" not in canonical and "angle" in canonical:
+                    canonical["joint_angle"] = canonical.pop("angle")
+                if "delta_angle" not in canonical and "delta" in canonical:
+                    canonical["delta_angle"] = canonical.pop("delta")
             return canonical
         if isinstance(payload, list):
             return [LLMGatewayNode._canonicalize_semantic_ir_aliases(value) for value in payload]
@@ -1153,6 +1432,18 @@ class LLMGatewayNode(Node):
                     f"ReAct could not resolve the request: {react_result.get('reason', 'unknown')}.",
                     intent_text=intent_text,
                     hint="Rephrase the command with clearer intent or check that all required parameters are provided.",
+                )
+                return
+            if is_factory_task(react_result):
+                react_result = self._compile_factory_task_review_result(
+                    react_result, parse_source="react_factory_task"
+                )
+            elif "error" not in react_result:
+                self._reject(
+                    "react_contract_rejected",
+                    "ReAct returned a non-FactoryTask final payload.",
+                    intent_text=intent_text,
+                    hint="ReAct final output must be FactoryTask; Semantic IR is internal to the gateway compiler.",
                 )
                 return
             payload = json.dumps(react_result)
@@ -1857,7 +2148,16 @@ class LLMGatewayNode(Node):
             if goal_payload.get("primitive_type") == "IO_SET":
                 sequence_state.executed_io_side_effects = True
             sequence_state.current_step_index += 1
-            self._dispatch_sequence_step(sequence_state)
+
+            # Give the hardware 500ms to settle to IDLE before dispatching the next step
+            def _delayed_dispatch():
+                if hasattr(sequence_state, "_delay_timer") and sequence_state._delay_timer:
+                    sequence_state._delay_timer.cancel()
+                    self.destroy_timer(sequence_state._delay_timer)
+                    sequence_state._delay_timer = None
+                self._dispatch_sequence_step(sequence_state)
+
+            sequence_state._delay_timer = self.create_timer(0.5, _delayed_dispatch)
         else:
             msg = wrapped.result.message if wrapped.result else "no result"
             self._emit_trace(

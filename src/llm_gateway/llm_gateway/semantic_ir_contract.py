@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+FACTORY_TASK_RUNTIME_INTENT = "factory_task_runtime"
+
 # Must match react_planner.FROZEN_TOP_LEVEL_OUTPUT_INTENTS exactly.
 # Duplicated here so the contract module has no import-time dependency
 # on the heavy react_planner stack.
@@ -55,7 +57,8 @@ def validate_semantic_ir_contract(
       - Contains ``primitive_type`` (raw primitive leakage).
       - Contains ``raw_text`` (unparsed natural-language leakage).
       - Missing or empty ``intent`` field.
-      - ``intent`` not in the frozen semantic intent set.
+      - ``intent`` not in the frozen semantic intent set, except the internal
+        FactoryTask runtime sentinel produced after review compilation.
     """
     if not isinstance(payload, dict):
         return ContractResult(
@@ -96,6 +99,16 @@ def validate_semantic_ir_contract(
             "Verify the prompt schema and LLM JSON mode are active.",
         )
 
+    if intent == FACTORY_TASK_RUNTIME_INTENT:
+        if _in_sequence_step:
+            return ContractResult(
+                valid=False,
+                reason="factory_task_runtime is only valid as a top-level review sentinel.",
+                hint="Runtime-control FactoryTasks must be reviewed as a top-level payload, not inside sequence steps.",
+            )
+        if is_factory_task_runtime_sentinel(payload):
+            return ContractResult(valid=True)
+
     if intent not in _FROZEN_SEMANTIC_INTENTS:
         return ContractResult(
             valid=False,
@@ -129,6 +142,21 @@ def validate_semantic_ir_contract(
                 )
 
     return ContractResult(valid=True)
+
+
+def is_factory_task_runtime_sentinel(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("intent") != FACTORY_TASK_RUNTIME_INTENT:
+        return False
+    if payload.get("_factory_task_runtime") is not True:
+        return False
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        return False
+    return isinstance(metadata.get("runtime_plan"), dict) and isinstance(
+        metadata.get("factory_task"), dict
+    )
 
 
 def _find_forbidden_field(value: Any, path: str = "$") -> str | None:

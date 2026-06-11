@@ -107,7 +107,6 @@ from llm_gateway.react_planner import GetCurrentPoseTool
 from llm_gateway.react_planner import PlanMotionTool
 from llm_gateway.react_planner import QueryPerceptionTool
 from llm_gateway.react_planner import ReActAgent
-from llm_gateway.react_planner import SubmitMotionTool
 from llm_gateway.intent_engine import Normalizer
 from llm_gateway.intent_engine import SchemaValidator
 from llm_gateway.intent_engine import SemanticValidator
@@ -469,44 +468,6 @@ def test_plan_motion_fails_closed_without_ros_node():
     assert result.error == "ros_node not available in AgentContext"
 
 
-def test_submit_motion_fails_closed_when_execute_motion_unavailable():
-    result = SubmitMotionTool().invoke(
-        {"plan_id": "plan-001"},
-        AgentContext(
-            state_injector=StateInjector(),
-            ros_node=_SubmitNodeWithUnavailableAction(),
-        ),
-    )
-    assert result.ok is False
-    assert result.error == "execute_motion action server unavailable"
-
-
-def test_submit_motion_returns_confirmation_handoff_without_sending_goal():
-    goal = SimpleNamespace(primitive_type="HOME")
-    node = _SubmitNodeWithReadyAction(
-        {"goal": goal, "command": {"primitive_type": "HOME"}}
-    )
-    result = SubmitMotionTool().invoke(
-        {"plan_id": "plan-001"},
-        AgentContext(
-            state_injector=StateInjector(),
-            ros_node=node,
-        ),
-    )
-    assert result.ok is True
-    assert result.payload["status"] == "READY_FOR_CONFIRM"
-    assert result.payload["plan_id"] == "plan-001"
-    assert result.payload["command"]["primitive_type"] == "HOME"
-    assert node._execute_client.sent_goal is None
-
-
-def test_submit_motion_description_matches_confirmation_handoff_contract():
-    description = SubmitMotionTool.description.lower()
-
-    assert "confirmation" in description
-    assert "without executing" in description
-
-
 def test_react_prompt_uses_hardware_adjacent_velocity_cap():
     prompt = ReActAgent(
         llm_client=None,
@@ -519,15 +480,6 @@ def test_react_prompt_uses_hardware_adjacent_velocity_cap():
     prompt_text = "\n".join(message["content"] for message in prompt)
     assert "velocity_scale 0.06" in prompt_text
     assert "velocity_scale 0.10" not in prompt_text
-
-
-def test_submit_motion_fails_closed_without_ros_node():
-    result = SubmitMotionTool().invoke(
-        {"plan_id": "test-plan-001"},
-        AgentContext(state_injector=StateInjector()),
-    )
-    assert result.ok is False
-    assert result.error == "ros_node not available in AgentContext"
 
 
 def test_query_perception_uses_live_ros_query_when_available():

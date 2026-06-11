@@ -124,13 +124,26 @@ def test_compile_goal_pick_place_yields_ordered_skills_in_at_most_five_steps(tmp
     )
 
     skill_names = [c.name for c in calls]
+    assert skill_names == [
+        "refresh_scene",
+        "approach_object",
+        "pick_object",
+        "place_object",
+        "verify_postcondition",
+    ]
     assert len(skill_names) <= 5, f"Plan must complete in ≤5 skill steps; got {skill_names}"
+    assert calls[2].args["object_id"] == "white_workpiece"
+    assert calls[3].args["destination"] == "conveyor"
 
-    # Verify canonical order
-    assert skill_names.index("pick_object") < skill_names.index("place_object"), (
-        "pick_object must come before place_object"
+def test_compile_goal_returns_clarification_for_unknown_destination(tmp_path: Path):
+    calls = compile_goal(
+        {"action": "pick_and_place", "object": "phoi trang", "destination": "shelf"},
+        scene_graph=_make_scene_graph(tmp_path),
     )
-    assert "verify_postcondition" in skill_names, "Plan must include postcondition verification"
+
+    assert calls == [
+        SkillCall(name="needs_clarification", args={"field": "destination", "query": "shelf"})
+    ]
 
 
 def test_task_runtime_pick_fallback_selects_home_after_pick_exhaustion(tmp_path: Path):

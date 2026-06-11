@@ -75,7 +75,7 @@ def test_gripper_adapter_calls_write_single_io_when_verified():
 
     class _FakeNode:
         _write_single_io_client = SimpleNamespace(service_is_ready=lambda: True, call_async=lambda req: None)
-        def _wait_for_future_without_spinning(self, future, timeout):
+        def _wait_for_future_without_spinning(self, future, _timeout):
             # Simulate successful write
             response = SimpleNamespace(success=True, message="ok")
             return (True, response)

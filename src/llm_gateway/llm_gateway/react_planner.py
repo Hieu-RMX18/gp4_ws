@@ -263,7 +263,7 @@ You are the llm_gateway task planner for a Yaskawa GP4 robot arm.
 Your job: convert one natural-language command or ordered factory task into ONE FactoryTask JSON object.
 You support English and Vietnamese (tiếng Việt). Classify by meaning, not exact words.
 
-The FactoryTask does not execute motion. The gateway compiles it to an internal guarded command artifact that still passes supervisor validation, collision checks, runtime freshness checks, operator confirmation, and the hardware execution gate.
+The FactoryTask does not execute motion. The gateway reviews it into a FactoryTask runtime payload; TaskRuntime later resolves each skill into guarded internal command artifacts behind supervisor validation, collision checks, runtime freshness checks, operator confirmation, and the hardware execution gate.
 
 ══════════════════════════════════════════════════════
 OUTPUT FORMAT — always ONE JSON object, no markdown, no explanation:
@@ -328,13 +328,13 @@ verify_scene args: {"object": "world_model_object", "expected": "held|placed|vis
 draw_shape args: {"shape_type": "circle|arc|square|rectangle|triangle|polygon|polyline", "units": "m|cm|mm", "frame_id": "base_link", "workplane": {"mode": "tool|base|explicit_pose"}, "params": {}}
 draw_text args: {"text": "A-Z 0-9 text", "units": "m|cm|mm", "frame_id": "base_link", "workplane": {"mode": "tool|base|explicit_pose"}, "font": {"type": "single_stroke_builtin", "height": n}}
 
-Unknown object poses, stale perception, missing calibration, missing frame, or unknown region must produce MISSING_SLOT or a FactoryTask observe step before motion. Never guess transforms, units, object locations, or robot state.
+Unknown object poses, stale perception, missing calibration, missing frame, or unknown region: ALWAYS generate a FactoryTask with an observe step before the motion step. TaskRuntime will query perception and grounding at execution time. Only return MISSING_SLOT if the operator's command is fundamentally incomplete, such as "move" with no target. Never guess transforms, units, object locations, or robot state.
 
 ══════════════════════════════════════════════════════
 GROUNDING AND SAFETY RULES
 
 - The WorldModel owns object, region, collection, freshness, and calibration facts.
-- TaskCompiler may only compile grounded skills. Missing world facts fail closed.
+- TaskRuntime resolves skills at execution time; missing world facts fail closed there.
 - PolicyEngine decisions must remain visible through task metadata and HMI planSummary.
 - TaskRuntime owns loops, retry, fallback, and replan. Use replan_policy for tasks where objects can move.
 - Motion remains behind supervisor validation, collision checking, operator confirmation, and execution gating.
@@ -1381,67 +1381,6 @@ class SetSpeedTool(Tool):
         )
 
 
-"""Submit motion tool — hands a plan to HMI/operator confirmation."""
-
-
-class SubmitMotionTool(Tool):
-    name = "submit_motion"
-    description = (
-        "Prepare a previously planned motion for HMI/operator confirmation "
-        "without executing it. "
-        "Requires a plan_id returned by plan_motion."
-    )
-    is_motion = True
-    input_schema: ClassVar[dict] = {
-        "type": "object",
-        "properties": {
-            "plan_id": {"type": "string"},
-        },
-        "required": ["plan_id"],
-    }
-
-    def invoke(self, args: dict, context: "AgentContext") -> ToolResult:
-        node = getattr(context, "ros_node", None)
-        if node is None:
-            return ToolResult(
-                ok=False,
-                error="ros_node not available in AgentContext",
-            )
-
-        action_client = getattr(node, "_execute_client", None)
-        if action_client is None:
-            return ToolResult(
-                ok=False,
-                error="execute_motion action client not available",
-            )
-        server_is_ready = getattr(action_client, "server_is_ready", None)
-        if callable(server_is_ready) and not server_is_ready():
-            return ToolResult(
-                ok=False,
-                error="execute_motion action server unavailable",
-            )
-
-        # In a real implementation we would look up the stored plan by plan_id.
-        # For W3, we assume the node has a plan cache populated by plan_motion.
-        plan_cache = getattr(node, "_react_plan_cache", {})
-        stored = plan_cache.get(args["plan_id"])
-        if stored is None:
-            return ToolResult(
-                ok=False,
-                error=f"Unknown plan_id: {args['plan_id']}",
-            )
-
-        command = stored.get("command", stored) if isinstance(stored, dict) else {}
-        return ToolResult(
-            ok=True,
-            payload={
-                "status": "READY_FOR_CONFIRM",
-                "plan_id": args["plan_id"],
-                "command": command,
-            },
-        )
-
-
 """Wait for robot state tool — polls robot status topic."""
 
 
@@ -1534,7 +1473,7 @@ _LOGGER = logging.getLogger(__name__)
 _REACT_SYSTEM_PROMPT_PREFIX = (
     "You are a robot task planner for a Yaskawa GP4 6-axis industrial robot arm.",
     "You DO NOT control the robot directly.",
-    "You produce FactoryTask JSON for a task compiler; the compiler converts allowed skills to Semantic IR for safety review.",
+    "You produce FactoryTask JSON for gateway review; the reviewed task tree is preserved for TaskRuntime execution.",
     "Do not output final Semantic IR; final answers should use the FactoryTask task tree contract unless returning an error.",
     "",
     "## Reasoning Rules",
@@ -1547,14 +1486,14 @@ _REACT_SYSTEM_PROMPT_PREFIX = (
     "     NOT needed for base_link move_relative with explicit delta, or for move_joint_delta.",
     "     NOT needed for: go_home, stop, alarm_reset, set_speed, wait, io_set,",
     "     draw_shape, draw_text, or any command where the user supplies all coordinates explicitly.",
-    "   - query_perception: ONLY if the user references an object by color or shape.",
+    "   - query_perception: ONLY for perception-only questions or explicit scene-inspection requests.",
+    "     For object motion tasks, include an observe node before motion and let TaskRuntime ground perception at execution time.",
     "   - compute_arc_points: ONLY for circular_move (CIRC primitive arc). NOT for draw_shape.",
     "   - plan_motion: to validate a target BEFORE submitting (optional).",
     "4. If a user mentions an object by color or shape (e.g. 'red sphere', 'blue box'),",
-    "   FIRST call query_perception to locate it, then plan motion to its position.",
+    "   generate a FactoryTask with an observe node before the motion/pick/place skill. Do not pre-ground it into coordinates.",
     "5. draw_shape and draw_text NEVER need get_current_pose or compute_arc_points.",
-    "   Use a FactoryTask skill node; the downstream compiler resolves the current pose",
-    "   and generates guarded motion artifacts automatically.",
+    "   Use a FactoryTask skill node; gateway runtime resolves guarded motion artifacts internally.",
     "6. Do not call tools unnecessarily. If you have all the parameters, emit the FactoryTask directly.",
     "",
     "## FactoryTask Output Contract",
@@ -1569,7 +1508,7 @@ _REACT_SYSTEM_PROMPT_PREFIX = (
     "- circle requires params.radius or params.diameter.",
     "- square requires params.side.",
     "- rectangle requires both params.width and params.height. Vietnamese 'rộng' is width; 'cao' or 'dài' is height.",
-    "- draw_text requires text and font.height. Vietnamese 'cao 2cm' means units='cm' and font.height=2.",
+    "- draw_text requires text. If height is omitted for a short text label, use default font.height=20 and units='mm'. Vietnamese 'cao 2cm' means units='cm' and font.height=2.",
     "- Use frame_id='base_link' and workplane={'mode':'tool'} for current-plane drawing.",
     "- If a required size is missing, return an error object with error='MISSING_SLOT' and a missing_fields list.",
     "",
@@ -1582,6 +1521,8 @@ _REACT_SYSTEM_PROMPT_PREFIX = (
     'Assistant: {"task_type":"factory_task","version":"1.0","task_id":"draw-square","root":{"type":"skill","name":"draw_shape","args":{"shape_type":"square","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"params":{"side":4}}}}',
     'User: "vẽ chữ HELLO cao 2cm"',
     'Assistant: {"task_type":"factory_task","version":"1.0","task_id":"draw-text-hello","root":{"type":"skill","name":"draw_text","args":{"text":"HELLO","units":"cm","frame_id":"base_link","workplane":{"mode":"tool"},"font":{"type":"single_stroke_builtin","height":2}}}}',
+    'User: "write GP4"',
+    'Assistant: {"task_type":"factory_task","version":"1.0","task_id":"draw-text-gp4","root":{"type":"skill","name":"draw_text","args":{"text":"GP4","units":"mm","frame_id":"base_link","workplane":{"mode":"tool"},"font":{"type":"single_stroke_builtin","height":20}}}}',
     "",
     "## Safety Rules",
     "- NEVER exceed velocity_scale 0.06 for hardware-adjacent work.",
@@ -1603,7 +1544,7 @@ _REACT_SYSTEM_PROMPT_PREFIX = (
     '   "hint": "Camera/perception service is not running. Start perception_full.launch.py first."}',
     "",
     "## Legacy Safety Note",
-    "The downstream compiler still emits guarded Semantic IR internally, but that is not the LLM-facing contract.",
+    "The gateway runtime adapter still emits guarded Semantic IR internally, but that is not the LLM-facing contract.",
     "For 'robot đang ở đâu?' return a FactoryTask observe/get_pose style skill node or an explicit missing-data error.",
     "For wait skill args include wait_duration_sec (default 2.0 if unspecified but clear).",
     "",

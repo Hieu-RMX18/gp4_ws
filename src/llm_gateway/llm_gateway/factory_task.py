@@ -347,6 +347,8 @@ class TaskCompiler:
                 or args.get("object")
                 or args.get("object_id")
             )
+            if node.name in {"pick_object", "pick_and_place"} and object_ref is None:
+                raise FactoryTaskError(f"{node.name} at {path} requires object_ref")
             io_intent = "io_set"
             if node.name == "place_object":
                 # Place: open gripper to release
@@ -383,8 +385,10 @@ class TaskCompiler:
                         "metadata": {"purpose": f"{node.name}_approach"},
                     })
                 except FactoryTaskError:
+                    if node.name in {"pick_object", "pick_and_place"}:
+                        raise
                     # Object pose not yet grounded — static review can't plan;
-                    # TaskRuntime will resolve it at execution time via perception.
+                    # TaskRuntime will resolve place destinations at execution time.
                     pass
             steps_for_review.append(io_step)
             if len(steps_for_review) == 1:

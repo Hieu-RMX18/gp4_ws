@@ -128,6 +128,7 @@ class ImmediateFuture:
 @pytest.mark.ros_integration
 def test_gateway_routes_get_pose_to_query_service(ros_integration_context):
     """GET_POSE must go through query service, NOT ValidateCommand/ExecuteMotion."""
+    _ = ros_integration_context
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
     node = LLMGatewayNode()
@@ -197,6 +198,7 @@ def test_gateway_fails_closed_when_get_pose_service_unavailable(
     ros_integration_context,
 ):
     """GET_POSE must fail-closed when the query service is unavailable."""
+    _ = ros_integration_context
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
     node = LLMGatewayNode()
@@ -231,6 +233,7 @@ def test_gateway_fails_closed_when_get_pose_service_unavailable(
 @pytest.mark.ros_integration
 def test_gateway_handles_get_pose_service_failure(ros_integration_context):
     """GET_POSE must propagate service failure with explicit message."""
+    _ = ros_integration_context
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
     node = LLMGatewayNode()
@@ -271,6 +274,7 @@ def test_gateway_handles_get_pose_service_failure(ros_integration_context):
 @pytest.mark.ros_integration
 def test_gateway_get_pose_does_not_affect_motion_path(ros_integration_context):
     """After GET_POSE, a motion command (HOME) should still use the motion action path."""
+    _ = ros_integration_context
     from llm_gateway.llm_gateway_node import LLMGatewayNode
 
     node = LLMGatewayNode()

@@ -138,6 +138,17 @@ def test_react_prompt_examples_do_not_expose_final_semantic_ir():
     assert '"name":"draw_text"' in system_prompt
 
 
+def test_react_prompt_defaults_unspecified_draw_text_height():
+    agent = _make_agent([json.dumps(_factory_task("home"))])
+
+    messages = agent._build_prompt("write GP4", StateInjector().snapshot(), [])
+    system_prompt = messages[0]["content"]
+
+    assert "default font.height=20" in system_prompt
+    assert 'User: "write GP4"' in system_prompt
+    assert '"name":"draw_text"' in system_prompt
+    assert '"height":20' in system_prompt
+
 def test_agent_rejects_intent_router_semantic_ir_without_primitive_schema():
     schema_validator = MagicMock()
     schema_validator.validate_against_schema.side_effect = AssertionError(

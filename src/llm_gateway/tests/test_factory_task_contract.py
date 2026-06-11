@@ -499,8 +499,8 @@ def test_compiler_maps_place_relative_to_move_relative() -> None:
     assert compiled.semantic_ir["delta"]["z"] == pytest.approx(0.10)
 
 
-def test_compiler_pick_object_fails_closed_when_world_model_has_no_pose_but_emits_gripper_step() -> None:
-    """When world model has no pose, compiler still emits the gripper step (fail-partial allowed)."""
+def test_compiler_pick_object_fails_closed_when_world_model_has_no_pose() -> None:
+    """A pick must not compile to gripper-only IR when object motion cannot be grounded."""
     task = parse_factory_task(
         {
             "task_type": "factory_task",
@@ -514,7 +514,5 @@ def test_compiler_pick_object_fails_closed_when_world_model_has_no_pose_but_emit
         }
     )
 
-    compiled = TaskCompiler(world_model=WorldModel()).compile(task)
-
-    assert compiled.semantic_ir["intent"] == "io_set"
-    assert compiled.semantic_ir["io_value"] == 1
+    with pytest.raises(FactoryTaskError, match="world model has no grounded pose"):
+        TaskCompiler(world_model=WorldModel()).compile(task)

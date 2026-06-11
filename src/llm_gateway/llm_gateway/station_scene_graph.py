@@ -105,6 +105,7 @@ class StationSceneGraph:
     def nearest_free_cell(
         self, region_name: str, object_size: dict[str, float] | None = None
     ) -> ResolveResult:
+        _ = object_size  # Reserved for future occupancy-aware placement sizing.
         region = self._regions.get(region_name)
         if not isinstance(region, dict):
             return ResolveResult(ok=False, error="needs_clarification")

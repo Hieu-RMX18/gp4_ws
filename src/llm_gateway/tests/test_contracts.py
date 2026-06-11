@@ -387,6 +387,19 @@ class TestAcceptsValidSemanticIR:
         )
         assert result.valid is True
 
+    def test_factory_task_runtime_sentinel(self):
+        result = validate_semantic_ir_contract(
+            {
+                "intent": "factory_task_runtime",
+                "_factory_task_runtime": True,
+                "metadata": {
+                    "runtime_plan": {"type": "fallback", "children": []},
+                    "factory_task": {"task_id": "fallback-home"},
+                },
+            }
+        )
+        assert result.valid is True
+
 
 class TestRejectsPrimitiveTypeLeakage:
     def test_rejects_primitive_type_field(self):
@@ -453,6 +466,11 @@ class TestRejectsUnknownIntent:
         result = validate_semantic_ir_contract({"intent": "return_to_start"})
         assert result.valid is False
         assert "only valid inside a sequence" in result.reason
+
+    def test_rejects_bare_factory_task_runtime_sentinel(self):
+        result = validate_semantic_ir_contract({"intent": "factory_task_runtime"})
+        assert result.valid is False
+        assert "Unsupported semantic intent" in result.reason
 
 
 class TestAcceptsErrorPayloads:

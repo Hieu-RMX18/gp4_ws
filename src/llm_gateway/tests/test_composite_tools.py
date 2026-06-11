@@ -1,6 +1,18 @@
 from types import SimpleNamespace
 
-from llm_gateway.composite_tools import EmitSequenceTool, PickObjectTool, RefreshSceneTool
+from llm_gateway.composite_tools import (
+    ApproachObjectTool,
+    CandidatePoseRequest,
+    EmitSequenceTool,
+    PickObjectTool,
+    PlaceObjectTool,
+    PostconditionVerifier,
+    RefreshSceneTool,
+    VerifyGraspTool,
+    VerifyPostconditionTool,
+    generate_candidate_poses,
+    mtc_select,
+)
 
 
 class _Node:
@@ -47,10 +59,6 @@ def test_pick_object_is_one_motion_tool_and_marks_world_change():
 
     assert tool.is_motion is True
     assert tool.name == "pick_object"
-
-from types import SimpleNamespace
-
-from llm_gateway.composite_tools import ApproachObjectTool, PlaceObjectTool, VerifyPostconditionTool
 
 def test_approach_object_emits_motion_sequence():
     tool = ApproachObjectTool()
@@ -120,7 +128,70 @@ def test_verify_postcondition_fails_when_object_not_in_destination():
     assert result.ok is False
     assert result.error == "postcondition_failed"
 
-from llm_gateway.composite_tools import VerifyGraspTool, mtc_select
+def test_postcondition_verifier_requires_object_in_destination():
+    verifier = PostconditionVerifier()
+    result = verifier.verify_place(
+        object_id="white_workpiece",
+        destination="conveyor",
+        scene={"detections": [{"class_id": "white_workpiece", "region": "fixture"}]},
+    )
+
+    assert result.ok is False
+    assert result.error == "postcondition_failed"
+
+def test_postcondition_verifier_accepts_object_in_destination():
+    verifier = PostconditionVerifier()
+    result = verifier.verify_place(
+        object_id="white_workpiece",
+        destination="conveyor",
+        scene={"detections": [{"class_id": "white_workpiece", "region": "conveyor"}]},
+    )
+
+    assert result.ok is True
+
+def test_candidate_pose_rejects_verify_config_geometry():
+    request = CandidatePoseRequest(
+        purpose="drop",
+        region={"geometry": {"center": {"x": "VERIFY_CONFIG", "y": 0.0, "z": 0.3}}},
+        safety_rules={
+            "workspace_bounds": {
+                "x_min": -0.45,
+                "x_max": 0.45,
+                "y_min": -0.16,
+                "y_max": 0.52,
+                "z_min": 0.15,
+                "z_max": 0.65,
+            }
+        },
+    )
+
+    result = generate_candidate_poses(request)
+
+    assert result.ok is False
+    assert result.error == "verify_config_required"
+
+def test_candidate_pose_applies_tool_offset_once_and_keeps_workspace_bounds():
+    request = CandidatePoseRequest(
+        purpose="drop",
+        region={"geometry": {"center": {"x": 0.30, "y": 0.10, "z": 0.30}}},
+        safety_rules={
+            "workspace_bounds": {
+                "x_min": -0.45,
+                "x_max": 0.45,
+                "y_min": -0.16,
+                "y_max": 0.52,
+                "z_min": 0.15,
+                "z_max": 0.65,
+            }
+        },
+        tcp_offset_m=0.12,
+        approach_axis="+z_base",
+    )
+
+    result = generate_candidate_poses(request)
+
+    assert result.ok is True
+    assert result.poses[0]["position"]["z"] == 0.42
 
 def test_mtc_select_returns_mtc_when_all_prereqs_met():
     result = mtc_select(

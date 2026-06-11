@@ -4,15 +4,14 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass, field
 import json
 import math
 import os
-import re
+from pathlib import Path
+import subprocess
 import time
 from typing import Any, Dict, List
-import unicodedata
 
 import rclpy
 from industrial_msgs.msg import RobotStatus, TriState
@@ -34,6 +33,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
+from llm_gateway import direct_commands
 from llm_gateway.intent_engine import (
     GP4_JOINT_NAMES,
     GoalMapper,
@@ -43,6 +43,7 @@ from llm_gateway.intent_engine import (
     SchemaValidator,
     SemanticValidator,
     SequenceValidator,
+    canonicalize_named_pose,
     load_srdf_named_poses as _load_srdf_named_poses,
     command_from_sanitized_json as _pipeline_command_from_sanitized_json,
     hydrate_draw_workplane as _pipeline_hydrate_draw_workplane,
@@ -50,7 +51,9 @@ from llm_gateway.intent_engine import (
     prepare_semantic_ir_for_routing as _pipeline_prepare_semantic_ir_for_routing,
 )
 from llm_gateway.factory_task import (
+    RuntimeStepResult,
     TaskCompiler,
+    TaskRuntime,
     WorldModel,
     is_factory_task,
     parse_factory_task,
@@ -68,83 +71,14 @@ from llm_gateway.composite_tools import (
     GripperConfig,
     GripperIoAdapter,
 )
-from llm_gateway.semantic_ir_contract import validate_semantic_ir_contract
+from llm_gateway.semantic_ir_contract import (
+    FACTORY_TASK_RUNTIME_INTENT,
+    is_factory_task_runtime_sentinel,
+    validate_semantic_ir_contract,
+)
 
 
 EXECUTOR_SHUTDOWN_TIMEOUT_SEC = 2.0
-_DIRECT_STOP_REVIEW_TEXTS = {"stop", "stop motion", "cancel motion", "halt"}
-_STATION_NAV_PREFIXES = (
-    "đi đến ", "di đến ", "đi den ", "di den ",
-    "đến ", "den ", "tới ", "toi ",
-    "go to ", "move to ", "navigate to ",
-)
-_REVIEW_CACHE_VERSION = "react_semantic_review_v1"
-_REVIEW_CACHE_MAX_ENTRIES = 128
-
-def _fold_review_text(value: str) -> str:
-    folded = unicodedata.normalize("NFD", str(value or ""))
-    folded = "".join(
-        char for char in folded if unicodedata.category(char) != "Mn"
-    )
-    return " ".join(folded.replace("đ", "d").replace("Đ", "D").lower().split())
-
-def _direct_joint_review_semantic_ir(intent_text: str) -> Dict[str, Any] | None:
-    folded = _fold_review_text(intent_text).strip(" .!?")
-    if not folded:
-        return None
-
-    joint_match = re.search(r"(?:\bkhop\b|\bjoint\b)\s+(?:so\s+)?([1-6])\b", folded)
-    if joint_match is None:
-        return None
-    joint_index = int(joint_match.group(1)) - 1
-
-    unit_pattern = r"(?:do|deg|degree|degrees|rad|radian|radians)"
-    explicit_sign = re.search(
-        rf"([+-])\s*(\d+(?:\.\d+)?)\s*({unit_pattern})\b", folded
-    )
-    relative_word = re.search(
-        rf"\b(them|bot|by)\s+([+-]?\d+(?:\.\d+)?)\s*({unit_pattern})\b",
-        folded,
-    )
-    if explicit_sign is not None or relative_word is not None:
-        if explicit_sign is not None:
-            sign = -1.0 if explicit_sign.group(1) == "-" else 1.0
-            angle = sign * float(explicit_sign.group(2))
-            unit = explicit_sign.group(3)
-        else:
-            word = relative_word.group(1)
-            angle = float(relative_word.group(2))
-            if word == "bot":
-                angle = -abs(angle)
-            unit = relative_word.group(3)
-        return {
-            "intent": "move_joint_delta",
-            "joint_index": joint_index,
-            "delta_angle": angle,
-            "angular_unit": "rad" if unit.startswith("rad") else "deg",
-        }
-
-    absolute_match = re.search(
-        rf"\b(?:sang|toi|ve|to)\s+(?:goc\s+)?([+-]?\d+(?:\.\d+)?)\s*({unit_pattern})\b",
-        folded,
-    )
-    if absolute_match is None:
-        absolute_match = re.search(
-            rf"(?:\bkhop\b|\bjoint\b)\s+(?:so\s+)?[1-6]\s+([+-]?\d+(?:\.\d+)?)\s*({unit_pattern})\b",
-            folded,
-        )
-    if absolute_match is None:
-        return None
-
-    unit = absolute_match.group(2)
-    return {
-        "intent": "move_joint",
-        "joint_index": joint_index,
-        "joint_angle": float(absolute_match.group(1)),
-        "angular_unit": "rad" if unit.startswith("rad") else "deg",
-    }
-
-
 @dataclass
 class _SequenceExecutionState:
     intent_text: str
@@ -268,6 +202,7 @@ class LLMGatewayNode(Node):
         )
         runtime_mode = self._resolve_runtime_mode()
         self._runtime_mode = runtime_mode
+        self._code_version = self._resolve_code_version()
         self._review_intent_requires_token = False
         self._station_scene_graph = self._load_station_scene_graph_safe()
         semantic_map = self._station_scene_graph.to_dict() if self._station_scene_graph else None
@@ -284,7 +219,6 @@ class LLMGatewayNode(Node):
         self._latest_joint_positions_by_name_rad: Dict[str, float] = {}
         self._latest_pose_by_frame: Dict[str, Dict[str, Any]] = {}
         self._current_pose_cache_ttl_sec = 5.0
-        self._semantic_review_cache: Dict[str, Dict[str, Any]] = {}
         self._scene_snapshot_cache = _SceneSnapshotCache(ttl_sec=2.0)
         llm_backend_config = load_llm_backend_config(llm_config_path)
         self._llm_client = llm_client or OpenAICompatibleLLMClient(
@@ -473,6 +407,31 @@ class LLMGatewayNode(Node):
         )
         return runtime_mode or "hardware"
 
+    @staticmethod
+    def _resolve_code_version() -> str:
+        """Git short hash for the running code, or 'unknown' if unavailable."""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=str(Path(__file__).resolve().parent),
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=True,
+            )
+            return result.stdout.strip() or "unknown"
+        except Exception:
+            return "unknown"
+
+    def _stamp_review_provenance(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Attach parse source and code version to review payloads without mutating input."""
+        if not isinstance(payload, dict):
+            return payload
+        stamped = dict(payload)
+        stamped.setdefault("_parse_source", "unknown")
+        stamped["_code_version"] = getattr(self, "_code_version", "unknown")
+        return stamped
+
     def _load_react_enabled(self) -> bool:
         """Read llm.react.enabled from safety_rules.yaml SSOT."""
         from pathlib import Path
@@ -536,54 +495,6 @@ class LLMGatewayNode(Node):
         )
 
     @staticmethod
-    def _direct_review_semantic_ir(
-        intent_text: str,
-        *,
-        allow_sequence: bool = True,
-        runtime_mode: str = "",
-        station_scene_graph=None,
-    ) -> Dict[str, Any] | None:
-        _ = allow_sequence, runtime_mode
-        normalized = " ".join(str(intent_text or "").strip().lower().split())
-        normalized = normalized.strip(" .!?")
-        if normalized in _DIRECT_STOP_REVIEW_TEXTS:
-            return {"intent": "stop"}
-
-        joint_review = _direct_joint_review_semantic_ir(normalized)
-        if joint_review is not None:
-            return joint_review
-
-        if station_scene_graph is not None:
-            stripped = normalized
-            for prefix in _STATION_NAV_PREFIXES:
-                if stripped.startswith(prefix):
-                    stripped = stripped[len(prefix):].strip()
-                    break
-            result = station_scene_graph.resolve_region(stripped)
-            if result.ok and result.payload:
-                geometry = result.payload.get("geometry", {})
-                center = geometry.get("center", {})
-                size = geometry.get("size", {})
-                x = float(center.get("x", 0.0))
-                y = float(center.get("y", 0.0))
-                z = float(center.get("z", 0.0))
-                size_z = float(size.get("z", 0.0))
-                zones = result.payload.get("zones", {})
-                clearance = 0.10
-                for zone_data in zones.values():
-                    if isinstance(zone_data, dict) and "default_clearance_m" in zone_data:
-                        clearance = float(zone_data["default_clearance_m"])
-                        break
-                safe_z = z + (size_z / 2.0) + clearance
-                return {
-                    "intent": "absolute_move_ptp",
-                    "target_pose": {
-                        "position": {"x": x, "y": y, "z": round(safe_z, 4)},
-                    },
-                }
-        return None
-
-    @staticmethod
     def _validate_draw_params(semantic_ir: Dict[str, Any]) -> str | None:
         """Return an error string if required draw params are missing, None if valid."""
         intent = str(semantic_ir.get("intent", "")).strip()
@@ -644,24 +555,16 @@ class LLMGatewayNode(Node):
         return None
 
     def _generate_review_semantic_ir(self, intent_text: str) -> Dict[str, Any]:
-        cached_review = self._get_semantic_review_cache(intent_text)
-        if cached_review is not None:
-            return cached_review
-
-        direct_review = self._direct_review_semantic_ir(
-            intent_text,
-            runtime_mode=self._runtime_mode,
-            station_scene_graph=getattr(self, "_station_scene_graph", None),
-        )
+        direct_review = direct_commands.parse(intent_text)
         if direct_review is not None:
             self._emit_trace(
                 "direct_pre_parsed",
                 "parsing",
-                source="direct_fast_path",
+                source="direct",
                 summary=str(direct_review.get("intent") or "")[:80],
             )
             validated = dict(direct_review)
-            validated["_parse_source"] = "direct_fast_path"
+            validated["_parse_source"] = "direct"
             return validated
 
         if self._react_enabled and self._react_agent is not None:
@@ -702,58 +605,101 @@ class LLMGatewayNode(Node):
     def _compile_factory_task_review_result(
         self, payload: Dict[str, Any], *, parse_source: str
     ) -> Dict[str, Any]:
-        from llm_gateway.factory_task import FactoryTaskError as _FTError
         task = parse_factory_task(payload)
-        try:
-            compiled = TaskCompiler(world_model=self._factory_task_world_model()).compile(task)
-        except _FTError as exc:
-            # Runtime-control FactoryTasks (retry/fallback/repeat/for_each) cannot be
-            # statically compiled to Semantic IR. Return a runtime-execution sentinel
-            # that carries the full task tree for TaskRuntime and is visible in the HMI.
-            runtime_plan = self._factory_task_runtime_plan(payload)
-            semantic_ir: Dict[str, Any] = {
-                "intent": "get_pose",
-                "metadata": {
-                    "factory_task": {
-                        "task_id": task.task_id,
-                        "version": task.version,
-                        "mode": task.mode,
-                        "operator_summary": task.operator_summary,
-                    },
-                    "runtime_plan": runtime_plan,
-                    "policy_decisions": [
-                        {
-                            "node_path": "root",
-                            "node_type": task.root.type,
-                            "node_name": task.root.name or task.root.type,
-                            "decision": "allow",
-                            "reason": "runtime control preserved; TaskRuntime executes retry/fallback/replan",
-                            "risk_level": "medium",
-                        }
-                    ],
-                    "runtime_control_reason": str(exc),
+        runtime_plan = self._factory_task_runtime_plan(payload)
+        semantic_ir: Dict[str, Any] = {
+            "intent": FACTORY_TASK_RUNTIME_INTENT,
+            "metadata": {
+                "factory_task": {
+                    "task_id": task.task_id,
+                    "version": task.version,
+                    "mode": task.mode,
+                    "operator_summary": task.operator_summary,
+                    "limits": dict(task.limits),
+                    "replan_policy": dict(task.replan_policy),
                 },
-                "_parse_source": parse_source,
-                "_factory_task_runtime": True,
-            }
-            self._emit_trace(
-                "factory_task_runtime_plan",
-                "planning",
-                source=parse_source,
-                summary=task.task_id[:80],
-                details_json=json.dumps({"runtime_control_reason": str(exc)[:120]}),
-            )
-            return semantic_ir
-        semantic_ir = dict(compiled.semantic_ir)
-        semantic_ir["_parse_source"] = parse_source
+                "runtime_plan": runtime_plan,
+                "policy_decisions": self._factory_task_review_policy_decisions(
+                    runtime_plan
+                ),
+            },
+            "_parse_source": parse_source,
+            "_factory_task_runtime": True,
+        }
         self._emit_trace(
-            "factory_task_compiled",
+            "factory_task_runtime_plan",
             "planning",
             source=parse_source,
             summary=task.task_id[:80],
             details_json=json.dumps(semantic_ir.get("metadata") or {}),
         )
         return semantic_ir
+
+    @staticmethod
+    def _factory_task_review_policy_decisions(
+        runtime_plan: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        decisions: List[Dict[str, Any]] = []
+
+        def _walk(node: Any, path: str) -> None:
+            if not isinstance(node, dict):
+                return
+            node_type = str(node.get("type") or "")
+            node_name = str(node.get("name") or node_type)
+            decisions.append(
+                {
+                    "node_path": path,
+                    "node_type": node_type,
+                    "node_name": node_name,
+                    "decision": "allow",
+                    "reason": (
+                        "review preserves FactoryTask for TaskRuntime; "
+                        "runtime controls such as retry/fallback/replan remain live; "
+                        "motion remains behind validation, operator confirmation, "
+                        "and execution guards"
+                    ),
+                    "risk_level": "medium" if node_type == "skill" else "low",
+                }
+            )
+            for index, child in enumerate(node.get("children") or []):
+                _walk(child, f"{path}.children[{index}]")
+
+        _walk(runtime_plan, "root")
+        return decisions
+
+    def _prime_factory_task_world_model(self, payload: Dict[str, Any]) -> None:
+        for object_ref in self._factory_task_grounding_object_refs(payload):
+            try:
+                self._factory_task_world_model().object_pose(object_ref)
+                continue
+            except Exception:
+                pass
+            query = {"class_filter": object_ref, "frame": "base_link"}
+            result = self._query_perception_detections(query)
+            if result.get("ok") and isinstance(result.get("payload"), dict):
+                self._get_scene_snapshot_cache().store(query, result["payload"])
+
+    @staticmethod
+    def _factory_task_grounding_object_refs(payload: Dict[str, Any]) -> tuple[str, ...]:
+        refs: List[str] = []
+
+        def _walk(node: Any) -> None:
+            if not isinstance(node, dict):
+                return
+            args = node.get("args") if isinstance(node.get("args"), dict) else {}
+            if node.get("type") == "skill" and node.get("name") in {
+                "move_to_object", "pick_object", "pick_and_place",
+            }:
+                value = args.get("object_ref") or args.get("object") or args.get("object_id")
+                if isinstance(value, str):
+                    object_ref = value.strip()
+                    if object_ref and not object_ref.startswith("$") and object_ref not in refs:
+                        refs.append(object_ref)
+            for child in node.get("children") or []:
+                _walk(child)
+
+        _walk(payload.get("root"))
+        return tuple(refs)
 
     @staticmethod
     def _factory_task_runtime_plan(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -833,68 +779,6 @@ class LLMGatewayNode(Node):
             if value and value not in keys:
                 keys.append(value)
         return tuple(keys)
-
-    def _review_cache_key(self, intent_text: str) -> str:
-        normalized = " ".join(str(intent_text or "").strip().lower().split())
-        return f"{_REVIEW_CACHE_VERSION}|{self._runtime_mode}|{normalized}"
-
-    def _get_semantic_review_cache(self, intent_text: str) -> Dict[str, Any] | None:
-        cache = getattr(self, "_semantic_review_cache", None)
-        if not isinstance(cache, dict):
-            return None
-        cached = cache.get(self._review_cache_key(intent_text))
-        if not isinstance(cached, dict):
-            return None
-        result = deepcopy(cached)
-        result["_parse_source"] = "semantic_cache"
-        self._emit_trace(
-            "semantic_cache_hit",
-            "parsing",
-            source="semantic_cache",
-            summary=str(result.get("intent") or "")[:80],
-        )
-        return result
-
-    def _store_semantic_review_cache(
-        self, intent_text: str, semantic_ir: Dict[str, Any]
-    ) -> None:
-        if not self._semantic_ir_cacheable(semantic_ir):
-            return
-        cache = getattr(self, "_semantic_review_cache", None)
-        if not isinstance(cache, dict):
-            cache = {}
-            self._semantic_review_cache = cache
-        stored = self._strip_metadata_fields(semantic_ir)
-        cache[self._review_cache_key(intent_text)] = stored
-        while len(cache) > _REVIEW_CACHE_MAX_ENTRIES:
-            oldest_key = next(iter(cache))
-            cache.pop(oldest_key, None)
-
-    @staticmethod
-    def _semantic_ir_cacheable(payload: Any) -> bool:
-        if not isinstance(payload, dict) or "error" in payload:
-            return False
-        intent = str(payload.get("intent") or "").strip()
-        if intent in {"draw_shape", "draw_text"}:
-            return True
-        if intent == "sequence":
-            steps = payload.get("steps")
-            return isinstance(steps, list) and all(
-                LLMGatewayNode._semantic_ir_cacheable(step) for step in steps
-            )
-        return False
-
-    @staticmethod
-    def _strip_metadata_fields(payload: Any) -> Any:
-        if isinstance(payload, dict):
-            return {
-                key: LLMGatewayNode._strip_metadata_fields(value)
-                for key, value in payload.items()
-                if not str(key).startswith("_")
-            }
-        if isinstance(payload, list):
-            return [LLMGatewayNode._strip_metadata_fields(value) for value in payload]
-        return deepcopy(payload)
 
     def _resolve_tool_relative_review_move(
         self, payload: Dict[str, Any]
@@ -1126,6 +1010,7 @@ class LLMGatewayNode(Node):
             return response
 
         semantic_ir = self._prepare_review_semantic_ir(semantic_ir)
+        semantic_ir = self._stamp_review_provenance(semantic_ir)
         contract = validate_semantic_ir_contract(semantic_ir)
         if not contract.valid:
             response.accepted = False
@@ -1165,6 +1050,8 @@ class LLMGatewayNode(Node):
             )
             return response
         if (
+            not is_factory_task_runtime_sentinel(semantic_ir)
+            and
             not self._semantic_ir_contains_intent(semantic_ir, "return_to_start")
             and not self._semantic_ir_contains_any_intent(
                 semantic_ir, {"draw_shape", "draw_text"}
@@ -1199,7 +1086,6 @@ class LLMGatewayNode(Node):
 
         response.accepted = True
         response.error = ""
-        self._store_semantic_review_cache(intent_text, semantic_ir)
         return response
 
     def _react_joint_state_callback(self, msg: JointState) -> None:
@@ -1435,9 +1321,13 @@ class LLMGatewayNode(Node):
                 )
                 return
             if is_factory_task(react_result):
-                react_result = self._compile_factory_task_review_result(
-                    react_result, parse_source="react_factory_task"
+                self._reject(
+                    "factory_task_requires_review",
+                    "FactoryTask motion requests must be reviewed through "
+                    "/llm_gateway/review_intent and confirmed before execution.",
+                    intent_text=intent_text,
                 )
+                return
             elif "error" not in react_result:
                 self._reject(
                     "react_contract_rejected",
@@ -2610,6 +2500,224 @@ class LLMGatewayNode(Node):
 
         return response
 
+    @staticmethod
+    def _factory_task_payload_from_runtime_sentinel(
+        parsed_intent: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        metadata = parsed_intent.get("metadata")
+        if not isinstance(metadata, dict):
+            raise ValueError("FactoryTask runtime sentinel requires metadata")
+        factory_task = metadata.get("factory_task")
+        runtime_plan = metadata.get("runtime_plan")
+        if not isinstance(factory_task, dict) or not isinstance(runtime_plan, dict):
+            raise ValueError(
+                "FactoryTask runtime sentinel requires factory_task and runtime_plan metadata"
+            )
+        task_id = str(factory_task.get("task_id") or "").strip()
+        if not task_id:
+            raise ValueError("FactoryTask runtime sentinel requires factory_task.task_id")
+        return {
+            "task_type": "factory_task",
+            "version": str(factory_task.get("version") or "1.0"),
+            "task_id": task_id,
+            "mode": str(factory_task.get("mode") or "supervised_hardware"),
+            "operator_summary": str(factory_task.get("operator_summary") or ""),
+            "limits": dict(factory_task.get("limits") or {}),
+            "replan_policy": dict(factory_task.get("replan_policy") or {}),
+            "root": dict(runtime_plan),
+        }
+
+    def _on_confirm_factory_task_runtime(
+        self,
+        parsed_intent: Dict[str, Any],
+        request: ConfirmExecution.Request,
+        response: ConfirmExecution.Response,
+    ) -> ConfirmExecution.Response:
+        try:
+            task_payload = self._factory_task_payload_from_runtime_sentinel(
+                parsed_intent
+            )
+            task = parse_factory_task(task_payload)
+        except Exception as exc:
+            response.accepted = False
+            response.reason = f"invalid FactoryTask runtime payload: {exc}"
+            return response
+
+        def _execute_skill(name: str, args: Dict[str, Any]) -> RuntimeStepResult:
+            try:
+                semantic_ir = self._semantic_ir_for_runtime_skill(
+                    task_payload, name, args
+                )
+                return self._validate_runtime_semantic_ir(semantic_ir)
+            except Exception as exc:
+                return RuntimeStepResult(success=False, reason=str(exc))
+
+        report = TaskRuntime(world_model=self._factory_task_world_model()).run(
+            task, _execute_skill
+        )
+        if not report.success:
+            response.accepted = False
+            response.reason = report.reason or "FactoryTask runtime validation failed"
+            response.dispatched_to_ros = False
+            return response
+
+        response.accepted = True
+        response.reason = ""
+        response.execution_summary = (
+            f"FactoryTask {task.task_id} confirmed by {request.operator_id}; "
+            f"validated {sum(report.attempts_by_skill.values())} runtime skill(s); "
+            f"fingerprint {request.plan_fingerprint[:12]}..."
+        )
+        response.dispatched_to_ros = False
+        return response
+
+    def _semantic_ir_for_runtime_skill(
+        self,
+        task_payload: Dict[str, Any],
+        name: str,
+        args: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if name in {"pick_object", "place_object", "pick_and_place"}:
+            config = getattr(getattr(self, "_gripper_adapter", None), "_config", None)
+            if config is None or not config.verified():
+                raise ValueError("gripper configuration is not verified")
+
+        single_task_payload = dict(task_payload)
+        single_task_payload["task_id"] = f"{task_payload['task_id']}:{name}"
+        single_task_payload["root"] = {
+            "type": "skill",
+            "name": name,
+            "args": dict(args or {}),
+        }
+        self._prime_factory_task_world_model(single_task_payload)
+        compiled = TaskCompiler(world_model=self._factory_task_world_model()).compile(
+            parse_factory_task(single_task_payload)
+        )
+        return dict(compiled.semantic_ir)
+
+    def _validate_runtime_semantic_ir(
+        self, semantic_ir: Dict[str, Any]
+    ) -> RuntimeStepResult:
+        if not isinstance(semantic_ir, dict):
+            return RuntimeStepResult(
+                success=False,
+                reason="runtime skill produced a non-object command artifact",
+            )
+        if semantic_ir.get("intent") == "sequence":
+            steps = semantic_ir.get("steps")
+            if not isinstance(steps, list) or not steps:
+                return RuntimeStepResult(
+                    success=False,
+                    reason="runtime sequence requires at least one step",
+                )
+            for step in steps:
+                result = self._validate_runtime_semantic_ir(step)
+                if not result.success:
+                    return result
+            return RuntimeStepResult(success=True)
+
+        prepared = self._prepare_review_semantic_ir(semantic_ir)
+        if isinstance(prepared, dict) and "error" in prepared:
+            return RuntimeStepResult(
+                success=False,
+                reason=self._review_error_message(prepared),
+            )
+        contract = validate_semantic_ir_contract(prepared)
+        if not contract.valid:
+            return RuntimeStepResult(success=False, reason=contract.reason)
+
+        try:
+            routed = self._intent_router.route(
+                self._canonicalize_semantic_ir_aliases(prepared)
+            )
+        except Exception as exc:
+            return RuntimeStepResult(
+                success=False,
+                reason=self._review_exception_message(exc),
+            )
+        if routed.route_type == "error":
+            error_payload = routed.error_payload or {}
+            return RuntimeStepResult(
+                success=False,
+                reason=self._review_error_message(
+                    {
+                        "error": error_payload.get("error"),
+                        "message": (
+                            error_payload.get("message")
+                            or "runtime skill was rejected by the intent router."
+                        ),
+                        "intent": error_payload.get("intent"),
+                    }
+                ),
+            )
+        commands = list(routed.commands or [])
+        if not commands:
+            return RuntimeStepResult(
+                success=False,
+                reason="runtime skill produced no routed command",
+            )
+        for command in commands:
+            result = self._validate_runtime_command(command)
+            if not result.success:
+                return result
+        return RuntimeStepResult(success=True)
+
+    def _validate_runtime_command(
+        self, command: Dict[str, Any]
+    ) -> RuntimeStepResult:
+        try:
+            self._schema_validator.validate(command)
+            normalized_command = self._normalize_and_validate(command)
+        except Exception as exc:
+            return RuntimeStepResult(success=False, reason=str(exc))
+
+        primitive_type = str(normalized_command.get("primitive_type") or "")
+        if self._is_query_command(primitive_type):
+            pose_client = getattr(self, "_get_pose_client", None)
+            if pose_client is None or not pose_client.wait_for_service(
+                timeout_sec=self._safety_service_timeout_sec
+            ):
+                return RuntimeStepResult(
+                    success=False,
+                    reason="GetCurrentPose service unavailable",
+                )
+            return RuntimeStepResult(success=True)
+
+        command_payload = self._goal_mapper.to_command_payload(normalized_command)
+        if not self._validate_client.wait_for_service(
+            timeout_sec=self._safety_service_timeout_sec
+        ):
+            return RuntimeStepResult(
+                success=False,
+                reason="ValidateCommand service unavailable",
+            )
+        validate_req = self._build_validate_request(normalized_command, command_payload)
+        try:
+            validate_future = self._validate_client.call_async(validate_req)
+            done, validate_resp = self._wait_for_future_without_spinning(
+                validate_future, self._safety_service_timeout_sec
+            )
+        except Exception as exc:
+            return RuntimeStepResult(
+                success=False,
+                reason=f"ValidateCommand call failed: {exc}",
+            )
+        if not done:
+            return RuntimeStepResult(
+                success=False,
+                reason="ValidateCommand service timed out",
+            )
+        if not validate_resp.valid:
+            return RuntimeStepResult(success=False, reason=str(validate_resp.reason))
+
+        execute_client = getattr(self, "_execute_client", None)
+        if execute_client is None or not execute_client.server_is_ready():
+            return RuntimeStepResult(
+                success=False,
+                reason="ExecuteMotion action server unavailable",
+            )
+        return RuntimeStepResult(success=True)
+
     def _on_confirm_execution(
         self,
         request: ConfirmExecution.Request,
@@ -2624,6 +2732,11 @@ class LLMGatewayNode(Node):
             response.accepted = False
             response.reason = f"invalid parsed_intent_json: {exc}"
             return response
+
+        if is_factory_task_runtime_sentinel(parsed_intent):
+            return self._on_confirm_factory_task_runtime(
+                parsed_intent, request, response
+            )
 
         if not self._validate_client.wait_for_service(
             timeout_sec=self._safety_service_timeout_sec

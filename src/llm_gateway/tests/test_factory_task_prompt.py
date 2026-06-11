@@ -106,6 +106,12 @@ def test_prompt_keeps_safety_boundary_visible(prompt: str) -> None:
     assert "collision" in prompt.lower()
 
 
+def test_prompt_prefers_runtime_observe_for_ungrounded_world_facts(prompt: str) -> None:
+    assert "ALWAYS generate a FactoryTask with an observe" in prompt
+    assert "Only return MISSING_SLOT if the operator's command is fundamentally incomplete" in prompt
+    assert "must produce MISSING_SLOT or a FactoryTask observe step" not in prompt
+
+
 def test_prompt_includes_bilingual_operator_examples(prompt: str) -> None:
     assert "tiếng Việt" in prompt or "Vietnamese" in prompt
     assert "về nhà" in prompt

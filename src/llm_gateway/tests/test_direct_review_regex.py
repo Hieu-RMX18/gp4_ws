@@ -1,9 +1,4 @@
-"""Unit tests for the narrowed direct review path.
-
-Free-form motion language belongs to the ReAct/LLM path. Direct review only
-keeps protective stop and safety-critical deterministic commands whose wrong
-parse could move the wrong joint or enter station geometry.
-"""
+"""Hợp đồng tầng direct (đã chuyển sang llm_gateway.direct_commands) + draw params."""
 
 from __future__ import annotations
 
@@ -12,108 +7,39 @@ import pytest
 
 @pytest.fixture
 def direct_review():
-    from llm_gateway.llm_gateway_node import LLMGatewayNode
+    from llm_gateway import direct_commands
 
-    return LLMGatewayNode._direct_review_semantic_ir
+    return direct_commands.parse
 
 
 class TestDirectReviewDeterministicSafety:
     @pytest.mark.parametrize(
-        "raw_text",
-        ["stop", "stop motion", "cancel motion", "halt"],
-    )
-    def test_protective_stop_stays_direct(self, direct_review, raw_text):
-        assert direct_review(raw_text) == {"intent": "stop"}
-
-    @pytest.mark.parametrize(
         ("raw_text", "expected"),
         [
-            (
-                "xoay khớp số 3 +15 độ",
-                {
-                    "intent": "move_joint_delta",
-                    "joint_index": 2,
-                    "delta_angle": 15.0,
-                    "angular_unit": "deg",
-                },
-            ),
-            (
-                "xoay khớp 3 thêm 15 độ",
-                {
-                    "intent": "move_joint_delta",
-                    "joint_index": 2,
-                    "delta_angle": 15.0,
-                    "angular_unit": "deg",
-                },
-            ),
-            (
-                "xoay khớp số 3 sang góc 45 độ",
-                {
-                    "intent": "move_joint",
-                    "joint_index": 2,
-                    "joint_angle": 45.0,
-                    "angular_unit": "deg",
-                },
-            ),
-            (
-                "rotate joint 3 by -20 degrees",
-                {
-                    "intent": "move_joint_delta",
-                    "joint_index": 2,
-                    "delta_angle": -20.0,
-                    "angular_unit": "deg",
-                },
-            ),
+            ("stop", {"intent": "stop"}),
+            ("alarm_reset", {"intent": "alarm_reset"}),
+            ("get_pose", {"intent": "get_pose", "reference_frame": "base_link"}),
         ],
     )
-    def test_obvious_single_joint_commands_are_direct_and_indexed(
+    def test_exact_safety_and_read_only_shortcuts_stay_direct(
         self, direct_review, raw_text, expected
     ):
         assert direct_review(raw_text) == expected
 
-    def test_station_navigation_uses_top_surface_clearance(self, direct_review):
-        class _SceneGraph:
-            def resolve_region(self, query):
-                assert query == "gá phôi"
-                return type(
-                    "Result",
-                    (),
-                    {
-                        "ok": True,
-                        "payload": {
-                            "geometry": {
-                                "center": {"x": 0.28, "y": 0.18, "z": 0.12},
-                                "size": {"x": 0.22, "y": 0.12, "z": 0.10},
-                            },
-                            "zones": {"grasp_zone": {"default_clearance_m": 0.08}},
-                        },
-                    },
-                )()
-
-        result = direct_review("đi đến gá phôi", station_scene_graph=_SceneGraph())
-
-        assert result == {
-            "intent": "absolute_move_ptp",
-            "target_pose": {
-                "position": {"x": 0.28, "y": 0.18, "z": 0.25},
-            },
-        }
-
     @pytest.mark.parametrize(
         "raw_text",
         [
+            "move to pose A",
+            "move to Cartesian x 300 mm y 0 z 400",
             "move down 2 cm",
-            "move delta down 2 cm",
+            "repeat 2 times move to pose A then home",
+            "đi đến gá phôi",
+            "xoay khớp số 3 +15 độ",
             "draw circle radius 5cm",
             "vẽ hình tròn bán kính 5cm",
-            "go home",
-            "get pose",
-            "wait 2 s",
         ],
     )
-    def test_motion_and_utility_language_goes_to_react_or_llm(
-        self, direct_review, raw_text
-    ):
+    def test_free_form_language_goes_to_react_or_llm(self, direct_review, raw_text):
         assert direct_review(raw_text) is None
 
 

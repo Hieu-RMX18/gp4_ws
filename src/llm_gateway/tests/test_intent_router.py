@@ -14,7 +14,7 @@ def _macro_policy_path() -> str:
 
 
 def _router(runtime_mode: str = "hardware"):
-    from llm_gateway.intent_engine import IntentRouter
+    from llm_gateway.factory_task import IntentRouter
 
     return IntentRouter(
         macro_policy_path=_macro_policy_path(), runtime_mode=runtime_mode

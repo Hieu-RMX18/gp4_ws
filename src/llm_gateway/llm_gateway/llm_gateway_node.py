@@ -34,7 +34,7 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 
 from llm_gateway import direct_commands
-from llm_gateway.intent_engine import (
+from llm_gateway.factory_task import (
     GP4_JOINT_NAMES,
     GoalMapper,
     IntentRouter,
@@ -49,8 +49,6 @@ from llm_gateway.intent_engine import (
     hydrate_draw_workplane as _pipeline_hydrate_draw_workplane,
     prepare_execution_command as _pipeline_prepare_execution_command,
     prepare_semantic_ir_for_routing as _pipeline_prepare_semantic_ir_for_routing,
-)
-from llm_gateway.factory_task import (
     RuntimeStepResult,
     TaskCompiler,
     TaskRuntime,
@@ -65,7 +63,7 @@ from llm_gateway.task_planner import (
     load_llm_backend_config,
 )
 from motoros2_interfaces.srv import ReadSingleIO, WriteSingleIO
-from llm_gateway.composite_tools import (
+from llm_gateway.gripper_adapter import (
     GripperConfig,
     GripperIoAdapter,
 )

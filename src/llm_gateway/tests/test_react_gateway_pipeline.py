@@ -13,12 +13,12 @@ import pytest
 
 pytestmark = pytest.mark.ros_integration
 
-from llm_gateway.intent_engine import GoalMapper
-from llm_gateway.intent_engine import IntentRouter
-from llm_gateway.intent_engine import Normalizer
-from llm_gateway.intent_engine import LLMParser
-from llm_gateway.intent_engine import SchemaValidator
-from llm_gateway.intent_engine import SemanticValidator
+from llm_gateway.factory_task import GoalMapper
+from llm_gateway.factory_task import IntentRouter
+from llm_gateway.factory_task import Normalizer
+from llm_gateway.factory_task import LLMParser
+from llm_gateway.factory_task import SchemaValidator
+from llm_gateway.factory_task import SemanticValidator
 from llm_gateway.factory_task import TaskCompiler
 from llm_gateway.factory_task import WorldModel
 from llm_gateway.factory_task import parse_factory_task

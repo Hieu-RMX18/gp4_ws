@@ -41,7 +41,7 @@ from types import SimpleNamespace
 
 def test_scene_cache_invalidated_on_world_changing_tool_result():
     """runtime loop must invalidate the scene cache when a motion tool signals tool_changed_world."""
-    from llm_gateway.composite_tools import PickObjectTool
+    from llm_gateway.factory_task import PickObjectTool
 
     class _TrackingNode:
         invalidated = False

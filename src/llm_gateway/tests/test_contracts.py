@@ -22,14 +22,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from llm_gateway.intent_engine import Normalizer
+from llm_gateway.factory_task import Normalizer
 from llm_gateway.task_planner import (
     FROZEN_SEMANTIC_INTENTS,
     FROZEN_TOP_LEVEL_OUTPUT_INTENTS,
     build_system_prompt,
 )
-from llm_gateway.intent_engine import SchemaValidator
-from llm_gateway.intent_engine import SemanticValidator
+from llm_gateway.factory_task import SchemaValidator
+from llm_gateway.factory_task import SemanticValidator
 
 
 # Frozen public primitive set for the current sprint contract.
@@ -161,7 +161,7 @@ def test_intent_to_primitive_mapping_matches_frozen_intents():
 
 def test_intent_router_covers_all_frozen_intents():
     """IntentRouter must handle every intent in FROZEN_SEMANTIC_INTENTS."""
-    from llm_gateway.intent_engine import IntentRouter
+    from llm_gateway.factory_task import IntentRouter
     import inspect
 
     router = IntentRouter(
@@ -221,7 +221,7 @@ def test_schema_declares_explicit_unit_hints():
 
 
 def test_router_output_with_explicit_units_survives_schema_and_normalizer():
-    from llm_gateway.intent_engine import IntentRouter
+    from llm_gateway.factory_task import IntentRouter
 
     router = IntentRouter()
     routed = router.route(

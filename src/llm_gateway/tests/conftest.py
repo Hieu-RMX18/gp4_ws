@@ -47,28 +47,28 @@ def macro_policy_path() -> str:
 
 @pytest.fixture
 def parser():
-    from llm_gateway.intent_engine import LLMParser
+    from llm_gateway.factory_task import LLMParser
 
     return LLMParser()
 
 
 @pytest.fixture
 def validator(schema_path: str):
-    from llm_gateway.intent_engine import SchemaValidator
+    from llm_gateway.factory_task import SchemaValidator
 
     return SchemaValidator(schema_path)
 
 
 @pytest.fixture
 def normalizer():
-    from llm_gateway.intent_engine import Normalizer
+    from llm_gateway.factory_task import Normalizer
 
     return Normalizer(default_velocity_scale=0.06, default_acceleration_scale=0.06)
 
 
 @pytest.fixture
 def semantic_validator():
-    from llm_gateway.intent_engine import SemanticValidator
+    from llm_gateway.factory_task import SemanticValidator
 
     return SemanticValidator()
 

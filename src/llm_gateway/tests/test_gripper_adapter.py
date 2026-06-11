@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from llm_gateway.composite_tools import GripperConfig, GripperIoAdapter
+from llm_gateway.gripper_adapter import GripperConfig, GripperIoAdapter
 
 
 def test_gripper_config_requires_verified_values():
@@ -56,7 +56,7 @@ def test_gripper_adapter_open_and_close_reject_motion_state():
 
 def test_gripper_adapter_calls_write_single_io_when_verified():
     """Verify the adapter calls WriteSingleIO service when config is verified."""
-    from llm_gateway.composite_tools import GripperConfig, GripperIoAdapter
+    from llm_gateway.gripper_adapter import GripperConfig, GripperIoAdapter
     from types import SimpleNamespace
 
     config = GripperConfig(

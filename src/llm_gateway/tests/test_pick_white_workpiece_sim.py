@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from llm_gateway.composite_tools import PostconditionVerifier
+from llm_gateway.factory_task import PostconditionVerifier
 from llm_gateway.factory_task import (
     FACTORY_TASK_VERSION,
     FactoryTask,

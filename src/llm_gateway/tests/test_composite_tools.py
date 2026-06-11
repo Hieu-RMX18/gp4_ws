@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from llm_gateway.composite_tools import (
+from llm_gateway.factory_task import (
     ApproachObjectTool,
     CandidatePoseRequest,
     EmitSequenceTool,
@@ -230,7 +230,7 @@ def test_verify_grasp_fails_closed_without_adapter():
     assert tool.is_readonly is True
 
 def test_verify_grasp_fails_with_verify_config_gripper():
-    from llm_gateway.composite_tools import GripperConfig, GripperIoAdapter
+    from llm_gateway.gripper_adapter import GripperConfig, GripperIoAdapter
 
     config = GripperConfig.from_rules({"gripper": {"open_output_address": "VERIFY_CONFIG"}})
     adapter = GripperIoAdapter(config=config, node=None, robot_mode_fn=lambda: "IDLE")

@@ -202,6 +202,7 @@ class ExecutionGate:
             "GET_POSE",
             # BLENDED_SEQUENCE validates every sequence_steps target below.
             "BLENDED_SEQUENCE",
+            "FACTORY_TASK_RUNTIME",
         }
         if prim_type not in pose_validation_skip_primitives and not ptp_with_joints:
             p = request.target_pose.position

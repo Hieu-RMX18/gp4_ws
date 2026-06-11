@@ -146,6 +146,8 @@ class _E2ELLMFixtureHandler(BaseHTTPRequestHandler):
             for message in reversed(messages):
                 if isinstance(message, dict) and message.get("role") == "user":
                     raw_text = str(message.get("content") or "")
+                    if "Operator command:" in raw_text:
+                        raw_text = raw_text.split("Operator command:")[-1].strip()
                     break
         content = json.dumps(_factory_task_response(raw_text), separators=(",", ":"))
         response = {
@@ -217,6 +219,8 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
             self._sim_log_handle.close()
             self._sim_log_handle = None
 
+
+
     async def test_home_command_executes_to_success_in_sim(self) -> None:
         self._start_sim_stack()
         self._start_api_server()
@@ -243,8 +247,8 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
 
         cases = [
             {"intent_text": "home", "expected_action": "HOME"},
-            {"intent_text": "move down 1 cm", "expected_action": "MOVE_REL"},
-            {"intent_text": "move joint 2 5 deg", "expected_action": "MOVE_JOINT"},
+            {"intent_text": "move down 1 cm", "expected_action": "FACTORY_TASK_RUNTIME"},
+            {"intent_text": "move joint 2 5 deg", "expected_action": "FACTORY_TASK_RUNTIME"},
             {"intent_text": "stop", "expected_action": "STOP"},
         ]
         for index, case in enumerate(cases, start=1):
@@ -368,7 +372,7 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
             session_id=f"e2e-session-prime-{suffix}",
             operator_id=f"e2e-operator-prime-{suffix}",
             intent_text="move down 5 cm",
-            expected_action="MOVE_REL",
+            expected_action="FACTORY_TASK_RUNTIME",
         )
         self.assertEqual(result["command"]["finalState"], "SUCCEEDED")
 

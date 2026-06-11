@@ -33,7 +33,7 @@ class TestPackageImports(unittest.TestCase):
         self.assertIn("def main", source)
 
     def test_intent_router_importable(self) -> None:
-        mod = importlib.import_module("llm_gateway.intent_engine")
+        mod = importlib.import_module("llm_gateway.factory_task")
         self.assertTrue(hasattr(mod, "IntentRouter"))
         self.assertTrue(hasattr(mod, "RouteResult"))
 
@@ -44,10 +44,6 @@ class TestPackageImports(unittest.TestCase):
     def test_adapter_importable(self) -> None:
         mod = importlib.import_module("hmi.backend.ros.adapter")
         self.assertTrue(hasattr(mod, "WorkspaceRosAdapter"))
-
-    def test_intent_resolution_importable(self) -> None:
-        mod = importlib.import_module("hmi.backend.services.intent_resolution")
-        self.assertTrue(hasattr(mod, "IntentResolutionService"))
 
     def test_jog_service_importable(self) -> None:
         mod = importlib.import_module("hmi.backend.services.jog_service")
@@ -174,11 +170,6 @@ class TestJointNameContract(unittest.TestCase):
         from hmi.backend.ros.adapter import DEFAULT_JOINT_NAMES
 
         self.assertEqual(tuple(DEFAULT_JOINT_NAMES), self.EXPECTED)
-
-    def test_intent_resolution_joint_names(self) -> None:
-        from hmi.backend.services.intent_resolution import JOINT_NAMES
-
-        self.assertEqual(tuple(JOINT_NAMES), self.EXPECTED)
 
 
 class TestConstants(unittest.TestCase):

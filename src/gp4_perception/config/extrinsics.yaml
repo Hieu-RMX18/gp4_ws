@@ -6,12 +6,12 @@ hand_eye_extrinsics:
     y: 0.05097639115929843
     z: 1.0268204792273376
   rotation_quat:
-    x: 0.270598050073098 
+    x: 0.270598050073098
     y: 0.270598050073099
     z: -0.653281482438188
     w: 0.653281482438188
-  calibration_date: '2026-06-07T10:36:00AM'
-  reprojection_error_mm: 1.0
+  calibration_date: '2026-06-07T09:32:24AM'
+  reprojection_error_mm: 2.614
   n_samples: 18
   solver: PARK
   workspace_distance_m: 0.545

@@ -49,7 +49,7 @@ def test_visualization_config_sets_frame_rate_and_bandwidth_limits():
     cfg = yaml.safe_load((PKG / "config" / "perception.yaml").read_text())
     viz = cfg["perception"]["visualization"]
 
-    assert viz["max_process_fps"] == 10.0
+    assert viz["max_process_fps"] == 30.0
     assert viz["max_annotated_width_px"] == 960
     assert viz["qos"]["debug_images"]["reliability"] == "best_effort"
 

@@ -12,7 +12,34 @@ from ..domain.models import (
     TelemetryFreshnessState,
 )
 from ..domain.state_machine import is_blocking_runtime_state
-from .intent_resolution import IntentResolutionError
+class IntentResolutionError(ValueError):
+    def __init__(
+        self,
+        reason: str,
+        *,
+        missing_slots: list[str] | None = None,
+        rejected_fields: list[str] | None = None,
+    ) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.missing_slots = missing_slots or []
+        self.rejected_fields = rejected_fields or []
+
+    def operator_message(self) -> str:
+        fragments = [self.reason]
+        if self.missing_slots:
+            fragments.append("missing fields: " + ", ".join(self.missing_slots))
+        if self.rejected_fields:
+            fragments.append("rejected fields: " + ", ".join(self.rejected_fields))
+        return "; ".join(fragments)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "reason": self.reason,
+            "missingSlots": list(self.missing_slots),
+            "rejectedFields": list(self.rejected_fields),
+        }
+
 
 EVENT_DRIVEN_SOURCE_NAMES = {
     "llm_debug",
@@ -32,6 +59,62 @@ EXECUTION_BOUNDARY_SOURCE_NAMES = {
 
 
 class SupervisorValidationMixin:
+    def _target_summary(self, normalized_command: dict[str, Any]) -> str:
+        primitive = normalized_command["primitive_type"]
+        if primitive == "HOME":
+            return "Return robot to configured home pose."
+        if primitive == "STOP":
+            return "Request supervised stop handling."
+        if primitive == "MOVE_REL":
+            return (
+                "Relative translation in base_link: "
+                f"dx={float(normalized_command.get('delta_x', 0.0)) * 1000.0:.1f} mm "
+                f"dy={float(normalized_command.get('delta_y', 0.0)) * 1000.0:.1f} mm "
+                f"dz={float(normalized_command.get('delta_z', 0.0)) * 1000.0:.1f} mm."
+            )
+        if primitive == "MOVE_JOINT":
+            return (
+                "Move single joint target: "
+                f"joint_index={normalized_command.get('joint_index')} "
+                f"joint_angle={normalized_command.get('joint_angle'):.4f} rad."
+            )
+        if primitive == "MOVE_JOINTS":
+            return "Move all six joints to absolute targets."
+        if primitive == "WAIT":
+            return f"Pause execution for {normalized_command.get('wait_duration_sec', 0.0):.2f} s."
+        if primitive == "SET_SPEED":
+            return f"Set default velocity scale to {normalized_command.get('velocity_scale', 0.0):.4f}."
+        if primitive == "IO_SET":
+            return (
+                f"Set controller IO address {normalized_command.get('io_address')} "
+                f"to {normalized_command.get('io_value')}."
+            )
+        if primitive == "ALARM_RESET":
+            return "Request alarm reset at execution boundary."
+        if primitive == "GET_POSE":
+            return "Query current robot TCP pose."
+        if primitive == "LIN":
+            return "Linear motion to target pose."
+        if primitive == "PTP":
+            return "Point-to-point motion to target pose or joint target."
+        if primitive == "CIRC":
+            return "Circular motion using auxiliary waypoint."
+        if primitive == "CARTESIAN_PATH":
+            return "Cartesian multi-waypoint path execution."
+        if primitive == "FACTORY_TASK_RUNTIME":
+            metadata = normalized_command.get("metadata") or {}
+            return metadata.get("operator_summary") or "Execute consolidated FactoryTask runtime plan."
+        return f"Execute primitive {primitive}."
+
+    def _to_jsonable(self, val: Any) -> Any:
+        if isinstance(val, dict):
+            return {k: self._to_jsonable(v) for k, v in val.items()}
+        if isinstance(val, list):
+            return [self._to_jsonable(v) for v in val]
+        if hasattr(val, "__slots__") and not isinstance(val, type):
+            return {slot: self._to_jsonable(getattr(val, slot)) for slot in val.__slots__}
+        return val
+
     def _parse_intent(
         self,
         raw_text: str,
@@ -39,16 +122,123 @@ class SupervisorValidationMixin:
         mode: RuntimeMode,
     ) -> tuple[dict[str, Any] | None, str | None]:
         try:
-            parsed = self._intent_resolution.resolve(
-                raw_text=raw_text,
-                structured_intent=structured_intent,
-                runtime_mode=mode.value,
-                current_joints=self._current_joints(),
-            )
+            runtime_mode_str = str(mode.value or "hardware").strip().lower()
+
+            if structured_intent is None and raw_text:
+                normalized_text = raw_text.strip().lower()
+                if normalized_text in {"home", "go home", "move home", "return home", "move to home"}:
+                    structured_intent = {"intent": "go_home"}
+                elif normalized_text in {"stop", "stop motion", "cancel motion", "halt"}:
+                    structured_intent = {"intent": "stop"}
+                elif normalized_text in {"get pose", "current pose", "where is robot", "where is tcp"}:
+                    structured_intent = {"intent": "get_pose"}
+                elif normalized_text in {"alarm reset", "reset alarm", "clear alarm"}:
+                    structured_intent = {"intent": "alarm_reset"}
+
+            if structured_intent is None:
+                raise IntentResolutionError(
+                    "structuredIntent is required for semantic intent parsing."
+                )
+
+            from llm_gateway.semantic_ir_contract import is_factory_task_runtime_sentinel
+            if is_factory_task_runtime_sentinel(structured_intent):
+                metadata = structured_intent.get("metadata") or {}
+                operator_summary = metadata.get("operator_summary") or "Execute consolidated FactoryTask runtime plan."
+                normalized_command = self._to_jsonable({
+                    "primitive_type": "FACTORY_TASK_RUNTIME",
+                    "metadata": metadata,
+                    "_factory_task_runtime": True,
+                    "intent": "factory_task_runtime",
+                })
+                parsed = {
+                    "source": "structured",
+                    "normalizedText": json.dumps(
+                        structured_intent, separators=(",", ":"), ensure_ascii=True
+                    ),
+                    "action": "FACTORY_TASK_RUNTIME",
+                    "intent": "factory_task_runtime",
+                    "_factory_task_runtime": True,
+                    "metadata": metadata,
+                    "parameters": {
+                        "metadata": metadata,
+                        "_factory_task_runtime": True,
+                        "intent": "factory_task_runtime",
+                    },
+                    "targetSummary": operator_summary,
+                    "normalizedCommand": normalized_command,
+                    "rawCommand": normalized_command,
+                    "normalizationNotes": [],
+                }
+                return parsed, None
+
+            from llm_gateway.factory_task import IntentRouter, Normalizer
+            if "primitive_type" in structured_intent:
+                normalized_command = self._to_jsonable(Normalizer().normalize(structured_intent))
+                primitive_type = str(normalized_command["primitive_type"])
+                parameters = {
+                    key: value
+                    for key, value in normalized_command.items()
+                    if key != "primitive_type"
+                }
+                parsed = {
+                    "source": "structured",
+                    "normalizedText": json.dumps(
+                        structured_intent, separators=(",", ":"), ensure_ascii=True
+                    ),
+                    "action": primitive_type,
+                    "parameters": parameters,
+                    "targetSummary": self._target_summary(normalized_command),
+                    "normalizedCommand": normalized_command,
+                    "rawCommand": structured_intent,
+                    "normalizationNotes": [],
+                }
+                return parsed, None
+
+            if "intent" not in structured_intent:
+                raise IntentResolutionError(
+                    "structuredIntent must include action, intent, or primitive_type.",
+                    missing_slots=["action|intent|primitive_type"],
+                )
+
+            routed = IntentRouter(runtime_mode=runtime_mode_str).route(structured_intent)
+            if routed.route_type == "error":
+                message = (routed.error_payload or {}).get("message") or (
+                    routed.error_payload or {}
+                ).get("error")
+                raise IntentResolutionError(
+                    str(message or "intent router returned an error payload.")
+                )
+            if len(routed.commands) != 1:
+                raise IntentResolutionError(
+                    f"semantic routing expected one command but produced {len(routed.commands)} commands."
+                )
+
+            raw_cmd = routed.commands[0]
+            normalized_command = self._to_jsonable(Normalizer().normalize(raw_cmd))
+            primitive_type = str(normalized_command["primitive_type"])
+            parameters = {
+                key: value
+                for key, value in normalized_command.items()
+                if key != "primitive_type"
+            }
+
+            parsed = {
+                "source": "structured",
+                "normalizedText": json.dumps(
+                    structured_intent, separators=(",", ":"), ensure_ascii=True
+                ),
+                "action": primitive_type,
+                "parameters": parameters,
+                "targetSummary": self._target_summary(normalized_command),
+                "normalizedCommand": normalized_command,
+                "rawCommand": raw_cmd,
+                "normalizationNotes": [],
+            }
             return parsed, None
+
         except IntentResolutionError as exc:
             return None, exc.operator_message()
-        except ValueError as exc:
+        except Exception as exc:
             return None, str(exc)
 
     def _planner_for_intent(self, parsed_intent: dict[str, Any]) -> str | None:

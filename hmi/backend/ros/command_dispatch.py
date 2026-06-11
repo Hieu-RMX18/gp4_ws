@@ -161,6 +161,37 @@ class CommandDispatchMixin:
                 dispatched_to_ros=False,
             )
 
+        if command_payload.get("primitive_type") == "FACTORY_TASK_RUNTIME":
+            import json
+            self._trace(
+                "confirm.factory_task_runtime",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                plan_fingerprint=plan_fingerprint,
+            )
+            exec_res = self.confirm_execution(
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                parsed_intent_json=json.dumps(parsed_intent),
+                requested_mode=requested_mode or "sim",
+            )
+            return self._execution_response(
+                accepted=exec_res.get("accepted", False),
+                status="succeeded" if exec_res.get("accepted", False) else "failed",
+                summary=exec_res.get("reason") or exec_res.get("execution_summary") or "FactoryTask runtime completed.",
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=True,
+            )
+
+
         return self._dispatch_execute_motion(
             command_id=command_id,
             plan_fingerprint=plan_fingerprint,
@@ -170,6 +201,7 @@ class CommandDispatchMixin:
             correlation_id=correlation_id,
             command_payload=command_payload,
         )
+
 
     def abort_command(self, *, command_id: str) -> tuple[bool, str]:
         with self._goal_lock:

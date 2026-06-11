@@ -52,7 +52,7 @@ perception:
     camera_info_topic: /camera/color/camera_info
     depth_scale_m: 0.001          # 16UC1 raw units -> metres
     sync_slop_s: 0.05
-    processing_rate_hz: 10.0
+    processing_rate_hz: 30.0
     sync_queue: 2
     base_frame: base_link
     camera_optical_frame: camera_color_optical_frame
@@ -60,7 +60,7 @@ perception:
 
   # ---- Visualization ----
   visualization:
-    max_process_fps: 10.0
+    max_process_fps: 30.0
     max_annotated_width_px: 960
     annotated_image:
       layout: "side_by_side"   # side_by_side | rgb_only | depth_only

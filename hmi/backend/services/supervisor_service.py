@@ -21,7 +21,6 @@ from ..domain.models import (
 from ..domain.state_machine import is_terminal_command_state
 from .audit_service import AuditService
 from .hardware_gate import HardwareGateEvaluator
-from .intent_resolution import IntentResolutionService
 from .session_lock_service import (
     LeaseNotOwnedError,
     LeaseRejectedError,
@@ -75,7 +74,6 @@ class SupervisorService(
         ros_adapter: Any,
         confirmation_window_sec: float = 30.0,
         hardware_gate_evaluator: HardwareGateEvaluator | None = None,
-        intent_resolution_service: IntentResolutionService | None = None,
         sim_auto_confirm: bool = False,
     ) -> None:
         self._audit = audit_service
@@ -83,9 +81,6 @@ class SupervisorService(
         self._ros = ros_adapter
         self._hardware_gate_evaluator = (
             hardware_gate_evaluator or HardwareGateEvaluator()
-        )
-        self._intent_resolution = intent_resolution_service or IntentResolutionService(
-            ros_adapter=ros_adapter
         )
         self._sim_auto_confirm = bool(sim_auto_confirm)
         self._telemetry: TelemetryBridgeService | None = None

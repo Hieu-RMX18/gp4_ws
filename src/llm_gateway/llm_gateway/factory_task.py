@@ -1253,7 +1253,7 @@ import logging
 import numpy as np
 
 # Failsafe motion limits — hardcoded safety boundary. These mirror the identical
-# values in safety.policy_loader._FAILSAFE_MOTION_LIMITS so intent_engine stays
+# values in safety.policy_loader._FAILSAFE_MOTION_LIMITS so factory_task stays
 # importable when the safety package is not on the path (e.g. HMI backend tests
 # running outside a colcon workspace).
 _FAILSAFE_MOTION_LIMITS: dict[str, float] = {
@@ -2063,7 +2063,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class _SchemaValidatorLike(Protocol):
-    """Minimal protocol matching intent_engine.SchemaValidator."""
+    """Minimal protocol matching SchemaValidator."""
 
     def validate(self, command: Dict[str, Any]) -> None: ...
 
@@ -4287,7 +4287,7 @@ __all__ = [
     "compile_goal",
     "load_station_semantic_map",
     "map_contains_verify_config",
-    # Intent routing (from intent_engine)
+    # Intent routing
     "GoalMapper",
     "IntentRouter",
     "DrawRouterMixin",

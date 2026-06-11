@@ -392,6 +392,13 @@ def test_duplicate_sample_warning_does_not_crash_with_rclpy_logger(
         (np.eye(3), np.array([[0.1], [0.2], [0.3]]), np.eye(3), np.zeros((3, 1)))
     )
 
+    # Seed the stationary-pose state so the robot appears to have been
+    # stationary for >1 s already.  FakeTfBuffer returns (0.1, 0.2, 0.3)
+    # identity-rotation, matching the existing sample — duplicate check fires.
+    import time as _t
+    service._last_robot_pose = (np.eye(3), np.array([[0.1], [0.2], [0.3]]))
+    service._last_robot_pose_time = _t.monotonic() - 2.0
+
     service._on_image(SimpleNamespace(header=SimpleNamespace(stamp=object())))
 
     assert len(service._samples) == 1

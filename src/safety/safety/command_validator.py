@@ -10,6 +10,7 @@ _VELOCITY_BYPASS_PRIMITIVES = {
     "WAIT",
     "IO_SET",
     "GET_POSE",
+    "FACTORY_TASK_RUNTIME",
 }
 
 # Fail-safe only — active policy is loaded from safety_rules.yaml via constructor.

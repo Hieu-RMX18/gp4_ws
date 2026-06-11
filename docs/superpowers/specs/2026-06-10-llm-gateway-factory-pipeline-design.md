@@ -213,7 +213,7 @@ trước khi sang phase sau.
 | 3 | `factory_task.py` mở rộng: WorldModel (hấp thụ station_scene_graph + scene cache), TaskCompiler (hấp thụ routing của intent_engine) | `intent_engine.py`, `station_scene_graph.py`, `composite_tools.py` |
 | 4 | `task_runtime.py`: thực thi tree, confirm-once, STOP, task_events | logic thực thi rải rác trong node |
 | 5 | HMI: xóa local parser, task states + progress, System Log mới (schema, filter, status strip, export) | `intent_resolution.py`, `intent_normalization.py` |
-| 6 | Viết lại `llm_gateway_node.py` mỏng (< 600 dòng); dọn file/test mồ côi; cập nhật CLAUDE.md + README | node cũ 3.103 dòng |
+| 6 | Viết lại `llm_gateway_node.py` mỏng; dọn file/test mồ côi; cập nhật CLAUDE.md + README | node cũ 3.103 dòng |
 
 Mỗi phase là một checkpoint demo được — robot luôn chạy được giữa các phase.
 

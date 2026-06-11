@@ -2734,55 +2734,6 @@ class RouteResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class SkillCall:
-    name: str
-    args: Dict[str, Any] = field(default_factory=dict)
-
-
-def compile_goal(
-    goal_dsl: Dict[str, Any],
-    *,
-    scene_graph: Any,
-    live_scene: Dict[str, Any] | None = None,
-) -> List[SkillCall]:
-    if not isinstance(goal_dsl, dict):
-        return [SkillCall("needs_clarification", {"field": "goal", "query": "non_object"})]
-    action = str(goal_dsl.get("action") or "").strip()
-    if action != "pick_and_place":
-        return [SkillCall("capability_unavailable", {"action": action})]
-
-    object_query = str(goal_dsl.get("object") or "").strip()
-    destination_query = str(goal_dsl.get("destination") or "").strip()
-    object_result = scene_graph.resolve_object(object_query, live_scene=live_scene)
-    if not object_result.ok:
-        return [
-            SkillCall("needs_clarification", {"field": "object", "query": object_query})
-        ]
-    destination_result = scene_graph.resolve_region(destination_query)
-    if not destination_result.ok:
-        return [
-            SkillCall(
-                "needs_clarification",
-                {"field": "destination", "query": destination_query},
-            )
-        ]
-
-    return [
-        SkillCall("refresh_scene"),
-        SkillCall("approach_object", {"object_id": object_result.name}),
-        SkillCall("pick_object", {"object_id": object_result.name}),
-        SkillCall(
-            "place_object",
-            {"object_id": object_result.name, "destination": destination_result.name},
-        ),
-        SkillCall(
-            "verify_postcondition",
-            {"object_id": object_result.name, "destination": destination_result.name},
-        ),
-    ]
-
-
 class IntentRouter(DrawRouterMixin):
     """Translate Semantic IR into the frozen public primitive set."""
 

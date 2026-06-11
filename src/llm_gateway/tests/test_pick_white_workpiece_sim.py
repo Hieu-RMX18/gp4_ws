@@ -13,15 +13,16 @@ from llm_gateway.composite_tools import PostconditionVerifier
 from llm_gateway.factory_task import (
     FACTORY_TASK_VERSION,
     FactoryTask,
+    SkillCall,
+    StationSceneGraph,
     TaskNode,
     TaskRuntime,
     RuntimeStepResult,
     TaskRuntimeReport,
     WorldModel,
+    compile_goal,
     parse_factory_task,
 )
-from llm_gateway.intent_engine import SkillCall, compile_goal
-from llm_gateway.factory_task import StationSceneGraph
 from pathlib import Path
 import pytest
 

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import signal
 import socket
 import subprocess
+import threading
 import time
 import unittest
 import urllib.error
@@ -22,6 +24,149 @@ WORKSPACE_DIR = Path(__file__).resolve().parents[3]
 INSTALL_SETUP = WORKSPACE_DIR / "install" / "setup.bash"
 APP_MODULE = "hmi.backend.api.app:app"
 SUPPORTED_SCHEMA_VERSION = "telemetry.v1"
+
+def _factory_task_response(raw_text: str) -> dict[str, Any]:
+    normalized = " ".join(str(raw_text or "").strip().lower().split())
+    if normalized == "move down 1 cm":
+        return {
+            "task_type": "factory_task",
+            "version": "1.0",
+            "task_id": "move-down-1cm",
+            "root": {
+                "type": "skill",
+                "name": "move_relative",
+                "args": {
+                    "delta": {"x": 0.0, "y": 0.0, "z": -0.01},
+                    "reference_frame": "base_link",
+                },
+            },
+        }
+    if normalized == "move down 5 cm":
+        return {
+            "task_type": "factory_task",
+            "version": "1.0",
+            "task_id": "move-down-5cm",
+            "root": {
+                "type": "skill",
+                "name": "move_relative",
+                "args": {
+                    "delta": {"x": 0.0, "y": 0.0, "z": -0.05},
+                    "reference_frame": "base_link",
+                },
+            },
+        }
+    if normalized == "move joint 2 5 deg":
+        return {
+            "task_type": "factory_task",
+            "version": "1.0",
+            "task_id": "move-joint-2",
+            "root": {
+                "type": "skill",
+                "name": "move_joint",
+                "args": {
+                    "joint_index": 1,
+                    "joint_angle": 5.0,
+                    "angular_unit": "deg",
+                },
+            },
+        }
+    if normalized == "home, wait 1 s, then move down 1 cm":
+        return {
+            "task_type": "factory_task",
+            "version": "1.0",
+            "task_id": "home-wait-down",
+            "root": {
+                "type": "sequence",
+                "children": [
+                    {"type": "skill", "name": "go_home", "args": {}},
+                    {
+                        "type": "skill",
+                        "name": "wait",
+                        "args": {"wait_duration_sec": 1.0},
+                    },
+                    {
+                        "type": "skill",
+                        "name": "move_relative",
+                        "args": {
+                            "delta": {"x": 0.0, "y": 0.0, "z": -0.01},
+                            "reference_frame": "base_link",
+                        },
+                    },
+                ],
+            },
+        }
+    if normalized == "draw a circle with radius 10 mm":
+        return {
+            "task_type": "factory_task",
+            "version": "1.0",
+            "task_id": "draw-circle",
+            "root": {
+                "type": "skill",
+                "name": "draw_shape",
+                "args": {
+                    "shape_type": "circle",
+                    "units": "mm",
+                    "frame_id": "base_link",
+                    "workplane": {"mode": "tool"},
+                    "params": {"radius": 10},
+                },
+            },
+        }
+    if normalized == "write gp4":
+        return {
+            "task_type": "factory_task",
+            "version": "1.0",
+            "task_id": "draw-text-gp4",
+            "root": {
+                "type": "skill",
+                "name": "draw_text",
+                "args": {
+                    "text": "GP4",
+                    "units": "mm",
+                    "frame_id": "base_link",
+                    "workplane": {"mode": "tool"},
+                    "font": {"type": "single_stroke_builtin", "height": 20},
+                },
+            },
+        }
+    return {
+        "error": "MISSING_SLOT",
+        "missing_fields": ["intent"],
+        "hint": f"No E2E LLM fixture mapping for {raw_text!r}.",
+    }
+
+class _E2ELLMFixtureHandler(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        body = self.rfile.read(length)
+        request = json.loads(body.decode("utf-8")) if body else {}
+        messages = request.get("messages") if isinstance(request, dict) else []
+        raw_text = ""
+        if isinstance(messages, list):
+            for message in reversed(messages):
+                if isinstance(message, dict) and message.get("role") == "user":
+                    raw_text = str(message.get("content") or "")
+                    break
+        content = json.dumps(_factory_task_response(raw_text), separators=(",", ":"))
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": content,
+                    }
+                }
+            ]
+        }
+        payload = json.dumps(response).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return
 
 
 class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
@@ -46,6 +191,9 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
         self._environment["RMW_IMPLEMENTATION"] = "rmw_fastrtps_cpp"
         self._environment["HMI_SIM_AUTO_CONFIRM"] = "false"
         self._environment.setdefault("ROS_LOG_DIR", str(self._log_root / "ros_logs"))
+        self._llm_fixture: ThreadingHTTPServer | None = None
+        self._llm_fixture_thread: threading.Thread | None = None
+        self._start_llm_fixture()
         self._sim_process: subprocess.Popen[str] | None = None
         self._api_process: subprocess.Popen[str] | None = None
         self._sim_log_handle = None
@@ -55,6 +203,13 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         self._stop_process(self._api_process)
         self._stop_process(self._sim_process)
+        if self._llm_fixture is not None:
+            self._llm_fixture.shutdown()
+            self._llm_fixture.server_close()
+            self._llm_fixture = None
+        if self._llm_fixture_thread is not None:
+            self._llm_fixture_thread.join(timeout=2.0)
+            self._llm_fixture_thread = None
         if self._api_log_handle is not None:
             self._api_log_handle.close()
             self._api_log_handle = None
@@ -249,7 +404,9 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
                 "mode": "sim",
             },
         )
-        self.assertTrue(command_response["accepted"])
+        self.assertTrue(
+            command_response["accepted"], msg=json.dumps(command_response, indent=2)
+        )
         self.assertEqual(
             command_response["command"]["lifecycleState"], "NEEDS_CONFIRMATION"
         )
@@ -535,6 +692,22 @@ class CommandE2ESimTests(unittest.IsolatedAsyncioTestCase):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
             return int(sock.getsockname()[1])
+
+    def _start_llm_fixture(self) -> None:
+        self._llm_fixture = ThreadingHTTPServer(
+            ("127.0.0.1", 0), _E2ELLMFixtureHandler
+        )
+        host, port = self._llm_fixture.server_address[:2]
+        self._environment["LLM_BASE_URL"] = f"http://{host}:{port}/v1"
+        self._environment["LLM_MODEL"] = "e2e-fixture"
+        self._environment["GP4_LLM_API_KEY"] = "e2e-fixture"
+        self._environment["LLM_MAX_RETRIES"] = "0"
+        self._llm_fixture_thread = threading.Thread(
+            target=self._llm_fixture.serve_forever,
+            name="e2e-llm-fixture",
+            daemon=True,
+        )
+        self._llm_fixture_thread.start()
 
     def _start_sim_stack(self) -> None:
         if self._sim_process is not None:

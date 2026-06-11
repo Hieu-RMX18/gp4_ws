@@ -864,6 +864,64 @@ class SupervisorServiceTests(unittest.TestCase):
         self.assertEqual(summary["factoryTaskRuntimePlan"]["type"], "sequence")
         self.assertEqual(summary["factoryTaskPolicyDecisions"][0]["decision"], "allow")
 
+    def test_gateway_review_factory_task_runtime_enters_sequence_path(self) -> None:
+        self.adapter.set_review_result(
+            accepted=True,
+            adapter="fake-gateway-review",
+            semanticIr={
+                "intent": "factory_task_runtime",
+                "_factory_task_runtime": True,
+                "_parse_source": "react_factory_task",
+                "_code_version": "abc1234",
+                "metadata": {
+                    "factory_task": {"task_id": "home-wait-down"},
+                    "runtime_plan": {
+                        "type": "sequence",
+                        "children": [
+                            {"type": "skill", "name": "go_home"},
+                            {
+                                "type": "skill",
+                                "name": "wait",
+                                "args": {"wait_duration_sec": 1.0},
+                            },
+                            {
+                                "type": "skill",
+                                "name": "move_relative",
+                                "args": {
+                                    "frame_id": "base_link",
+                                    "delta": {"x": 0.0, "y": 0.0, "z": -0.01},
+                                },
+                            },
+                        ],
+                    },
+                    "policy_decisions": [{"decision": "allow"}],
+                },
+            },
+        )
+        lease_token = self._acquire_lease()
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="home, wait 1 s, then move down 1 cm",
+            mode="sim",
+        )
+
+        self.assertTrue(response["accepted"], msg=response)
+        self.assertEqual(response["jobType"], "sequence")
+        self.assertEqual(
+            [step["parsedIntent"]["action"] for step in response["sequence"]["steps"]],
+            ["HOME", "WAIT", "MOVE_REL"],
+        )
+        self.assertEqual(
+            response["sequence"]["structuredIntent"]["intent"],
+            "factory_task_runtime",
+        )
+        summary = response["sequence"]["planSummary"]
+        self.assertEqual(summary["factoryTask"]["task_id"], "home-wait-down")
+        self.assertEqual(summary["factoryTaskRuntimePlan"]["type"], "sequence")
+
     def test_gateway_review_sequence_return_to_start_uses_start_joints(
         self,
     ) -> None:
@@ -2109,6 +2167,51 @@ class SupervisorServiceTests(unittest.TestCase):
         hydrated_origin = response["sequence"]["structuredIntent"]["workplane"][
             "origin"
         ]
+        self.assertAlmostEqual(hydrated_origin["position"]["x"], 0.30)
+        self.assertAlmostEqual(hydrated_origin["position"]["y"], 0.00)
+        self.assertAlmostEqual(hydrated_origin["position"]["z"], 0.30)
+
+    def test_factory_task_runtime_draw_uses_current_pose_tool_workplane(self) -> None:
+        self.adapter.set_review_result(
+            accepted=True,
+            adapter="fake-gateway-review",
+            semanticIr={
+                "intent": "factory_task_runtime",
+                "_factory_task_runtime": True,
+                "metadata": {
+                    "factory_task": {"task_id": "write-gp4"},
+                    "runtime_plan": {
+                        "type": "skill",
+                        "name": "draw_text",
+                        "args": {
+                            "text": "GP4",
+                            "units": "mm",
+                            "frame_id": "base_link",
+                            "workplane": {"mode": "tool"},
+                            "font": {"type": "single_stroke_builtin", "height": 20},
+                        },
+                    },
+                    "policy_decisions": [{"decision": "allow"}],
+                },
+            },
+        )
+        lease_token = self._acquire_lease()
+
+        response = self.supervisor.submit_intent(
+            session_id=self.session_id,
+            operator_id=self.operator_id,
+            lease_token=lease_token,
+            raw_text="write GP4",
+            mode="sim",
+        )
+
+        self.assertTrue(response["accepted"], msg=response)
+        self.assertEqual(response["jobType"], "sequence")
+        self.assertEqual(response["sequence"]["planSummary"]["macroName"], "draw_text")
+        runtime_plan = response["sequence"]["structuredIntent"]["metadata"][
+            "runtime_plan"
+        ]
+        hydrated_origin = runtime_plan["args"]["workplane"]["origin"]
         self.assertAlmostEqual(hydrated_origin["position"]["x"], 0.30)
         self.assertAlmostEqual(hydrated_origin["position"]["y"], 0.00)
         self.assertAlmostEqual(hydrated_origin["position"]["z"], 0.30)

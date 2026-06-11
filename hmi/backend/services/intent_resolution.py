@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import math
 from pathlib import Path
@@ -113,6 +114,14 @@ class IntentResolutionService(IntentNormalizationMixin):
 
         if candidate_payload is None:
             return None
+
+        if intent_name == "factory_task_runtime":
+            return self._prepare_factory_task_runtime_sequence_submission(
+                candidate_payload,
+                runtime_mode=runtime_mode,
+                current_joints=current_joints,
+                current_pose_loader=current_pose_loader,
+            )
 
         route_metadata = self._sequence_candidate_metadata(candidate_payload)
         diagnostics: list[str] = []
@@ -411,6 +420,9 @@ class IntentResolutionService(IntentNormalizationMixin):
                 rejected_fields=["primitive_type"],
             )
 
+        if str(payload.get("intent") or "").strip().lower() == "factory_task_runtime":
+            payload = self._factory_task_runtime_single_semantic_ir(payload)
+
         if "intent" in payload:
             if IntentRouter is None:
                 raise IntentResolutionError(
@@ -438,6 +450,330 @@ class IntentResolutionService(IntentNormalizationMixin):
             )
 
         return self._legacy_action_to_command(payload, current_joints=current_joints)
+
+    def _prepare_factory_task_runtime_sequence_submission(
+        self,
+        payload: dict[str, Any],
+        *,
+        runtime_mode: str,
+        current_joints: list[Any],
+        current_pose_loader: Callable[[], dict[str, Any] | None] | None,
+    ) -> dict[str, Any] | None:
+        working_payload = deepcopy(payload)
+        runtime_plan = self._factory_task_runtime_plan(working_payload)
+        if not isinstance(runtime_plan, dict):
+            return None
+
+        route_metadata = self._sequence_candidate_metadata(working_payload)
+        diagnostics: list[str] = []
+        try:
+            semantic_steps = self._runtime_plan_to_semantic_steps(
+                runtime_plan,
+                current_pose_loader=current_pose_loader,
+            )
+            if not semantic_steps:
+                raise IntentResolutionError(
+                    "FactoryTask runtime sequence has no executable steps."
+                )
+            is_runtime_sequence = (
+                str(runtime_plan.get("type") or "").strip().lower() == "sequence"
+            )
+            has_draw_step = any(
+                str(step.get("intent") or "").strip().lower()
+                in {"draw_shape", "draw_text"}
+                for step in semantic_steps
+            )
+            if not is_runtime_sequence and not has_draw_step:
+                return None
+
+            parsed_steps: list[dict[str, Any]] = []
+            for step in semantic_steps:
+                step_intent = str(step.get("intent") or "").strip().lower()
+                if step_intent in {"draw_shape", "draw_text"}:
+                    if IntentRouter is None:
+                        raise IntentResolutionError(
+                            "semantic intent routing is unavailable because llm_gateway.intent_engine is not importable."
+                        )
+                    routed = IntentRouter(runtime_mode=runtime_mode).route(step)
+                    if routed.route_type == "error":
+                        message = (routed.error_payload or {}).get("message") or (
+                            routed.error_payload or {}
+                        ).get("error")
+                        raise IntentResolutionError(
+                            str(message or "intent router returned an error payload.")
+                        )
+                    if len(semantic_steps) == 1:
+                        route_metadata.update(dict(routed.metadata))
+                    if routed.metadata.get("macro_name") in {"draw_shape", "draw_text"}:
+                        for command in routed.commands:
+                            if bool(command.get("plan_only")):
+                                raise IntentResolutionError(
+                                    "draw execution_mode=plan_only is not supported by the HMI; "
+                                    "resubmit with execution_mode='execute'."
+                                )
+                    parsed_steps.extend(
+                        self.resolve(
+                            raw_text="",
+                            structured_intent=command,
+                            runtime_mode=runtime_mode,
+                            current_joints=current_joints,
+                            allow_routed_draw_metadata=True,
+                            allow_primitive_structured=True,
+                        )
+                        for command in routed.commands
+                    )
+                    continue
+                parsed_steps.append(
+                    self.resolve(
+                        raw_text="",
+                        structured_intent=step,
+                        runtime_mode=runtime_mode,
+                        current_joints=current_joints,
+                    )
+                )
+            if SequenceValidator is not None:
+                validation = SequenceValidator().validate(
+                    [step["normalizedCommand"] for step in parsed_steps]
+                )
+                diagnostics.extend(validation.diagnostics)
+        except (IntentResolutionError, SequenceValidationError, ValueError) as exc:
+            message = (
+                exc.operator_message()
+                if isinstance(exc, IntentResolutionError)
+                else str(exc)
+            )
+            return {
+                "parsed_steps": None,
+                "diagnostics": diagnostics,
+                "parse_error": message,
+                "route_metadata": route_metadata,
+                "structured_intent": payload,
+            }
+
+        return {
+            "parsed_steps": parsed_steps,
+            "diagnostics": diagnostics,
+            "parse_error": None,
+            "route_metadata": route_metadata,
+            "structured_intent": working_payload,
+        }
+
+    def _factory_task_runtime_single_semantic_ir(
+        self, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        runtime_plan = self._factory_task_runtime_plan(payload)
+        if not isinstance(runtime_plan, dict):
+            raise IntentResolutionError(
+                "FactoryTask runtime payload is missing metadata.runtime_plan."
+            )
+        steps = self._runtime_plan_to_semantic_steps(runtime_plan)
+        if len(steps) != 1:
+            raise IntentResolutionError(
+                "FactoryTask runtime plan must be a single executable skill for command submission."
+            )
+        return steps[0]
+
+    @staticmethod
+    def _factory_task_runtime_plan(payload: dict[str, Any]) -> dict[str, Any] | None:
+        if payload.get("_factory_task_runtime") is not True:
+            return None
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            return None
+        runtime_plan = metadata.get("runtime_plan")
+        return runtime_plan if isinstance(runtime_plan, dict) else None
+
+    def _runtime_plan_to_semantic_steps(
+        self,
+        runtime_plan: dict[str, Any],
+        *,
+        current_pose_loader: Callable[[], dict[str, Any] | None] | None = None,
+    ) -> list[dict[str, Any]]:
+        node_type = str(runtime_plan.get("type") or "").strip().lower()
+        if node_type == "sequence":
+            children = runtime_plan.get("children")
+            if not isinstance(children, list):
+                raise IntentResolutionError(
+                    "FactoryTask runtime sequence requires children."
+                )
+            steps: list[dict[str, Any]] = []
+            for child in children:
+                if not isinstance(child, dict):
+                    raise IntentResolutionError(
+                        "FactoryTask runtime sequence child must be an object."
+                    )
+                steps.extend(
+                    self._runtime_plan_to_semantic_steps(
+                        child,
+                        current_pose_loader=current_pose_loader,
+                    )
+                )
+            return steps
+        if node_type == "skill":
+            semantic_ir = self._runtime_skill_to_semantic_ir(runtime_plan)
+            intent = str(semantic_ir.get("intent") or "").strip().lower()
+            if intent in {"draw_shape", "draw_text"}:
+                semantic_ir = self._hydrate_draw_workplane(
+                    semantic_ir,
+                    current_pose_loader=current_pose_loader,
+                )
+                args = (
+                    runtime_plan.get("args")
+                    if isinstance(runtime_plan.get("args"), dict)
+                    else {}
+                )
+                runtime_plan["args"] = {
+                    **dict(args),
+                    **{
+                        key: value
+                        for key, value in semantic_ir.items()
+                        if key != "intent"
+                    },
+                }
+            return [semantic_ir]
+        raise IntentResolutionError(
+            f"FactoryTask runtime node '{node_type or '<empty>'}' is not supported by the HMI Phase 1 adapter."
+        )
+
+    def _runtime_skill_to_semantic_ir(self, node: dict[str, Any]) -> dict[str, Any]:
+        name = str(node.get("name") or "").strip().lower()
+        args = node.get("args") if isinstance(node.get("args"), dict) else {}
+        args = dict(args)
+        if name == "go_home":
+            return {"intent": "go_home"}
+        if name in {"stop", "alarm_reset"}:
+            return {"intent": name}
+        if name == "get_pose":
+            return {
+                "intent": "get_pose",
+                "reference_frame": str(
+                    args.get("reference_frame") or args.get("frame_id") or "base_link"
+                ),
+            }
+        if name == "wait":
+            return {
+                "intent": "wait",
+                "wait_duration_sec": float(args.get("wait_duration_sec", 2.0)),
+            }
+        if name == "set_speed":
+            return self._runtime_skill_payload(
+                "set_speed",
+                args,
+                required=("velocity_scale",),
+                optional=("acceleration_scale",),
+            )
+        if name == "move_relative":
+            payload = self._runtime_skill_payload(
+                "move_relative",
+                args,
+                required=("delta",),
+                optional=("linear_unit", "velocity_scale", "acceleration_scale"),
+            )
+            payload["reference_frame"] = str(
+                args.get("reference_frame") or args.get("frame_id") or "base_link"
+            )
+            return payload
+        if name == "move_cartesian":
+            intent = (
+                "absolute_move_lin"
+                if args.get("motion_type") == "lin"
+                else "absolute_move_ptp"
+            )
+            payload = self._runtime_skill_payload(
+                intent,
+                args,
+                required=("target_pose",),
+                optional=(
+                    "linear_unit",
+                    "orientation_preset",
+                    "keep_current_orientation",
+                    "velocity_scale",
+                    "acceleration_scale",
+                    "planner_id",
+                ),
+            )
+            payload["reference_frame"] = str(
+                args.get("reference_frame") or args.get("frame_id") or "base_link"
+            )
+            return payload
+        if name == "move_joint_delta":
+            payload = {"intent": "move_joint_delta"}
+            joint_deltas_deg = args.get("joint_deltas_deg")
+            if isinstance(joint_deltas_deg, dict) and len(joint_deltas_deg) == 1:
+                joint_name, delta_deg = next(iter(joint_deltas_deg.items()))
+                payload["joint"] = joint_name
+                payload["delta_angle"] = delta_deg
+                payload["angular_unit"] = "deg"
+            elif "joint_index" in args:
+                payload["joint_index"] = args["joint_index"]
+            elif "joint_name" in args:
+                payload["joint_name"] = args["joint_name"]
+            elif "joint" in args:
+                payload["joint"] = args["joint"]
+            else:
+                raise IntentResolutionError(
+                    "FactoryTask runtime skill 'move_joint_delta' requires joint_index or joint."
+                )
+            if "delta_angle" in args:
+                payload["delta_angle"] = args["delta_angle"]
+            elif "delta_deg" in args:
+                payload["delta_angle"] = args["delta_deg"]
+                payload["angular_unit"] = "deg"
+            elif "delta_angle" not in payload:
+                raise IntentResolutionError(
+                    "FactoryTask runtime skill 'move_joint_delta' requires delta_angle or delta_deg."
+                )
+            for key in ("velocity_scale", "acceleration_scale"):
+                if key in args:
+                    payload[key] = args[key]
+            return payload
+        if name in {"move_joint", "move_joints"}:
+            required = {
+                "move_joint": ("joint_index", "joint_angle"),
+                "move_joints": ("joint_target",),
+            }[name]
+            return self._runtime_skill_payload(
+                name,
+                args,
+                required=required,
+                optional=("angular_unit", "velocity_scale", "acceleration_scale"),
+            )
+        if name in {"move_named_pose", "move_to_region"}:
+            pose_name = str(
+                args.get("pose_name") or args.get("pose") or args.get("region") or ""
+            ).strip()
+            if not pose_name:
+                raise IntentResolutionError(
+                    f"FactoryTask runtime skill '{name}' requires pose_name or region."
+                )
+            return {"intent": "move_named_pose", "pose_name": pose_name}
+        if name in {"draw_shape", "draw_text"}:
+            payload = {"intent": name}
+            payload.update(args)
+            return payload
+        raise IntentResolutionError(
+            f"FactoryTask runtime skill '{name or '<empty>'}' is not supported by the HMI Phase 1 adapter."
+        )
+
+    @staticmethod
+    def _runtime_skill_payload(
+        intent: str,
+        args: dict[str, Any],
+        *,
+        required: tuple[str, ...] = (),
+        optional: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"intent": intent}
+        for key in required:
+            if key not in args:
+                raise IntentResolutionError(
+                    f"FactoryTask runtime skill '{intent}' requires {key}."
+                )
+            payload[key] = args[key]
+        for key in optional:
+            if key in args:
+                payload[key] = args[key]
+        return payload
 
     def _legacy_action_to_command(
         self,

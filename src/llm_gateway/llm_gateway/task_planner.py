@@ -674,7 +674,7 @@ class TaskPlanner:
         payload_parser: Any | None = None,
         max_repair: int = 1,
     ) -> None:
-        from llm_gateway.intent_engine import LLMParser
+        from llm_gateway.factory_task import LLMParser
 
         self._llm_client = llm_client
         self._state_injector = state_injector

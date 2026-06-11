@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from llm_gateway.react_planner import build_system_prompt
+from llm_gateway.task_planner import build_system_prompt
 
 
 @pytest.fixture(scope="module")

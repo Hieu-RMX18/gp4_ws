@@ -40,9 +40,8 @@ def test_gateway_scene_cache_lazy_initializes_for_source_level_tests():
 from types import SimpleNamespace
 
 def test_scene_cache_invalidated_on_world_changing_tool_result():
-    """ReAct loop must invalidate the scene cache when a motion tool signals tool_changed_world."""
+    """runtime loop must invalidate the scene cache when a motion tool signals tool_changed_world."""
     from llm_gateway.composite_tools import PickObjectTool
-    from llm_gateway.react_planner import IterationCounters, IterationBudget
 
     class _TrackingNode:
         invalidated = False
@@ -58,7 +57,7 @@ def test_scene_cache_invalidated_on_world_changing_tool_result():
     semantic_ir = result.payload.get("semantic_ir", {})
     assert semantic_ir.get("metadata", {}).get("tool_changed_world") is True
 
-    # Simulate what ReActAgent does after a successful motion tool invocation.
+    # Simulate runtime cache invalidation after a successful motion tool result.
     if result.ok and tool.is_motion:
         payload = result.payload or {}
         ir = payload.get("semantic_ir", {})

@@ -1,7 +1,7 @@
 """Simulation test: pick white_workpiece from fixture to conveyor.
 
 Requirements from plan Phase 8:
-- Completes in ≤5 ReAct iterations
+- Completes in ≤5 planner iterations
 - Cache hit rate ≥50% for repeated perception queries
 - PostconditionVerifier confirms object placed correctly
 """

@@ -23,7 +23,7 @@ import pytest
 import yaml
 
 from llm_gateway.intent_engine import Normalizer
-from llm_gateway.react_planner import (
+from llm_gateway.task_planner import (
     FROZEN_SEMANTIC_INTENTS,
     FROZEN_TOP_LEVEL_OUTPUT_INTENTS,
     build_system_prompt,
@@ -490,11 +490,11 @@ class TestAcceptsErrorPayloads:
         )
         assert result.valid is True
 
-    def test_react_handoff_error(self):
+    def test_unsupported_error_with_message_and_hint(self):
         result = validate_semantic_ir_contract(
             {
-                "error": "REACT_HANDOFF",
-                "message": "budget exceeded",
+                "error": "UNSUPPORTED_OR_AMBIGUOUS_COMMAND",
+                "message": "planner returned neither FactoryTask nor error",
                 "hint": "try again",
             }
         )

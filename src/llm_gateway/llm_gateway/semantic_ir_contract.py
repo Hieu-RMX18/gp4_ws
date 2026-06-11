@@ -12,9 +12,9 @@ from typing import Any
 
 FACTORY_TASK_RUNTIME_INTENT = "factory_task_runtime"
 
-# Must match react_planner.FROZEN_TOP_LEVEL_OUTPUT_INTENTS exactly.
+# Must match task_planner.FROZEN_TOP_LEVEL_OUTPUT_INTENTS exactly.
 # Duplicated here so the contract module has no import-time dependency
-# on the heavy react_planner stack.
+# on the planner stack.
 _FROZEN_SEMANTIC_INTENTS = frozenset(
     {
         "go_home",

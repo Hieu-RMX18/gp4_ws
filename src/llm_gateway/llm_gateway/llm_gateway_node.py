@@ -58,12 +58,10 @@ from llm_gateway.factory_task import (
     is_factory_task,
     parse_factory_task,
 )
-from llm_gateway.react_planner import (
-    IterationBudget,
+from llm_gateway.task_planner import (
     OpenAICompatibleLLMClient,
-    ReActAgent,
     StateInjector,
-    build_default_react_tool_registry,
+    TaskPlanner,
     load_llm_backend_config,
 )
 from motoros2_interfaces.srv import ReadSingleIO, WriteSingleIO
@@ -194,7 +192,7 @@ class LLMGatewayNode(Node):
                 getattr(self._semantic_validator, "_safety_rules", {})
             ),
             node=self,
-            robot_mode_fn=self._current_react_robot_mode,
+            robot_mode_fn=self._current_planner_robot_mode,
         )
         self._goal_mapper = goal_mapper or GoalMapper(
             default_velocity_scale=self._default_velocity_scale,
@@ -225,40 +223,28 @@ class LLMGatewayNode(Node):
             llm_backend_config, self._schema_validator.schema_as_json()
         )
 
-        # ── ReAct agent init (W3) ─────────────────────────────────────────────
-        self._react_enabled = self._load_react_enabled()
-        self._react_state_injector = StateInjector()
+        # ── Task planner init ────────────────────────────────────────────────
+        self._planner_enabled = self._load_planner_enabled()
+        self._state_injector = StateInjector()
         poses = []
         try:
             poses.extend(list(_load_srdf_named_poses().keys()))
         except Exception:
             pass
         if self._station_scene_graph is not None:
-            self._react_state_injector.set_semantic_map(self._station_scene_graph.to_dict())
+            self._state_injector.set_semantic_map(self._station_scene_graph.to_dict())
             if hasattr(self._station_scene_graph, "_regions"):
                 poses.extend(self._station_scene_graph._regions.keys())
-        self._react_state_injector.set_available_named_poses(poses)
-        if self._react_enabled:
-            tool_registry = build_default_react_tool_registry()
-            budget = IterationBudget(
-                max_total=5,
-                max_motion=3,
-                max_readonly=10,
-                max_repair=2,
-                wall_clock_timeout_s=30.0,
-            )
-            self._react_agent = ReActAgent(
+        self._state_injector.set_available_named_poses(poses)
+        if self._planner_enabled:
+            self._task_planner = TaskPlanner(
                 llm_client=self._llm_client,
-                tool_registry=tool_registry,
-                state_injector=self._react_state_injector,
-                budget=budget,
+                state_injector=self._state_injector,
                 schema_validator=self._schema_validator,
-                ros_node=self,
+                max_repair=1,
             )
-            self._react_plan_cache: Dict[str, Any] = {}
-            self._react_plan_cache_max_entries = 64
         else:
-            self._react_agent = None
+            self._task_planner = None
 
         callback_group = ReentrantCallbackGroup()
         self._intent_subscriber = self.create_subscription(
@@ -282,24 +268,24 @@ class LLMGatewayNode(Node):
             10,
             callback_group=callback_group,
         )
-        self._react_joint_state_subscriber = self.create_subscription(
+        self._state_joint_state_subscriber = self.create_subscription(
             JointState,
             "/yaskawa/joint_states",
-            self._react_joint_state_callback,
+            self._state_joint_state_callback,
             qos_profile_sensor_data,
             callback_group=callback_group,
         )
-        self._react_joint_state_fallback_subscriber = self.create_subscription(
+        self._state_joint_state_fallback_subscriber = self.create_subscription(
             JointState,
             "/joint_states",
-            self._react_joint_state_callback,
+            self._state_joint_state_callback,
             qos_profile_sensor_data,
             callback_group=callback_group,
         )
-        self._react_robot_status_subscriber = self.create_subscription(
+        self._state_robot_status_subscriber = self.create_subscription(
             RobotStatus,
             "/yaskawa/robot_status",
-            self._react_robot_status_callback,
+            self._state_robot_status_callback,
             qos_profile_sensor_data,
             callback_group=callback_group,
         )
@@ -432,8 +418,8 @@ class LLMGatewayNode(Node):
         stamped["_code_version"] = getattr(self, "_code_version", "unknown")
         return stamped
 
-    def _load_react_enabled(self) -> bool:
-        """Read llm.react.enabled from safety_rules.yaml SSOT."""
+    def _load_planner_enabled(self) -> bool:
+        """Read llm.react.enabled for backward-compatible planner gating."""
         from pathlib import Path
 
         import yaml
@@ -567,27 +553,22 @@ class LLMGatewayNode(Node):
             validated["_parse_source"] = "direct"
             return validated
 
-        if self._react_enabled and self._react_agent is not None:
-            react_result = self._react_agent.run(intent_text)
-            if not react_result.get("_handoff"):
-                if is_factory_task(react_result):
-                    return self._compile_factory_task_review_result(
-                        react_result, parse_source="react_factory_task"
-                    )
-                if "error" in react_result:
-                    enriched_result = dict(react_result)
-                    enriched_result["_parse_source"] = "react"
-                    return enriched_result
-                return {
-                    "error": "REACT_HANDOFF",
-                    "message": "ReAct returned a non-FactoryTask final payload.",
-                    "hint": "ReAct final output must be FactoryTask; Semantic IR is internal to the gateway compiler.",
-                }
-            reason = react_result.get("reason", "unknown")
+        if self._planner_enabled and self._task_planner is not None:
+            self._emit_trace("llm_request_started", "reasoning", source="task_planner")
+            planner_result = self._task_planner.plan(intent_text)
+            self._emit_trace("llm_response_received", "reasoning", source="task_planner")
+            if is_factory_task(planner_result):
+                return self._compile_factory_task_review_result(
+                    planner_result, parse_source="llm_factory_task"
+                )
+            if "error" in planner_result:
+                enriched_result = dict(planner_result)
+                enriched_result["_parse_source"] = "llm"
+                return enriched_result
             return {
-                "error": "REACT_HANDOFF",
-                "message": f"ReAct could not resolve the request: {reason}.",
-                "hint": "Rephrase the command with clearer intent or check that all required parameters are provided.",
+                "error": "UNSUPPORTED_OR_AMBIGUOUS_COMMAND",
+                "message": "planner returned neither FactoryTask nor error.",
+                "hint": "Rephrase the command with clearer intent or required parameters.",
             }
 
         self._emit_trace("llm_request_started", "reasoning", source="llm")
@@ -1088,7 +1069,7 @@ class LLMGatewayNode(Node):
         response.error = ""
         return response
 
-    def _react_joint_state_callback(self, msg: JointState) -> None:
+    def _state_joint_state_callback(self, msg: JointState) -> None:
         raw_positions = [float(value) for value in msg.position]
         by_name = {
             str(name): raw_positions[index]
@@ -1102,7 +1083,7 @@ class LLMGatewayNode(Node):
         else:
             self._latest_joint_positions_rad = raw_positions
         self._latest_joint_positions_by_name_rad = dict(by_name)
-        self._react_state_injector.update_joint_states(
+        self._state_injector.update_joint_states(
             {
                 "name": (
                     list(GP4_JOINT_NAMES)
@@ -1204,7 +1185,7 @@ class LLMGatewayNode(Node):
                 ]
         return enriched
 
-    def _react_robot_status_callback(self, msg: RobotStatus) -> None:
+    def _state_robot_status_callback(self, msg: RobotStatus) -> None:
         if self._tri_state_is_true(msg.in_error) or self._tri_state_is_true(
             msg.e_stopped
         ):
@@ -1215,7 +1196,7 @@ class LLMGatewayNode(Node):
             mode = "IDLE"
         else:
             mode = "FAULT"
-        self._react_state_injector.update_robot_status(
+        self._state_injector.update_robot_status(
             {
                 "mode": mode,
                 "active_alarms": [str(code) for code in msg.error_codes],
@@ -1262,8 +1243,8 @@ class LLMGatewayNode(Node):
             self._scene_snapshot_cache = cache
         return cache
 
-    def _current_react_robot_mode(self) -> str:
-        snapshot = self._react_state_injector.snapshot()
+    def _current_planner_robot_mode(self) -> str:
+        snapshot = self._state_injector.snapshot()
         robot_state = snapshot.get("robot_state", {}) if isinstance(snapshot, dict) else {}
         return str(robot_state.get("mode") or "IDLE")
 
@@ -1306,21 +1287,15 @@ class LLMGatewayNode(Node):
         self._emit_trace("prompt_received", "ingress", summary=intent_text[:80])
 
         payload: str
-        if self._react_enabled and self._react_agent is not None:
+        if self._planner_enabled and self._task_planner is not None:
             try:
-                react_result = self._react_agent.run(intent_text)
+                self._emit_trace("llm_request_started", "reasoning", source="task_planner")
+                planner_result = self._task_planner.plan(intent_text)
+                self._emit_trace("llm_response_received", "reasoning", source="task_planner")
             except Exception as exc:
-                self._reject("react_agent_failed", str(exc), intent_text=intent_text)
+                self._reject("task_planner_failed", str(exc), intent_text=intent_text)
                 return
-            if react_result.get("_handoff"):
-                self._reject(
-                    "react_handoff",
-                    f"ReAct could not resolve the request: {react_result.get('reason', 'unknown')}.",
-                    intent_text=intent_text,
-                    hint="Rephrase the command with clearer intent or check that all required parameters are provided.",
-                )
-                return
-            if is_factory_task(react_result):
+            if is_factory_task(planner_result):
                 self._reject(
                     "factory_task_requires_review",
                     "FactoryTask motion requests must be reviewed through "
@@ -1328,15 +1303,15 @@ class LLMGatewayNode(Node):
                     intent_text=intent_text,
                 )
                 return
-            elif "error" not in react_result:
+            if "error" not in planner_result:
                 self._reject(
-                    "react_contract_rejected",
-                    "ReAct returned a non-FactoryTask final payload.",
+                    "planner_contract_rejected",
+                    "TaskPlanner returned neither FactoryTask nor error payload.",
                     intent_text=intent_text,
-                    hint="ReAct final output must be FactoryTask; Semantic IR is internal to the gateway compiler.",
+                    hint="Planner output must be FactoryTask; Semantic IR is internal to the gateway compiler.",
                 )
                 return
-            payload = json.dumps(react_result)
+            payload = json.dumps(planner_result)
         else:
             try:
                 self._emit_trace("llm_request_started", "reasoning")
@@ -2839,7 +2814,7 @@ class LLMGatewayNode(Node):
             timeout_sec=self._safety_service_timeout_sec
         ):
             self.get_logger().error(
-                f"ReAct get_current_pose: service /get_current_pose "
+                f"TaskPlanner get_current_pose: service /get_current_pose "
                 f"not available within {self._safety_service_timeout_sec}s"
             )
             return None
@@ -2853,13 +2828,13 @@ class LLMGatewayNode(Node):
 
         if not done:
             self.get_logger().error(
-                f"ReAct get_current_pose: async call timed out "
+                f"TaskPlanner get_current_pose: async call timed out "
                 f"after {self._safety_service_timeout_sec}s"
             )
             return None
         if response is None or not response.success:
             self.get_logger().error(
-                f"ReAct get_current_pose: response "
+                f"TaskPlanner get_current_pose: response "
                 f"{'is None' if response is None else 'not success'}"
             )
             return None

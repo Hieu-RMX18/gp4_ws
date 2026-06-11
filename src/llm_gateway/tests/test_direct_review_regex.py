@@ -39,7 +39,7 @@ class TestDirectReviewDeterministicSafety:
             "vẽ hình tròn bán kính 5cm",
         ],
     )
-    def test_free_form_language_goes_to_react_or_llm(self, direct_review, raw_text):
+    def test_free_form_language_goes_to_planner_or_llm(self, direct_review, raw_text):
         assert direct_review(raw_text) is None
 
 

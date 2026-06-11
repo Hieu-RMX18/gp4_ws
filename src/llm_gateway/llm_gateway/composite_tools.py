@@ -7,7 +7,7 @@ from typing import Any, ClassVar
 import jsonschema
 
 from llm_gateway.semantic_ir_contract import validate_semantic_ir_contract
-from llm_gateway.station_scene_graph import map_contains_verify_config
+from llm_gateway.factory_task import map_contains_verify_config
 
 
 @dataclass(frozen=True)

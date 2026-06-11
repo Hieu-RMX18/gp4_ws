@@ -21,7 +21,7 @@ from llm_gateway.factory_task import (
     parse_factory_task,
 )
 from llm_gateway.intent_engine import SkillCall, compile_goal
-from llm_gateway.station_scene_graph import StationSceneGraph
+from llm_gateway.factory_task import StationSceneGraph
 from pathlib import Path
 import pytest
 

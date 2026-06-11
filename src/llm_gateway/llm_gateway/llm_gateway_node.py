@@ -367,7 +367,7 @@ class LLMGatewayNode(Node):
     def _load_station_scene_graph_safe():
         try:
             from ament_index_python.packages import get_package_share_directory
-            from llm_gateway.station_scene_graph import StationSceneGraph
+            from llm_gateway.factory_task import StationSceneGraph
             pkg_share = get_package_share_directory("llm_gateway")
             path = os.path.join(pkg_share, "config", "station_semantic_map.yaml")
             return StationSceneGraph.from_file(path)

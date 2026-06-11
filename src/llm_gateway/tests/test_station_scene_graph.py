@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from llm_gateway.station_scene_graph import (
+from llm_gateway.factory_task import (
     StationSceneGraph,
     load_station_semantic_map,
     map_contains_verify_config,

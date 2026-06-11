@@ -2943,7 +2943,7 @@ class IntentRouter(DrawRouterMixin):
 
         # 2. Check semantic map regions (Cartesian targets)
         if self._station_semantic_map is not None:
-            from llm_gateway.station_scene_graph import StationSceneGraph
+            from llm_gateway.factory_task import StationSceneGraph
             sg = StationSceneGraph(self._station_semantic_map)
             region_res = sg.resolve_region(raw_pose)
             if region_res.ok and isinstance(region_res.payload, dict):

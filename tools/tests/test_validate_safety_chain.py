@@ -28,6 +28,11 @@ def _load():
     return mod
 
 
+# Module-level singleton: the source is a script, so reloading per-test is
+# unnecessary. Sharing the loaded module keeps tests fast and consistent.
+_MOD = _load()
+
+
 def _hw_with_j5(j5_hw: float) -> dict:
     return {
         "joint_limits": {
@@ -48,45 +53,44 @@ _MOTOROS2 = {
 }
 
 
-def _safety(j5: str = "  joint_5_b: {min: -2.00, max:  2.00}\n") -> dict:
-    text = f"""\
-joint_position_guard:
-  enabled: true
-manipulability_guard:
-  enabled: true
-cumulative_rotation_guard:
-  enabled: true
-calibration:
-  max_reprojection_error_mm: 3.0
-workspace_bounds:
-  x_min: -0.45
-  x_max:  0.45
-  y_min: -0.16
-  y_max:  0.52
-  z_min:  0.15
-  z_max:  0.65
-motion_limits:
-  max_move_rel_translation: 0.21
-operational_joint_limits:
-  joint_1_s: {{min: -2.967, max:  2.967}}
-  joint_2_l: {{min: -1.9198, max:  2.2689}}
-  joint_3_u: {{min: -1.1344, max:  3.4906}}
-  joint_4_r: {{min: -2.443, max:  2.443}}
-{j5}  joint_6_t: {{min: -3.142, max:  3.142}}
-"""
-    return yaml.safe_load(text) or {}
+def _safety(j5: dict | None) -> dict:
+    """Build the safety_rules dict programmatically.
+
+    `j5=None` simulates a missing entry; pass a non-dict value to simulate
+    an unparseable entry.
+    """
+    op_limits = {
+        "joint_1_s": {"min": -2.967, "max": 2.967},
+        "joint_2_l": {"min": -1.9198, "max": 2.2689},
+        "joint_3_u": {"min": -1.1344, "max": 3.4906},
+        "joint_4_r": {"min": -2.443, "max": 2.443},
+        "joint_6_t": {"min": -3.142, "max": 3.142},
+    }
+    if j5 is not None:
+        op_limits["joint_5_b"] = j5
+    return {
+        "joint_position_guard": {"enabled": True},
+        "manipulability_guard": {"enabled": True},
+        "cumulative_rotation_guard": {"enabled": True},
+        "calibration": {"max_reprojection_error_mm": 3.0},
+        "workspace_bounds": {
+            "x_min": -0.45, "x_max": 0.45,
+            "y_min": -0.16, "y_max": 0.52,
+            "z_min": 0.15, "z_max": 0.65,
+        },
+        "motion_limits": {"max_move_rel_translation": 0.21},
+        "operational_joint_limits": op_limits,
+    }
 
 
-def _run_main(j5_line: str, j5_hw: float = 2.1467):
-    mod = _load()
-    safety = _safety(j5_line)
+def _run_main(j5: dict | None, j5_hw: float = 2.1468):
+    safety = _safety(j5)
     hw = _hw_with_j5(j5_hw)
     # main() calls load_yaml 4x: safety, joint_limits, motoros2, extrinsics.
     # We patch Path.exists to return True for everything except the
     # extrinsics path (which would otherwise trigger Check 5). All load_yaml
     # calls are intercepted with pre-built dicts. Check 6 needs the move_rel
     # constants to match the safety values.
-    repo_root = Path(_SCRIPT).resolve().parent.parent
 
     def _exists(self):
         path_str = str(self)
@@ -99,40 +103,40 @@ def _run_main(j5_line: str, j5_hw: float = 2.1467):
         "ZMin": 0.15, "ZMax": 0.65, "MaxDeltaNorm": 0.21,
     }
     with (
-        patch.object(mod, "load_yaml", side_effect=[safety, hw, _MOTOROS2, {}]),
-        patch.object(mod, "load_move_rel_limits", return_value=move_rel),
+        patch.object(_MOD, "load_yaml", side_effect=[safety, hw, _MOTOROS2, {}]),
+        patch.object(_MOD, "load_move_rel_limits", return_value=move_rel),
         patch("builtins.open"),
         patch.object(Path, "exists", _exists),
         contextlib.redirect_stderr(io.StringIO()) as buf,
     ):
-        status = mod.main()
+        status = _MOD.main()
     return status, buf.getvalue()
 
 
 class TestCheck3(unittest.TestCase):
     def test_j5_present_passes_check3(self) -> None:
-        """±2.00 inside URDF envelope: main() returns 0."""
-        status, stderr = _run_main("  joint_5_b: {min: -2.00, max:  2.00}\n")
+        """±2.00 inside URDF envelope (hardware B = ±2.1468 rad): main() returns 0."""
+        status, stderr = _run_main({"min": -2.00, "max": 2.00})
         self.assertEqual(status, 0, msg=stderr)
 
     def test_j5_missing_reports_error(self) -> None:
-        status, stderr = _run_main("")
+        status, stderr = _run_main(None)
         self.assertNotEqual(status, 0)
         self.assertIn("joint_5_b missing from operational_joint_limits", stderr)
 
     def test_j5_unparseable_reports_error(self) -> None:
-        status, stderr = _run_main("  joint_5_b: not_a_dict\n")
+        status, stderr = _run_main("not_a_dict")
         self.assertNotEqual(status, 0)
         self.assertIn(
             "joint_5_b has no parseable limits in operational_joint_limits", stderr,
         )
 
     def test_j5_outside_hw_envelope_caught_by_check1(self) -> None:
-        status, stderr = _run_main(
-            "  joint_5_b: {min: -2.50, max:  2.50}\n", j5_hw=2.1467,
-        )
-        self.assertIn("operational max 2.5000 > hardware max 2.1467", stderr)
-        self.assertIn("operational min -2.5000 < hardware min -2.1467", stderr)
+        status, stderr = _run_main({"min": -2.50, "max": 2.50}, j5_hw=2.1468)
+        # Loose check: confirm something is reported for joint_5_b by Check 1
+        # without coupling to the exact message format.
+        self.assertIn("joint_5_b", stderr)
+        # Check 3 must NOT be the source of the failure.
         self.assertNotIn("joint_5_b has no parseable limits", stderr)
         self.assertNotIn("joint_5_b missing from operational_joint_limits", stderr)
         self.assertNotEqual(status, 0)

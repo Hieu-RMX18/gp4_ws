@@ -1191,7 +1191,48 @@ class LLMGatewayNode(Node):
                 ]
         return enriched
 
+    def _emit_robot_status_event(self, status: Any) -> None:
+        def _get_bool(attr):
+            val = getattr(status, attr, False)
+            return self._tri_state_is_true(val) if hasattr(val, "val") else bool(val)
+        def _get_int(attr):
+            val = getattr(status, attr, 0)
+            return int(getattr(val, "val", val))
+
+        in_error = _get_bool("in_error")
+        e_stopped = _get_bool("e_stopped")
+        servo_on = _get_bool("drives_powered") if hasattr(status, "drives_powered") else _get_bool("servo_on")
+        mode = _get_int("mode")
+        
+        error_code = 0
+        if hasattr(status, "error_code"):
+            error_code = int(status.error_code)
+        elif hasattr(status, "error_codes") and status.error_codes:
+            error_code = int(status.error_codes[0])
+
+        level = "ERR" if (in_error or e_stopped) else "INFO"
+        
+        fingerprint = f"{in_error}:{e_stopped}:{servo_on}:{mode}:{error_code}"
+        last_fp = getattr(self, "_last_robot_status_fingerprint", None)
+        if last_fp == fingerprint:
+            return
+        self._last_robot_status_fingerprint = fingerprint
+
+        self._emit_task_event(
+            "HARDWARE", "robot_status",
+            f"alarm={error_code} estop={e_stopped} servo={servo_on}",
+            level=level, source="hw_adapter",
+            data={
+                "error_code": error_code,
+                "e_stopped": e_stopped, "in_error": in_error,
+                "in_motion": _get_bool("in_motion"),
+                "servo_on": servo_on,
+                "mode": mode,
+            },
+        )
+
     def _state_robot_status_callback(self, msg: RobotStatus) -> None:
+        self._emit_robot_status_event(msg)
         if self._tri_state_is_true(msg.in_error) or self._tri_state_is_true(
             msg.e_stopped
         ):

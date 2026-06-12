@@ -223,7 +223,8 @@ class CommandDispatchMixin:
         try:
             cancel_future = goal_handle.cancel_goal_async()
             wrapped = self._wait_for_future(
-                cancel_future, DEFAULT_ACTION_WAIT_TIMEOUT_SEC
+                cancel_future, DEFAULT_ACTION_WAIT_TIMEOUT_SEC,
+                context=f"/execute_motion cancel (command_id={command_id})",
             )
         except Exception as exc:
             self._trace(
@@ -484,6 +485,7 @@ class CommandDispatchMixin:
             response = self._wait_for_future(
                 self._validate_client.call_async(request),
                 DEFAULT_VALIDATE_TIMEOUT_SEC,
+                context=f"/validate_command (command_id={command_id})",
             )
         except Exception as exc:
             self._trace(
@@ -595,6 +597,7 @@ class CommandDispatchMixin:
             goal_handle = self._wait_for_future(
                 self._execute_client.send_goal_async(goal),
                 DEFAULT_ACTION_WAIT_TIMEOUT_SEC,
+                context=f"/execute_motion send_goal (command_id={command_id})",
             )
         except Exception as exc:
             self._trace(
@@ -649,6 +652,7 @@ class CommandDispatchMixin:
             wrapped_result = self._wait_for_future(
                 goal_handle.get_result_async(),
                 DEFAULT_EXECUTION_TIMEOUT_SEC,
+                context=f"/execute_motion get_result (command_id={command_id})",
             )
         except Exception as exc:
             self._trace(

@@ -425,7 +425,7 @@ class WorkspaceRosAdapterTests(unittest.TestCase):
         adapter._review_intent_client = client  # pylint: disable=protected-access
         future_timeouts: list[float] = []
 
-        def wait_for_future(future, timeout_sec):
+        def wait_for_future(future, timeout_sec, **kwargs):
             future_timeouts.append(timeout_sec)
             return future.result()
 

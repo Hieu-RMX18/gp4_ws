@@ -311,6 +311,7 @@ class WorkspaceRosAdapter(
             response = self._wait_for_future(
                 self._review_intent_client.call_async(request),
                 DEFAULT_REVIEW_INTENT_TIMEOUT_SEC,
+                context=f"/llm_gateway/review_intent call (command_id={command_id})",
             )
         except Exception as exc:
             return {

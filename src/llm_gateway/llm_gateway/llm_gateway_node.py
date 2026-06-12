@@ -1540,37 +1540,6 @@ class LLMGatewayNode(Node):
                          summary=f"Semantic checks PASSED for {prim} (units, frames, limits OK)")
         return normalized_command
 
-    def _process_single_command(
-        self,
-        intent_text: str,
-        parsed_command: Dict[str, Any],
-        routed_command: Dict[str, Any],
-    ) -> None:
-        try:
-            self._schema_validator.validate(routed_command)
-        except Exception as exc:
-            self._reject(
-                "schema_validation_failed",
-                str(exc),
-                intent_text=intent_text,
-                parsed_command=parsed_command,
-            )
-            return
-
-        self.publish_status("schema_valid")
-        try:
-            normalized_command = self._normalize_and_validate(routed_command)
-        except Exception as exc:
-            self._reject(
-                "semantic_validation_failed",
-                str(exc),
-                intent_text=intent_text,
-                parsed_command=parsed_command,
-            )
-            return
-
-        self.publish_status("semantic_valid")
-        pass
     def _is_query_command(self, primitive_type: str) -> bool:
         """Return True for query-only commands that bypass the motion action pipeline."""
         return primitive_type == "GET_POSE"

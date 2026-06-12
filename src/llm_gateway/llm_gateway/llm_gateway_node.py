@@ -1570,8 +1570,7 @@ class LLMGatewayNode(Node):
             return
 
         self.publish_status("semantic_valid")
-        self._dispatch_normalized_command(normalized_command, intent_text)
-
+        pass
     def _process_sequence(
         self,
         intent_text: str,
@@ -1615,74 +1614,6 @@ class LLMGatewayNode(Node):
             start_joints_rad=list(getattr(self, "_latest_joint_positions_rad", [])),
         )
         pass
-
-    def _dispatch_normalized_command(
-        self,
-        normalized_command: Dict[str, Any],
-        intent_text: str,
-        *,
-        sequence_state: _SequenceExecutionState | None = None,
-    ) -> None:
-        primitive_type = normalized_command.get("primitive_type", "")
-
-        if sequence_state is None and self._is_query_command(primitive_type):
-            self._publish_command(
-                self._goal_mapper.to_command_payload(normalized_command)
-            )
-            self._handle_get_pose_query(normalized_command, intent_text)
-            return
-
-        if sequence_state is not None and self._is_query_command(primitive_type):
-            self._reject_sequence_step(
-                sequence_state,
-                "GET_POSE is query-only and cannot execute inside sequences.",
-                validated_command=self._goal_mapper.to_command_payload(
-                    normalized_command
-                ),
-            )
-            return
-
-        command_payload = self._goal_mapper.to_command_payload(normalized_command)
-
-        if not self._validate_client.wait_for_service(
-            timeout_sec=self._safety_service_timeout_sec
-        ):
-            if sequence_state is None:
-                self._reject(
-                    "validate_service_unavailable",
-                    "ValidateCommand service unavailable",
-                    intent_text=intent_text,
-                    validated_command=command_payload,
-                )
-            else:
-                self._reject_sequence_step(
-                    sequence_state,
-                    "ValidateCommand service unavailable",
-                    validated_command=command_payload,
-                )
-            return
-
-        request = self._build_validate_request(normalized_command, command_payload)
-        prim = command_payload.get('primitive_type', '?')
-        self._emit_trace(
-            "safety_gate_request", "validation",
-            summary=f"Sending {prim} to /validate_command service",
-            source="safety",
-            primitive_type=prim,
-            velocity_scale=str(command_payload.get('velocity_scale', '')),
-            command_json_len=str(len(request.command_json)),
-        )
-        if sequence_state is None:
-            self.publish_status("safety_validation_requested")
-        validation_future = self._validate_client.call_async(request)
-        validation_future.add_done_callback(
-            lambda future,
-            intent=intent_text,
-            payload=command_payload,
-            sequence=sequence_state: (
-                self._on_validation_done(future, intent, payload, sequence)
-            )
-        )
 
     def _is_query_command(self, primitive_type: str) -> bool:
         """Return True for query-only commands that bypass the motion action pipeline."""

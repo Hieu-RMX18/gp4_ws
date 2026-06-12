@@ -2535,6 +2535,44 @@ class LLMGatewayNode(Node):
 
         return response
 
+    def _run_single_command_via_runtime(self, semantic_ir: Dict[str, Any]) -> bool:
+        from llm_gateway.task_runtime import TaskRuntime, RuntimeStepResult
+        from llm_gateway.factory_task import parse_factory_task
+        self._set_runtime_stop(False)
+        
+        payload = {
+            "task_type": "factory_task",
+            "version": "1.0",
+            "task_id": "tier1",
+            "mode": "supervised_hardware",
+            "operator_summary": semantic_ir.get("intent", "direct_command"),
+            "limits": {},
+            "replan_policy": {},
+            "root": {
+                "type": "skill",
+                "name": semantic_ir.get("intent", "direct_command"),
+                "arguments": semantic_ir,
+            }
+        }
+        task = parse_factory_task(payload)
+
+        def _execute_skill(name: str, args: Dict[str, Any]) -> RuntimeStepResult:
+            try:
+                return self._validate_runtime_semantic_ir(args)
+            except Exception as exc:
+                return RuntimeStepResult(success=False, reason=str(exc))
+
+        runtime = TaskRuntime(
+            world_model=self._factory_task_world_model(),
+            is_stopped_fn=self._runtime_is_stopped,
+            event_callback=getattr(self, "_runtime_event_sink", None),
+        )
+        report = runtime.run(task, _execute_skill)
+        return report.success
+
+    def _execute_tier1_command(self, parsed_intent: Dict[str, Any]) -> bool:
+        return self._run_single_command_via_runtime(parsed_intent)
+
     @staticmethod
     def _factory_task_payload_from_runtime_sentinel(
         parsed_intent: Dict[str, Any]

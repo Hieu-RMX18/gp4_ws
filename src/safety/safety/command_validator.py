@@ -91,6 +91,14 @@ class CommandValidator:
         return True, ""
 
     def _check_extended_mode_preconditions(self, command: dict) -> tuple:
+        """Validate extended_mode preconditions.
+
+        Checks 1-4 below are pre-wired for the future ``joint_6_t.extended``
+        config key. They are intentionally inert until the YAML operator
+        activates that key; the early-exit guard above enforces the
+        fail-closed posture by rejecting requests when extended mode is
+        not enabled in ``safety_rules.yaml``.
+        """
         if not command.get("extended_mode"):
             return True, ""
         cfg = self.safety_rules.get("operational_joint_limits", {}).get("joint_6_t")

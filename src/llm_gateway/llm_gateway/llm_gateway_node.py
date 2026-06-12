@@ -295,6 +295,7 @@ class LLMGatewayNode(Node):
         self._llm_debug_publisher = self.create_publisher(String, "/llm_debug", 10)
         self._status_publisher = self.create_publisher(String, "/gateway_status", 10)
         self._command_publisher = self.create_publisher(String, "/llm_command", 10)
+        self._task_events_pub = self.create_publisher(String, "/llm_gateway/task_events", 10)
         self._last_status = "ready"
         self._status_heartbeat_timer = None
         if self._status_heartbeat_period_sec > 0.0:
@@ -2582,14 +2583,20 @@ class LLMGatewayNode(Node):
         return response
 
     def _runtime_event_sink(self, event: dict) -> None:
-        """R3 replaces this with a real publisher; for now, log only."""
-        try:
-            self.get_logger().info(
-                f"[task_event] {event.get('category')}/{event.get('event')}: "
-                f"{event.get('detail')}"
-            )
-        except AttributeError:
-            pass  # Safe for tests that bypass node initialization
+        pub = getattr(self, "_task_events_pub", None)
+        if pub is None:
+            return
+        msg = String()
+        msg.data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+        pub.publish(msg)
+
+    def _emit_task_event(self, category, event, detail, *, level="INFO", source="gateway", data=None):
+        import datetime
+        self._runtime_event_sink({
+            "ts": datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3],
+            "level": level, "source": source, "category": category,
+            "event": event, "detail": detail, "data": data or {},
+        })
 
     def _semantic_ir_for_runtime_skill(
         self,

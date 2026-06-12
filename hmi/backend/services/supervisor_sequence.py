@@ -41,6 +41,11 @@ _DEFAULT_BLEND_RADIUS_M = 0.01
 # must execute step-by-step through safety gate.
 _BLENDED_SEQUENCE_ELIGIBLE = {"PTP", "LIN"}
 
+# Maximum number of iterations the HMI Phase 1 adapter will expand for a
+# FactoryTask `repeat` runtime node. Prevents a malicious or buggy LLM
+# payload from generating thousands of motion steps.
+_REPEAT_MAX_COUNT = 100
+
 _COMMA_SEQUENCE_PREFIXES = {
     "alarm",
     "bật",
@@ -448,6 +453,32 @@ class SupervisorSequenceMixin:
                     )
                 )
             return steps
+        if node_type == "repeat":
+            body = runtime_plan.get("body")
+            if not isinstance(body, dict):
+                raise IntentResolutionError(
+                    "FactoryTask runtime repeat node requires a 'body' object."
+                )
+            count = runtime_plan.get("count")
+            if not isinstance(count, int) or isinstance(count, bool):
+                raise IntentResolutionError(
+                    "FactoryTask runtime repeat node requires an integer 'count'."
+                )
+            if count < 1:
+                raise IntentResolutionError(
+                    "FactoryTask runtime repeat count must be >= 1; got "
+                    f"{count}."
+                )
+            if count > _REPEAT_MAX_COUNT:
+                raise IntentResolutionError(
+                    f"FactoryTask runtime repeat count {count} exceeds the "
+                    f"HMI Phase 1 limit of {_REPEAT_MAX_COUNT}."
+                )
+            inner_steps = self._runtime_plan_to_semantic_steps(
+                body,
+                current_pose_loader=current_pose_loader,
+            )
+            return list(inner_steps) * count
         if node_type == "skill":
             semantic_ir = self._runtime_skill_to_semantic_ir(runtime_plan)
             intent = str(semantic_ir.get("intent") or "").strip().lower()

@@ -59,6 +59,12 @@ class TelemetryBridgeService:
         self._latest_base_snapshot: dict[str, Any] = self._build_base_snapshot()
         self._latest_fingerprint = self._fingerprint(self._latest_base_snapshot)
 
+        if hasattr(self._ros, "on_task_event_callback"):
+            self._ros.on_task_event_callback = self._on_task_event
+
+    def _on_task_event(self, payload: dict[str, Any]) -> None:
+        self.broadcast_event(lambda sid, oid: payload)
+
     async def start(self) -> None:
         self._ros.start()
         self._latest_base_snapshot = self._build_base_snapshot()

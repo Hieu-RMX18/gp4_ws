@@ -199,6 +199,7 @@ class WorkspaceRosAdapter(
         self._stop_requested = False
         self._command_interface_poll_period_sec = 0.5
         self.on_llm_debug_callback: Callable[[dict[str, Any]], None] | None = None
+        self.on_task_event_callback: Callable[[dict[str, Any]], None] | None = None
 
     def start(self) -> None:
         if rclpy is None:
@@ -641,6 +642,9 @@ class WorkspaceRosAdapter(
                 String, self._llm_command_topic, self._on_llm_command, 10
             ),
             self._node.create_subscription(
+                String, "/llm_gateway/task_events", self._on_task_events, 10
+            ),
+            self._node.create_subscription(
                 RobotReadinessMsg, self._readiness_topic, self._on_readiness, 10
             ),
             self._node.create_subscription(
@@ -839,6 +843,15 @@ class WorkspaceRosAdapter(
                 import json
                 payload = json.loads(msg.data)
                 self.on_llm_debug_callback(payload)
+            except Exception:
+                pass
+
+    def _on_task_events(self, msg: Any) -> None:
+        if self.on_task_event_callback:
+            try:
+                import json
+                payload = json.loads(msg.data)
+                self.on_task_event_callback({"channel": "task_event", "event": payload})
             except Exception:
                 pass
 

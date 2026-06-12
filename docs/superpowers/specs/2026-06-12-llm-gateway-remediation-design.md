@@ -88,7 +88,15 @@ Pure relocation, guard bằng 442 test (import-only, không đổi hành vi).
 | `goal_mapper.py` | `GoalMapper` |
 | `drawing_router.py` | `DrawRouterMixin` (giữ quan hệ với `drawing_geometry`/`stroke_font`) |
 | `intent_router.py` | `IntentRouter`, `RouteResult`, `_SchemaValidatorLike` |
-| `composite_tools.py` | `_CompositeTool`, `Pick/Approach/Place/VerifyPostcondition/VerifyGrasp/EmitSequence/RefreshScene` tools, `ToolResult`, `PostconditionVerifier`, `mtc_select` |
+
+**Cập nhật khi R1 thực thi (2026-06-12):** `composite_tools` (`_CompositeTool` +
+Pick/Approach/Place/Verify tools, `PostconditionVerifier`, `mtc_select`,
+`generate_candidate_poses`) **bị XÓA hẳn**, KHÔNG relocate. Verify cho thấy mọi symbol
+của nó **0 live hit** (node/runtime/hmi không gọi — runtime dùng
+`_semantic_ir_for_runtime_skill` trong node). Đây là khung tool thời ReAct
+(spec 2026-06-08); spec gốc §3 vốn muốn xóa. R2 dùng `_semantic_ir_for_runtime_skill`
+làm nguồn skill→IR DUY NHẤT. → R1 tạo **5** module mới, không phải 6; xóa thêm
+`test_composite_tools.py` + 2 test orphan trong `test_scene_cache.py`/`test_pick_white_workpiece_sim.py`.
 
 **`factory_task.py` giữ lại đúng spec §3:** `FactoryTaskError`, `ResolveResult`,
 `StationSceneGraph`, `SkillCall`, `TaskNode`, `FactoryTask`, `PolicyDecision`,

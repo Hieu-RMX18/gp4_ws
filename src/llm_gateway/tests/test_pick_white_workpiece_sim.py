@@ -3,13 +3,11 @@
 Requirements from plan Phase 8:
 - Completes in ≤5 planner iterations
 - Cache hit rate ≥50% for repeated perception queries
-- PostconditionVerifier confirms object placed correctly
 """
 from __future__ import annotations
 
 from types import SimpleNamespace
 
-from llm_gateway.factory_task import PostconditionVerifier
 from llm_gateway.factory_task import (
     FACTORY_TASK_VERSION,
     FactoryTask,
@@ -92,20 +90,6 @@ def _live_scene_conveyor() -> dict:
 
 
 # ── Phase 8: Integration test (plan requirement) ─────────────────────────────
-
-def test_pick_place_white_workpiece_completes_with_cached_scene_model():
-    """Before-and-after postcondition verifier test (baseline)."""
-    scene_before = {"detections": [{"class_id": "white_workpiece", "region": "fixture"}]}
-    scene_after = {"detections": [{"class_id": "white_workpiece", "region": "conveyor"}]}
-    verifier = PostconditionVerifier()
-
-    assert verifier.verify_place(
-        object_id="white_workpiece", destination="conveyor", scene=scene_before
-    ).ok is False
-    assert verifier.verify_place(
-        object_id="white_workpiece", destination="conveyor", scene=scene_after
-    ).ok is True
-
 
 def test_compile_goal_pick_place_yields_ordered_skills_in_at_most_five_steps(tmp_path: Path):
     """compile_goal produces an ordered pick/place skill sequence in ≤5 steps."""

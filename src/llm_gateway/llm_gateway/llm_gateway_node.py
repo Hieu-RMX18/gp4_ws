@@ -1614,33 +1614,7 @@ class LLMGatewayNode(Node):
             diagnostics=list(sequence_result.diagnostics),
             start_joints_rad=list(getattr(self, "_latest_joint_positions_rad", [])),
         )
-        self._dispatch_sequence_step(sequence_state)
-
-    def _dispatch_sequence_step(self, sequence_state: _SequenceExecutionState) -> None:
-        if sequence_state.current_step_index >= sequence_state.step_count:
-            self.publish_status("sequence_succeeded")
-            self._publish_debug(
-                {
-                    "status": "sequence_succeeded",
-                    "stage": "sequence_execution",
-                    "intent": sequence_state.intent_text,
-                    "step_count": sequence_state.step_count,
-                }
-            )
-            return
-
-        current_step_number = sequence_state.current_step_index + 1
-        self.publish_status(
-            f"sequence_step:{current_step_number}/{sequence_state.step_count}"
-        )
-        normalized_command = sequence_state.normalized_commands[
-            sequence_state.current_step_index
-        ]
-        self._dispatch_normalized_command(
-            normalized_command,
-            sequence_state.intent_text,
-            sequence_state=sequence_state,
-        )
+        pass
 
     def _dispatch_normalized_command(
         self,

@@ -1571,50 +1571,6 @@ class LLMGatewayNode(Node):
 
         self.publish_status("semantic_valid")
         pass
-    def _process_sequence(
-        self,
-        intent_text: str,
-        parsed_command: Dict[str, Any],
-        routed_commands: List[Dict[str, Any]],
-    ) -> None:
-        try:
-            sequence_result = self._sequence_validator.validate(routed_commands)
-        except Exception as exc:
-            self._reject(
-                "sequence_validation_failed",
-                str(exc),
-                intent_text=intent_text,
-                parsed_command=parsed_command,
-            )
-            return
-
-        self.publish_status("sequence_valid")
-        self._publish_debug(
-            {
-                "status": "sequence_valid",
-                "stage": "sequence_validation",
-                "intent": intent_text,
-                "step_count": sequence_result.step_count,
-                "validated_reference_frame": sequence_result.validated_reference_frame,
-                "cumulative_move_rel_distance_m": sequence_result.cumulative_move_rel_distance_m,
-                "estimated_duration_lower_bound_sec": sequence_result.estimated_duration_lower_bound_sec,
-                "duration_estimate_is_lower_bound": sequence_result.duration_estimate_is_lower_bound,
-                "has_io_side_effects": sequence_result.has_io_side_effects,
-                "manual_recovery_required_on_failure": (
-                    sequence_result.manual_recovery_required_on_failure
-                ),
-                "diagnostics": sequence_result.diagnostics,
-            }
-        )
-        sequence_state = _SequenceExecutionState(
-            intent_text=intent_text,
-            normalized_commands=list(sequence_result.normalized_commands),
-            step_count=sequence_result.step_count,
-            diagnostics=list(sequence_result.diagnostics),
-            start_joints_rad=list(getattr(self, "_latest_joint_positions_rad", [])),
-        )
-        pass
-
     def _is_query_command(self, primitive_type: str) -> bool:
         """Return True for query-only commands that bypass the motion action pipeline."""
         return primitive_type == "GET_POSE"

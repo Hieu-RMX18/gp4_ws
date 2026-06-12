@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { GP4HMI } from './components/GP4HMI';
 import { JogPendant } from './components/JogPendant';
+import { SystemLog } from './components/system-log/SystemLog';
 import { createBridgeClient } from './bridgeClient';
 import { useGP4Bridge } from './hooks/useGP4Bridge';
 import type { JogCommandRequest } from '../shared/contracts';
@@ -8,7 +9,7 @@ import './styles/gp4-hmi.css';
 
 const bridgeClient = createBridgeClient('/api/hmi');
 
-type AppTab = 'command' | 'jog';
+type AppTab = 'command' | 'jog' | 'system_log';
 
 function getOrCreateSessionId(): string {
   const key = 'gp4-hmi-session-id';
@@ -51,10 +52,18 @@ export function App() {
         >
           Joint Jog Pendant
         </button>
+        <button
+          type="button"
+          className={`app-tab ${activeTab === 'system_log' ? 'active' : ''}`}
+          onClick={() => setActiveTab('system_log')}
+        >
+          System Log
+        </button>
       </nav>
-      {activeTab === 'command' ? (
+      {activeTab === 'command' && (
         <GP4HMI bridge={bridge} />
-      ) : (
+      )}
+      {activeTab === 'jog' && (
         <JogPendant
           jogBridgeStatus={bridge.jogBridgeStatus}
           jointPositions={bridge.state.jointPositions}
@@ -62,6 +71,9 @@ export function App() {
           onDeactivateBridge={() => bridgeClient.deactivateJogBridge()}
           onJogCommand={(cmd: JogCommandRequest) => bridgeClient.sendJogCommand(cmd)}
         />
+      )}
+      {activeTab === 'system_log' && (
+        <SystemLog events={bridge.taskEvents} />
       )}
     </div>
   );

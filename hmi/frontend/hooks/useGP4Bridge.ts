@@ -12,6 +12,7 @@ import type {
   ReplayListItem,
   SequenceView,
   ServoControlResponse,
+  TaskEvent,
   TransportState,
 } from '../../shared/contracts';
 
@@ -191,6 +192,7 @@ export interface UseGp4BridgeResult {
   state: HmiStateSnapshot;
   transportState: TransportState;
   jogBridgeStatus: JogBridgeStatusSnapshot;
+  taskEvents: TaskEvent[];
   isController: boolean;
   blockingRuntime: boolean;
   submitCommand: (rawText: string) => Promise<CommandMutationResponse>;
@@ -213,6 +215,7 @@ export function useGP4Bridge(
   const [state, setState] = useState<HmiStateSnapshot>(createDisconnectedSnapshot);
   const [transportState, setTransportState] = useState<TransportState>('disconnected');
   const [jogBridgeStatus, setJogBridgeStatus] = useState<JogBridgeStatusSnapshot>(DEFAULT_JOG_STATUS);
+  const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
 
   useEffect(() => {
     const disconnect = client.connect({
@@ -221,6 +224,14 @@ export function useGP4Bridge(
       onEvent: (event) => {
         if (event.type === 'jog_bridge_status') {
           setJogBridgeStatus(event.jogBridgeStatus);
+          return;
+        }
+        if (event.type === 'task_event') {
+          setTaskEvents((current) => {
+            const next = [event.taskEvent, ...current];
+            if (next.length > 500) next.length = 500;
+            return next;
+          });
           return;
         }
         setState((current) => applyEvent(current, event));
@@ -414,6 +425,7 @@ export function useGP4Bridge(
     state,
     transportState,
     jogBridgeStatus,
+    taskEvents,
     isController: state.lease.ownsControl && state.lease.leaseToken !== null,
     blockingRuntime,
     submitCommand,

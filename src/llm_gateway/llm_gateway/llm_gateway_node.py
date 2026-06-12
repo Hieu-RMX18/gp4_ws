@@ -168,6 +168,11 @@ class LLMGatewayNode(Node):
             .get_parameter_value()
             .double_value
         )
+        self._motion_result_timeout_sec = (
+            self.get_parameter("motion_result_timeout_sec")
+            .get_parameter_value()
+            .double_value
+        )
         self._status_heartbeat_period_sec = (
             self.get_parameter("status_heartbeat_period_sec")
             .get_parameter_value()
@@ -358,6 +363,7 @@ class LLMGatewayNode(Node):
             callback_group=callback_group,
         )
 
+        self._init_runtime_stop_state()
         self.publish_status(self._last_status)
         self.get_logger().info(f"LLMGatewayNode ready (runtime_mode={runtime_mode}).")
 
@@ -379,6 +385,7 @@ class LLMGatewayNode(Node):
         self.declare_parameter("default_velocity_scale", 0.06)
         self.declare_parameter("default_acceleration_scale", 0.06)
         self.declare_parameter("safety_service_timeout_sec", 2.0)
+        self.declare_parameter("motion_result_timeout_sec", 30.0)
         self.declare_parameter("status_heartbeat_period_sec", 5.0)
         self.declare_parameter("allow_direct_topic_execution", False)
 
@@ -1200,11 +1207,24 @@ class LLMGatewayNode(Node):
                 "active_alarms": [str(code) for code in msg.error_codes],
             }
         )
+        if mode == "FAULT":
+            self._set_runtime_stop(True)
         if mode != "IDLE":
             self._invalidate_scene_cache()
 
     def _invalidate_scene_cache(self) -> None:
         self._get_scene_snapshot_cache().invalidate()
+
+    # ── Runtime STOP flag for FactoryTask executor ────────────────────────
+
+    def _init_runtime_stop_state(self) -> None:
+        self._runtime_stop_flag = False
+
+    def _set_runtime_stop(self, value: bool) -> None:
+        self._runtime_stop_flag = bool(value)
+
+    def _runtime_is_stopped(self) -> bool:
+        return bool(getattr(self, "_runtime_stop_flag", False))
 
     def _query_scene_for_verify(self) -> dict:
         # Bypass cache: always get a fresh snapshot for postcondition verification.
@@ -2516,6 +2536,9 @@ class LLMGatewayNode(Node):
             response.reason = f"invalid FactoryTask runtime payload: {exc}"
             return response
 
+        # Reset stale stop from a previous task.
+        self._set_runtime_stop(False)
+
         def _execute_skill(name: str, args: Dict[str, Any]) -> RuntimeStepResult:
             try:
                 semantic_ir = self._semantic_ir_for_runtime_skill(
@@ -2525,12 +2548,26 @@ class LLMGatewayNode(Node):
             except Exception as exc:
                 return RuntimeStepResult(success=False, reason=str(exc))
 
-        report = TaskRuntime(world_model=self._factory_task_world_model()).run(
-            task, _execute_skill
+        def _replan(_report):
+            """Re-plan once via the planner from the original operator summary."""
+            try:
+                planned = self._task_planner.plan(task.operator_summary) if self._task_planner else None
+            except Exception:
+                return None
+            return parse_factory_task(planned) if is_factory_task(planned) else None
+
+        runtime = TaskRuntime(
+            world_model=self._factory_task_world_model(),
+            is_stopped_fn=self._runtime_is_stopped,
+            event_callback=getattr(self, "_runtime_event_sink", None),
+            replan_handler=_replan,
+            max_replans=1,
         )
+        report = runtime.run(task, _execute_skill)
+
         if not report.success:
             response.accepted = False
-            response.reason = report.reason or "FactoryTask runtime validation failed"
+            response.reason = report.reason or "FactoryTask runtime execution failed"
             response.dispatched_to_ros = False
             return response
 
@@ -2538,11 +2575,21 @@ class LLMGatewayNode(Node):
         response.reason = ""
         response.execution_summary = (
             f"FactoryTask {task.task_id} confirmed by {request.operator_id}; "
-            f"validated {sum(report.attempts_by_skill.values())} runtime skill(s); "
+            f"executed {sum(report.attempts_by_skill.values())} runtime skill(s); "
             f"fingerprint {request.plan_fingerprint[:12]}..."
         )
-        response.dispatched_to_ros = False
+        response.dispatched_to_ros = report.success
         return response
+
+    def _runtime_event_sink(self, event: dict) -> None:
+        """R3 replaces this with a real publisher; for now, log only."""
+        try:
+            self.get_logger().info(
+                f"[task_event] {event.get('category')}/{event.get('event')}: "
+                f"{event.get('detail')}"
+            )
+        except AttributeError:
+            pass  # Safe for tests that bypass node initialization
 
     def _semantic_ir_for_runtime_skill(
         self,
@@ -2635,14 +2682,15 @@ class LLMGatewayNode(Node):
                 return result
         return RuntimeStepResult(success=True)
 
-    def _validate_runtime_command(
+    def _runtime_command_is_safe(
         self, command: Dict[str, Any]
-    ) -> RuntimeStepResult:
+    ) -> tuple[bool, str, Dict[str, Any] | None, Dict[str, Any] | None]:
+        """Return (ok, reason, normalized_command, command_payload). No dispatch."""
         try:
             self._schema_validator.validate(command)
             normalized_command = self._normalize_and_validate(command)
         except Exception as exc:
-            return RuntimeStepResult(success=False, reason=str(exc))
+            return False, str(exc), None, None
 
         primitive_type = str(normalized_command.get("primitive_type") or "")
         if self._is_query_command(primitive_type):
@@ -2650,20 +2698,14 @@ class LLMGatewayNode(Node):
             if pose_client is None or not pose_client.wait_for_service(
                 timeout_sec=self._safety_service_timeout_sec
             ):
-                return RuntimeStepResult(
-                    success=False,
-                    reason="GetCurrentPose service unavailable",
-                )
-            return RuntimeStepResult(success=True)
+                return False, "GetCurrentPose service unavailable", None, None
+            return True, "", normalized_command, None  # query: no motion goal
 
         command_payload = self._goal_mapper.to_command_payload(normalized_command)
         if not self._validate_client.wait_for_service(
             timeout_sec=self._safety_service_timeout_sec
         ):
-            return RuntimeStepResult(
-                success=False,
-                reason="ValidateCommand service unavailable",
-            )
+            return False, "ValidateCommand service unavailable", None, None
         validate_req = self._build_validate_request(normalized_command, command_payload)
         try:
             validate_future = self._validate_client.call_async(validate_req)
@@ -2671,25 +2713,43 @@ class LLMGatewayNode(Node):
                 validate_future, self._safety_service_timeout_sec
             )
         except Exception as exc:
-            return RuntimeStepResult(
-                success=False,
-                reason=f"ValidateCommand call failed: {exc}",
-            )
+            return False, f"ValidateCommand call failed: {exc}", None, None
         if not done:
-            return RuntimeStepResult(
-                success=False,
-                reason="ValidateCommand service timed out",
-            )
+            return False, "ValidateCommand service timed out", None, None
         if not validate_resp.valid:
-            return RuntimeStepResult(success=False, reason=str(validate_resp.reason))
+            return False, str(validate_resp.reason), None, None
+        return True, "", normalized_command, command_payload
 
-        execute_client = getattr(self, "_execute_client", None)
-        if execute_client is None or not execute_client.server_is_ready():
-            return RuntimeStepResult(
-                success=False,
-                reason="ExecuteMotion action server unavailable",
-            )
-        return RuntimeStepResult(success=True)
+    def _dispatch_runtime_goal(
+        self, normalized_command: Dict[str, Any]
+    ) -> "DispatchOutcome":
+        """Send the validated command to ExecuteMotion and await its result."""
+        from llm_gateway.runtime_dispatch import dispatch_and_await
+        goal = self._goal_mapper.to_execute_motion_goal(normalized_command)
+        outcome = dispatch_and_await(
+            getattr(self, "_execute_client", None),
+            goal=goal,
+            wait_fn=self._wait_for_future_without_spinning,
+            is_stopped_fn=self._runtime_is_stopped,
+            timeout_sec=self._motion_result_timeout_sec,
+        )
+        return outcome
+
+    def _validate_runtime_command(
+        self, command: Dict[str, Any]
+    ) -> RuntimeStepResult:
+        ok, reason, normalized_command, _payload = self._runtime_command_is_safe(command)
+        if not ok:
+            return RuntimeStepResult(success=False, reason=reason)
+        # Query commands (GET_POSE) validated above carry no motion goal.
+        if normalized_command is not None and self._is_query_command(
+            str(normalized_command.get("primitive_type") or "")
+        ):
+            return RuntimeStepResult(success=True)
+        if normalized_command is None:
+            return RuntimeStepResult(success=True)
+        outcome = self._dispatch_runtime_goal(normalized_command)
+        return RuntimeStepResult(success=outcome.ok, reason=outcome.reason)
 
     def _on_confirm_execution(
         self,

@@ -1991,21 +1991,40 @@ class _ReadyValidateClient:
         return object()
 
 class _ExecuteClientReady:
-    def __init__(self, ready=True):
+    """Fake execute client that supports server_is_ready + send_goal_async."""
+    def __init__(self, ready=True, accepted=True, success=True, message=""):
         self.ready = ready
+        self._accepted = accepted
+        self._success = success
+        self._message = message
 
     def server_is_ready(self):
         return self.ready
+
+    def send_goal_async(self, goal):
+        handle = SimpleNamespace(
+            accepted=self._accepted,
+            get_result_async=lambda: SimpleNamespace(
+                done=lambda: True,
+                result=lambda: SimpleNamespace(
+                    result=SimpleNamespace(success=self._success, message=self._message)
+                ),
+            ),
+            cancel_goal_async=lambda: SimpleNamespace(done=lambda: True, result=lambda: None),
+        )
+        return SimpleNamespace(done=lambda: True, result=lambda: handle)
 
 def test_confirm_execution_validates_factory_task_runtime_sentinel_skill_path():
     node, _statuses, _dispatched = _make_gateway_shell({"intent": "go_home"})
     validate_response = SimpleNamespace(valid=True, reason="", sanitized_json="")
     validate_client = _ReadyValidateClient(validate_response)
     node._validate_client = validate_client
-    node._execute_client = _ExecuteClientReady(True)
+    node._execute_client = _ExecuteClientReady(True, accepted=True, success=True)
+    node._motion_result_timeout_sec = 30.0
+    node._init_runtime_stop_state()
     node._wait_for_future_without_spinning = lambda _future, _timeout: (
         True,
-        validate_response,
+        _future.result() if callable(getattr(_future, 'result', None)) else validate_response,
     )
     sentinel = {
         "intent": FACTORY_TASK_RUNTIME_INTENT,
@@ -2041,7 +2060,7 @@ def test_confirm_execution_validates_factory_task_runtime_sentinel_skill_path():
     assert result.accepted is True
     assert result.reason == ""
     assert "FactoryTask home-runtime" in result.execution_summary
-    assert result.dispatched_to_ros is False
+    assert result.dispatched_to_ros is True  # R2: motion now dispatches
     assert len(validate_client.requests) == 1
     assert validate_client.requests[0].primitive_type == "HOME"
 
@@ -2050,9 +2069,11 @@ def test_confirm_execution_rejects_factory_task_runtime_when_execute_motion_unav
     validate_response = SimpleNamespace(valid=True, reason="", sanitized_json="")
     node._validate_client = _ReadyValidateClient(validate_response)
     node._execute_client = _ExecuteClientReady(False)
+    node._motion_result_timeout_sec = 30.0
+    node._init_runtime_stop_state()
     node._wait_for_future_without_spinning = lambda _future, _timeout: (
         True,
-        validate_response,
+        _future.result() if callable(getattr(_future, 'result', None)) else validate_response,
     )
     sentinel = {
         "intent": FACTORY_TASK_RUNTIME_INTENT,

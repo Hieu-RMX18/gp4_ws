@@ -76,16 +76,6 @@ from llm_gateway.semantic_ir_contract import (
 
 EXECUTOR_SHUTDOWN_TIMEOUT_SEC = 2.0
 @dataclass
-class _SequenceExecutionState:
-    intent_text: str
-    normalized_commands: List[Dict[str, Any]]
-    step_count: int
-    diagnostics: List[str] = field(default_factory=list)
-    start_joints_rad: List[float] = field(default_factory=list)
-    current_step_index: int = 0
-    executed_io_side_effects: bool = False
-
-
 class _SceneSnapshotCache:
     def __init__(self, ttl_sec: float, now_fn=time.monotonic):
         self._ttl_sec = float(ttl_sec)
@@ -1344,8 +1334,8 @@ class LLMGatewayNode(Node):
 
     def process_intent(self, intent_text: str) -> None:
         self.publish_status("received")
-        from llm_gateway.direct_commands import parse_direct_command
-        parsed = parse_direct_command(intent_text)
+        from llm_gateway.direct_commands import parse
+        parsed = parse(intent_text)
         if parsed:
             success = self._execute_tier1_command(parsed)
             self.publish_status("succeeded" if success else "rejected")
@@ -1475,176 +1465,6 @@ class LLMGatewayNode(Node):
         if "target_pose_msg" in normalized_command:
             request.target_pose = normalized_command["target_pose_msg"]
         return request
-
-    def _on_validation_done(
-        self,
-        future: Any,
-        intent_text: str,
-        command_payload: Dict[str, Any],
-        sequence_state: _SequenceExecutionState | None = None,
-    ) -> None:
-        try:
-            response = future.result()
-        except Exception as exc:
-            if sequence_state is None:
-                self._reject(
-                    "validate_service_call_failed",
-                    str(exc),
-                    intent_text=intent_text,
-                    validated_command=command_payload,
-                )
-            else:
-                self._reject_sequence_step(
-                    sequence_state,
-                    str(exc),
-                    validated_command=command_payload,
-                )
-            return
-
-        if not response.valid:
-            if sequence_state is None:
-                self._reject(
-                    "rejected_by_validate_service",
-                    str(response.reason),
-                    intent_text=intent_text,
-                    validated_command=command_payload,
-                )
-            else:
-                self._reject_sequence_step(
-                    sequence_state,
-                    str(response.reason),
-                    validated_command=command_payload,
-                )
-            return
-
-        self._emit_trace(
-            "safety_validated",
-            "validation",
-            source="safety",
-            summary="ValidateCommand accepted command",
-            primitive_type=str(command_payload.get("primitive_type") or ""),
-            has_sanitized_json=bool(getattr(response, "sanitized_json", "")),
-            sequence_step_index=(
-                sequence_state.current_step_index
-                if sequence_state is not None
-                else None
-            ),
-        )
-
-        try:
-            validated_command = self._command_from_sanitized_json(
-                response.sanitized_json, command_payload
-            )
-            normalized_command = self._normalize_and_validate(validated_command)
-        except Exception as exc:
-            if sequence_state is None:
-                self._reject(
-                    "sanitized_command_invalid",
-                    str(exc),
-                    intent_text=intent_text,
-                    validated_command=command_payload,
-                )
-            else:
-                self._reject_sequence_step(
-                    sequence_state,
-                    str(exc),
-                    validated_command=command_payload,
-                )
-            return
-
-        if normalized_command.get("plan_only") or command_payload.get("plan_only"):
-            precheck_payload = {
-                "status": "plan_precheck_succeeded",
-                "stage": "plan_only",
-                "intent": intent_text,
-                "validated_command": self._goal_mapper.to_command_payload(
-                    normalized_command
-                ),
-            }
-            if sequence_state is not None:
-                precheck_payload["sequence_step_index"] = (
-                    sequence_state.current_step_index
-                )
-                precheck_payload["sequence_step_count"] = sequence_state.step_count
-            self._publish_debug(precheck_payload)
-            if sequence_state is None:
-                self.publish_status("plan_precheck_succeeded")
-                return
-            sequence_state.current_step_index += 1
-            self._dispatch_sequence_step(sequence_state)
-            return
-
-        try:
-            execution_command = self._prepare_execution_command(normalized_command)
-        except Exception as exc:
-            if sequence_state is None:
-                self._reject(
-                    "prepare_execution_failed",
-                    str(exc),
-                    intent_text=intent_text,
-                    validated_command=command_payload,
-                )
-            else:
-                self._reject_sequence_step(
-                    sequence_state,
-                    str(exc),
-                    validated_command=command_payload,
-                )
-            return
-
-        goal_payload = self._goal_mapper.to_command_payload(execution_command)
-        self._publish_command(goal_payload)
-        validated_debug_payload = {
-            "status": "validated",
-            "stage": "validate_command",
-            "intent": intent_text,
-            "validated_command": goal_payload,
-        }
-        if sequence_state is not None:
-            validated_debug_payload["sequence_step_index"] = (
-                sequence_state.current_step_index
-            )
-            validated_debug_payload["sequence_step_count"] = sequence_state.step_count
-        self._publish_debug(validated_debug_payload)
-
-        if sequence_state is None:
-            self.publish_status("safety_approved")
-
-        if not self._execute_client.server_is_ready():
-            if sequence_state is None:
-                self._reject(
-                    "execute_motion_unavailable",
-                    "ExecuteMotion action server unavailable",
-                    intent_text=intent_text,
-                    validated_command=goal_payload,
-                )
-            else:
-                self._reject_sequence_step(
-                    sequence_state,
-                    "ExecuteMotion action server unavailable",
-                    validated_command=goal_payload,
-                )
-            return
-
-        goal = self._goal_mapper.to_execute_motion_goal(execution_command)
-        prim = goal_payload.get('primitive_type', '?')
-        # Emit current pose at dispatch time for before/after comparison
-        cur_pose_str = ""
-        cached = self._get_cached_current_pose_snapshot("base_link")
-        if cached:
-            cp = cached
-            cur_pose_str = f"current_pos=({cp.get('position',{}).get('x','?')}, {cp.get('position',{}).get('y','?')}, {cp.get('position',{}).get('z','?')})"
-        self._emit_trace(
-            "goal_dispatched", "dispatch",
-            summary=f"Sending {prim} to ExecuteMotion action server {cur_pose_str}",
-            source="motion_core",
-            primitive_type=prim,
-            planner_id=str(goal_payload.get('planner_id', '')),
-        )
-        send_future = self._execute_client.send_goal_async(goal)
-        send_future.add_done_callback(lambda f: None)
-        if sequence_state is None:
-            self.publish_status("dispatched")
 
     def _prepare_execution_command(
         self, normalized_command: Dict[str, Any]
@@ -1800,36 +1620,6 @@ class LLMGatewayNode(Node):
                 "z": float(getattr(size, "z", 0.0)),
             },
         }
-
-    def _reject_sequence_step(
-        self,
-        sequence_state: _SequenceExecutionState,
-        reason: str,
-        *,
-        validated_command: Dict[str, Any] | None = None,
-    ) -> None:
-        failed_step_index = sequence_state.current_step_index
-        failed_command = sequence_state.normalized_commands[failed_step_index]
-        manual_recovery_required = sequence_state.executed_io_side_effects
-        self.get_logger().warning(
-            f"sequence_step_failed step={failed_step_index + 1}/{sequence_state.step_count}: {reason}"
-        )
-        self._publish_debug(
-            {
-                "status": "rejected",
-                "stage": "sequence_step_failed",
-                "reason": reason,
-                "intent": sequence_state.intent_text,
-                "failed_step_index": failed_step_index,
-                "failed_primitive_type": failed_command.get("primitive_type", ""),
-                "validated_command": validated_command,
-                "manual_recovery_required": manual_recovery_required,
-                "sequence_diagnostics": sequence_state.diagnostics,
-            }
-        )
-        if manual_recovery_required:
-            self.publish_status("manual_recovery_required")
-        self.publish_status("rejected:sequence_step_failed")
 
     def _reject(
         self,

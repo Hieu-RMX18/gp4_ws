@@ -1962,58 +1962,9 @@ class LLMGatewayNode(Node):
             planner_id=str(goal_payload.get('planner_id', '')),
         )
         send_future = self._execute_client.send_goal_async(goal)
-        send_future.add_done_callback(
-            lambda f,
-            intent=intent_text,
-            payload=goal_payload,
-            sequence=sequence_state: (self._on_goal_sent(f, intent, payload, sequence))
-        )
+        send_future.add_done_callback(lambda f: None)
         if sequence_state is None:
             self.publish_status("dispatched")
-
-    def _on_goal_sent(
-        self,
-        future: Any,
-        intent_text: str,
-        goal_payload: Dict[str, Any],
-        sequence_state: _SequenceExecutionState | None = None,
-    ) -> None:
-        try:
-            goal_handle = future.result()
-        except Exception as exc:
-            if sequence_state is None:
-                self._reject(
-                    "execute_motion_send_failed",
-                    str(exc),
-                    intent_text=intent_text,
-                    validated_command=goal_payload,
-                )
-            else:
-                self._reject_sequence_step(
-                    sequence_state,
-                    str(exc),
-                    validated_command=goal_payload,
-                )
-            return
-        if not goal_handle or not goal_handle.accepted:
-            if sequence_state is None:
-                self._reject(
-                    "execute_motion_rejected",
-                    "ExecuteMotion action server rejected goal",
-                    intent_text=intent_text,
-                    validated_command=goal_payload,
-                )
-            else:
-                self._reject_sequence_step(
-                    sequence_state,
-                    "ExecuteMotion action server rejected goal",
-                    validated_command=goal_payload,
-                )
-            return
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(lambda f: None)
-
-
 
     def _prepare_execution_command(
         self, normalized_command: Dict[str, Any]

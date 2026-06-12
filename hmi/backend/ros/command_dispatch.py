@@ -837,10 +837,22 @@ class CommandDispatchMixin:
         pose.orientation.w = float(orientation.get("w", 1.0))
         return pose
 
-    def _wait_for_future(self, future: Any, timeout_sec: float) -> Any:
+    def _wait_for_future(
+        self,
+        future: Any,
+        timeout_sec: float,
+        *,
+        context: str | None = None,
+    ) -> Any:
         deadline = time.monotonic() + max(timeout_sec, 0.0)
         while not future.done():
             if time.monotonic() >= deadline:
-                raise TimeoutError("ROS future timed out.")
+                scope = context or "ROS call"
+                raise TimeoutError(
+                    f"{scope} timed out after {timeout_sec:.1f}s. "
+                    "The ROS service/action may be busy, not running, or the "
+                    "robot stack may need to be relaunched. Check "
+                    "`ros2 node list` and `ros2 service list` before retrying."
+                )
             time.sleep(0.05)
         return future.result()

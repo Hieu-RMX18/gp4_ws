@@ -75,6 +75,55 @@ class _FakeReviewClient:
         return _CompletedFuture(self._response)
 
 
+class TestWaitForFutureFriendlyMessage(unittest.TestCase):
+    """Verify the HMI-facing error string is human-friendly, not the internal literal."""
+
+    def test_timeout_error_message_includes_service_context(self) -> None:
+        from hmi.backend.ros.command_dispatch import CommandDispatchMixin
+
+        future: dict[str, bool] = {"done": False}
+
+        def _is_done() -> bool:
+            return future["done"]
+
+        class _StubFuture:
+            def done(self) -> bool:
+                return _is_done()
+
+            def result(self):  # pragma: no cover - never reached
+                raise AssertionError("result() must not be called on timeout")
+
+        adapter = CommandDispatchMixin()
+        with self.assertRaises(TimeoutError) as ctx:
+            adapter._wait_for_future(
+                _StubFuture(),  # type: ignore[arg-type]
+                timeout_sec=0.05,
+                context="review_intent call",
+            )
+        msg = str(ctx.exception)
+        self.assertNotIn("ROS future timed out.", msg)
+        self.assertIn("review_intent", msg)
+        self.assertIn("timed out", msg.lower())
+
+    def test_successful_future_returns_value(self) -> None:
+        from hmi.backend.ros.command_dispatch import CommandDispatchMixin
+
+        class _DoneFuture:
+            def done(self) -> bool:
+                return True
+
+            def result(self):
+                return {"ok": True}
+
+        adapter = CommandDispatchMixin()
+        result = adapter._wait_for_future(
+            _DoneFuture(),  # type: ignore[arg-type]
+            timeout_sec=0.5,
+            context="synthetic",
+        )
+        self.assertEqual(result, {"ok": True})
+
+
 class _ReadyServiceClient:
     def __init__(self, ready: bool) -> None:
         self._ready = ready

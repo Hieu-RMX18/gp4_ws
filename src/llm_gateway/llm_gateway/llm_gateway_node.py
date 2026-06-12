@@ -1344,171 +1344,21 @@ class LLMGatewayNode(Node):
 
     def process_intent(self, intent_text: str) -> None:
         self.publish_status("received")
-        self._emit_trace("prompt_received", "ingress", summary=intent_text[:80])
-
-        payload: str
-        if self._planner_enabled and self._task_planner is not None:
-            try:
-                self._emit_trace("llm_request_started", "reasoning", source="task_planner")
-                planner_result = self._task_planner.plan(intent_text)
-                self._emit_trace("llm_response_received", "reasoning", source="task_planner")
-            except Exception as exc:
-                self._reject("task_planner_failed", str(exc), intent_text=intent_text)
-                return
-            if is_factory_task(planner_result):
-                self._reject(
-                    "factory_task_requires_review",
-                    "FactoryTask motion requests must be reviewed through "
-                    "/llm_gateway/review_intent and confirmed before execution.",
-                    intent_text=intent_text,
-                )
-                return
-            if "error" not in planner_result:
-                self._reject(
-                    "planner_contract_rejected",
-                    "TaskPlanner returned neither FactoryTask nor error payload.",
-                    intent_text=intent_text,
-                    hint="Planner output must be FactoryTask; Semantic IR is internal to the gateway compiler.",
-                )
-                return
-            payload = json.dumps(planner_result)
-        else:
-            try:
-                self._emit_trace("llm_request_started", "reasoning")
-                llm_response = self._llm_client.generate_response(intent_text)
-                self._emit_trace("llm_response_received", "reasoning")
-            except Exception as exc:
-                self._reject("llm_request_failed", str(exc), intent_text=intent_text)
-                return
-            self.publish_status("llm_response_received")
-            payload = llm_response
-
-        self._process_llm_payload(intent_text, payload, enforce_contract=True)
-
+        from llm_gateway.direct_commands import parse_direct_command
+        parsed = parse_direct_command(intent_text)
+        if parsed:
+            success = self._execute_tier1_command(parsed)
+            self.publish_status("succeeded" if success else "rejected")
+            return
+        self._reject("unsupported", "Complex intents via /llm_text_input are no longer supported. Use FactoryTask API.", intent_text=intent_text)
     def process_raw_command(self, raw_payload: str) -> None:
         self.publish_status("received")
-        self._process_llm_payload("", raw_payload, enforce_contract=False)
-
-    def _process_llm_payload(
-        self,
-        intent_text: str,
-        raw_payload: str,
-        *,
-        enforce_contract: bool = True,
-    ) -> None:
         try:
-            parsed_command = self._parser.parse(raw_payload)
-            self._emit_trace("parsed", "parsing",
-                             summary=f"intent={parsed_command.get('intent', '?')} raw_len={len(raw_payload)}",
-                             intent=str(parsed_command.get('intent', '')),
-                             primitive_type=str(parsed_command.get('primitive_type', '')),
-                             raw_preview=raw_payload[:120])
+            parsed = self._parser.parse(raw_payload)
+            success = self._execute_tier1_command(parsed)
+            self.publish_status("succeeded" if success else "rejected")
         except Exception as exc:
-            self._reject(
-                "llm_parse_failed",
-                str(exc),
-                intent_text=intent_text,
-                raw_llm_output=raw_payload,
-            )
-            return
-
-        try:
-            parsed_command = self._hydrate_draw_workplane(parsed_command)
-        except Exception as exc:
-            self._reject(
-                "workplane_resolution_failed",
-                str(exc),
-                intent_text=intent_text,
-                parsed_command=parsed_command,
-            )
-            return
-
-        parsed_command = self._prepare_review_semantic_ir(parsed_command)
-        self._emit_trace("canonicalized", "parsing",
-                         summary=f"Aliases resolved → intent={parsed_command.get('intent', '?')}")
-        if isinstance(parsed_command, dict) and "error" in parsed_command:
-            self._reject(
-                "semantic_ir_preparation_failed",
-                self._review_error_message(parsed_command),
-                intent_text=intent_text,
-                hint=str(parsed_command.get("hint", "")),
-                parsed_command=parsed_command,
-            )
-            return
-        if enforce_contract:
-            contract = validate_semantic_ir_contract(parsed_command)
-            if not contract.valid:
-                self._reject(
-                    "semantic_ir_contract_rejected",
-                    contract.reason,
-                    intent_text=intent_text,
-                    hint=contract.hint,
-                    parsed_command=parsed_command,
-                )
-                return
-            self._emit_trace("contract_validated", "validation",
-                             summary="Semantic IR contract check PASSED")
-
-        parsed_command = self._inject_return_to_start_joints(
-            parsed_command, list(getattr(self, "_latest_joint_positions_rad", []))
-        )
-
-        self.publish_status("parsed")
-        self._emit_trace("schema_validated", "validation")
-        try:
-            routed_result = self._intent_router.route(parsed_command)
-        except Exception as exc:
-            self._reject(
-                "intent_routing_failed",
-                self._review_exception_message(exc),
-                intent_text=intent_text,
-                parsed_command=parsed_command,
-            )
-            return
-
-        self.publish_status("routed")
-        self._emit_trace("routed", "routing", summary=f"route={routed_result.route_type}")
-
-        if routed_result.route_type == "error":
-            error_payload = routed_result.error_payload or {}
-            reason = (
-                error_payload.get("message")
-                or error_payload.get("error")
-                or "LLM returned an error payload."
-            )
-            reason = self._review_error_message(
-                {
-                    "error": error_payload.get("error"),
-                    "message": reason,
-                    "intent": error_payload.get("intent"),
-                }
-            )
-            self._reject(
-                "unsupported_or_ambiguous",
-                reason,
-                intent_text=intent_text,
-                parsed_command=parsed_command,
-                validated_command=error_payload,
-            )
-            return
-
-        if routed_result.route_type == "sequence":
-            self._process_sequence(intent_text, parsed_command, routed_result.commands)
-            return
-
-        if len(routed_result.commands) != 1:
-            self._reject(
-                "intent_routing_failed",
-                f"Expected exactly one primitive command, got {len(routed_result.commands)}.",
-                intent_text=intent_text,
-                parsed_command=parsed_command,
-            )
-            return
-
-        self._process_single_command(
-            intent_text, parsed_command, routed_result.commands[0]
-        )
-
+            self._reject("parse_failed", str(exc), raw_llm_output=raw_payload)
     def _normalize_and_validate(self, command: Dict[str, Any]) -> Dict[str, Any]:
         normalized_command = self._normalizer.normalize(command)
         # Emit detailed normalization trace

@@ -2619,14 +2619,18 @@ class LLMGatewayNode(Node):
         # Reset stale stop from a previous task.
         self._set_runtime_stop(False)
 
-        def _execute_skill(name: str, args: Dict[str, Any]) -> RuntimeStepResult:
-            try:
-                semantic_ir = self._semantic_ir_for_runtime_skill(
-                    task_payload, name, args
-                )
-                return self._validate_runtime_semantic_ir(semantic_ir)
-            except Exception as exc:
-                return RuntimeStepResult(success=False, reason=str(exc))
+        from llm_gateway.runtime_skill_executor import RuntimeSkillExecutor
+
+        class _NodeDeps:
+            def __init__(self, node, task_payload):
+                self.node = node
+                self.task_payload = task_payload
+            def semantic_ir_for_skill(self, name, args):
+                return self.node._semantic_ir_for_runtime_skill(self.task_payload, name, args)
+            def validate_and_dispatch(self, semantic_ir):
+                return self.node._validate_runtime_semantic_ir(semantic_ir)
+
+        _execute_skill = RuntimeSkillExecutor(_NodeDeps(self, task_payload))
 
         def _replan(_report):
             """Re-plan once via the planner from the original operator summary."""

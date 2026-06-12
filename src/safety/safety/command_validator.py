@@ -1,6 +1,4 @@
 import json
-from datetime import datetime, timezone
-from typing import Optional
 
 from .policy_loader import _FAILSAFE_MOTION_LIMITS
 
@@ -15,25 +13,6 @@ _VELOCITY_BYPASS_PRIMITIVES = {
 
 # Fail-safe only — active policy is loaded from safety_rules.yaml via constructor.
 _DEFAULT_MAX_SCALE = _FAILSAFE_MOTION_LIMITS["max_velocity_scale"]
-
-
-class _ExtendedRunTracker:
-    """Module-level tracker for extended-mode cooldown enforcement.
-
-    Single-threaded per the existing safety chain executor.
-    """
-
-    def __init__(self):
-        self._last_end_time: Optional[datetime] = None
-
-    def record_end(self):
-        self._last_end_time = datetime.now(timezone.utc)
-
-    def last_end_time(self) -> Optional[datetime]:
-        return self._last_end_time
-
-
-_extended_runs = _ExtendedRunTracker()
 
 
 class CommandValidator:
@@ -151,19 +130,7 @@ class CommandValidator:
                 "extended_mode requires operator_confirm_token (single-command scope)",
             )
 
-        # 4. Cooldown enforcement
-        last_extended_end = _extended_runs.last_end_time()
-        if last_extended_end is not None:
-            elapsed = (datetime.now(timezone.utc) - last_extended_end).total_seconds()
-            cool_down = float(pre.get("cool_down_s_between_runs", 60))
-            if elapsed < cool_down:
-                return (
-                    False,
-                    f"extended_mode cooldown not elapsed: "
-                    f"{elapsed:.1f}s < {cool_down}s",
-                )
-
-        # 5. Estimated duration cap
+        # 4. Estimated duration cap
         estimated_s = float(command.get("estimated_duration_s", 0))
         max_duration = float(pre.get("max_continuous_extended_time_s", 30))
         if estimated_s > max_duration:
@@ -174,7 +141,3 @@ class CommandValidator:
             )
 
         return True, ""
-
-    def record_extended_run_end(self):
-        """Called by execution_gate after an extended-mode command completes."""
-        _extended_runs.record_end()

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 
 import type {
   CommandView,
@@ -205,6 +205,7 @@ export interface UseGp4BridgeResult {
   startServo: () => Promise<ServoControlResponse | null>;
   holdServo: () => Promise<ServoControlResponse | null>;
   refreshReplay: () => Promise<ReplayListItem[]>;
+  reconnect: () => void;
 }
 
 export function useGP4Bridge(
@@ -216,6 +217,41 @@ export function useGP4Bridge(
   const [transportState, setTransportState] = useState<TransportState>('disconnected');
   const [jogBridgeStatus, setJogBridgeStatus] = useState<JogBridgeStatusSnapshot>(DEFAULT_JOG_STATUS);
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
+  const [reconnectTrigger, setReconnectTrigger] = useState(0);
+
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  const logTaskEvent = useCallback((
+    level: 'DEBUG' | 'INFO' | 'WARN' | 'ERR',
+    source: string,
+    category: string,
+    event: string,
+    detail: string,
+    data: Record<string, unknown> = {}
+  ) => {
+    setTaskEvents((current) => {
+      const e: TaskEvent = {
+        ts: new Date().toISOString(),
+        level,
+        source,
+        category,
+        event,
+        detail,
+        data,
+      };
+      const next = [e, ...current];
+      if (next.length > 500) next.length = 500;
+      return next;
+    });
+  }, []);
+
+  const reconnect = useCallback(() => {
+    logTaskEvent('INFO', 'hmi_client', 'TRANSPORT', 'reconnect_requested', 'Manual telemetry update requested. Re-connecting WebSocket link...');
+    setReconnectTrigger((prev) => prev + 1);
+  }, [logTaskEvent]);
 
   useEffect(() => {
     const disconnect = client.connect({
@@ -234,16 +270,188 @@ export function useGP4Bridge(
           });
           return;
         }
+
+        if (event.type === 'command_lifecycle') {
+          const cmd = event.command;
+          let generatedDetail = '';
+          let generatedEvent = '';
+          let level: 'INFO' | 'WARN' | 'ERR' = 'INFO';
+
+          switch (cmd.lifecycleState) {
+            case 'RECEIVED':
+              generatedEvent = 'command_received';
+              generatedDetail = `Command "${cmd.rawText}" accepted by Supervisor. ID: ${cmd.commandId}`;
+              break;
+            case 'PARSING':
+              generatedEvent = 'intent_parsing';
+              generatedDetail = `LLM gateway is parsing intent...`;
+              break;
+            case 'VALIDATING':
+              generatedEvent = 'command_validating';
+              generatedDetail = `Validating kinematics, collision-free path, and safety limits.`;
+              break;
+            case 'NEEDS_CONFIRMATION':
+              generatedEvent = 'needs_confirmation';
+              generatedDetail = `Kinematic check complete. Waiting for operator confirmation. (Risk: ${cmd.riskLevel || 'low'})`;
+              level = 'WARN';
+              break;
+            case 'CONFIRMED':
+              generatedEvent = 'command_confirmed';
+              generatedDetail = `Operator confirmed execution. Launching action sequence.`;
+              break;
+            case 'EXECUTION_REQUESTED':
+              generatedEvent = 'execution_requested';
+              generatedDetail = `Request sent to ROS action client /execute_motion...`;
+              break;
+            case 'EXECUTING':
+              generatedEvent = 'motion_executing';
+              generatedDetail = `Robot is moving. Stream active...`;
+              break;
+            case 'SUCCEEDED':
+              generatedEvent = 'motion_succeeded';
+              generatedDetail = `Motion completed successfully. Pose target reached.`;
+              break;
+            case 'FAILED':
+              generatedEvent = 'motion_failed';
+              generatedDetail = `Execution failed: ${cmd.rejectReason || 'Unknown error'}`;
+              level = 'ERR';
+              break;
+            case 'REJECTED':
+              generatedEvent = 'command_rejected';
+              generatedDetail = `Command rejected: ${cmd.rejectReason || 'Validation failed'}`;
+              level = 'ERR';
+              break;
+            case 'CANCELLED':
+              generatedEvent = 'command_cancelled';
+              generatedDetail = `Command execution was cancelled by operator.`;
+              level = 'WARN';
+              break;
+            case 'EXPIRED':
+              generatedEvent = 'confirmation_expired';
+              generatedDetail = `Confirmation time window expired.`;
+              level = 'WARN';
+              break;
+          }
+
+          if (generatedEvent) {
+            logTaskEvent(level, 'supervisor', 'COMMAND', generatedEvent, generatedDetail, {
+              commandId: cmd.commandId,
+              state: cmd.lifecycleState,
+            });
+          }
+        } else if (event.type === 'sequence_lifecycle') {
+          const seq = event.sequence;
+          let generatedDetail = '';
+          let generatedEvent = '';
+          let level: 'INFO' | 'WARN' | 'ERR' = 'INFO';
+
+          switch (seq.lifecycleState) {
+            case 'RECEIVED':
+              generatedEvent = 'sequence_received';
+              generatedDetail = `Sequence accepted by Supervisor. ID: ${seq.sequenceId} (${seq.stepCount} steps)`;
+              break;
+            case 'EXECUTING':
+              generatedEvent = 'sequence_executing';
+              generatedDetail = `Executing sequence step ${typeof seq.currentStepIndex === 'number' ? (seq.currentStepIndex + 1) : '?'}/${seq.stepCount}`;
+              break;
+            case 'SUCCEEDED':
+              generatedEvent = 'sequence_succeeded';
+              generatedDetail = `Sequence completed successfully!`;
+              break;
+            case 'FAILED':
+              generatedEvent = 'sequence_failed';
+              generatedDetail = `Sequence failed at step ${typeof seq.currentStepIndex === 'number' ? (seq.currentStepIndex + 1) : '?'}: ${seq.rejectReason || 'Unknown error'}`;
+              level = 'ERR';
+              break;
+            case 'CANCELLED':
+              generatedEvent = 'sequence_cancelled';
+              generatedDetail = `Sequence execution cancelled by operator.`;
+              level = 'WARN';
+              break;
+          }
+
+          if (generatedEvent) {
+            logTaskEvent(level, 'supervisor', 'SEQUENCE', generatedEvent, generatedDetail, {
+              sequenceId: seq.sequenceId,
+              state: seq.lifecycleState,
+            });
+          }
+        } else if (event.type === 'snapshot') {
+          const prevStatus = stateRef.current?.runtime?.robotStatus;
+          const nextStatus = event.snapshot?.runtime?.robotStatus;
+
+          if (prevStatus && nextStatus) {
+            if (prevStatus.servoState !== nextStatus.servoState && nextStatus.servoState !== 'UNKNOWN') {
+              logTaskEvent(
+                nextStatus.servoState === 'ON' ? 'INFO' : 'WARN',
+                'hw_adapter',
+                'ROBOT',
+                'servo_state_changed',
+                `Robot drives/servo state: ${nextStatus.servoState}`,
+                { servoState: nextStatus.servoState }
+              );
+            }
+            if (prevStatus.eStop !== nextStatus.eStop && nextStatus.eStop !== 'UNKNOWN') {
+              logTaskEvent(
+                nextStatus.eStop === 'ACTIVE' ? 'ERR' : 'INFO',
+                'hw_adapter',
+                'ROBOT',
+                'estop_changed',
+                `Emergency stop is now: ${nextStatus.eStop}`,
+                { eStop: nextStatus.eStop }
+              );
+            }
+            if (prevStatus.alarmState !== nextStatus.alarmState && nextStatus.alarmState !== 'UNKNOWN') {
+              logTaskEvent(
+                nextStatus.alarmState === 'ACTIVE' ? 'ERR' : 'INFO',
+                'hw_adapter',
+                'ROBOT',
+                'alarm_changed',
+                `Robot alarm state changed to: ${nextStatus.alarmState} (${nextStatus.readinessMessage})`,
+                { alarmState: nextStatus.alarmState, message: nextStatus.readinessMessage }
+              );
+            }
+          }
+
+          const prevPose = stateRef.current?.toolPose;
+          const nextPose = event.snapshot?.toolPose;
+          if (prevPose && nextPose) {
+            const dist = Math.sqrt(
+              Math.pow(nextPose.x - prevPose.x, 2) +
+              Math.pow(nextPose.y - prevPose.y, 2) +
+              Math.pow(nextPose.z - prevPose.z, 2)
+            );
+            if (dist > 0.005) {
+              logTaskEvent(
+                'INFO',
+                'hw_adapter',
+                'ROBOT',
+                'pose_changed',
+                `Robot TCP moved: X=${nextPose.x.toFixed(3)}, Y=${nextPose.y.toFixed(3)}, Z=${nextPose.z.toFixed(3)}`,
+                { prevPose, nextPose }
+              );
+            }
+          }
+        }
+
         setState((current) => applyEvent(current, event));
       },
       onTransportStateChange: (nextState) => {
         setTransportState(nextState);
+        logTaskEvent(
+          nextState === 'connected' ? 'INFO' : 'WARN',
+          'hmi_bridge',
+          'TRANSPORT',
+          `bridge_${nextState}`,
+          `HMI WebSocket transport state changed to: ${nextState.toUpperCase()}`,
+          { state: nextState }
+        );
         setState((current) => applyEvent(current, { type: 'connection_state', transportState: nextState }));
       },
     });
 
     return disconnect;
-  }, [client, operatorId, sessionId]);
+  }, [client, operatorId, sessionId, reconnectTrigger, logTaskEvent]);
 
   useEffect(() => {
     if (!state.lease.ownsControl || !state.lease.leaseToken) {
@@ -299,6 +507,7 @@ export function useGP4Bridge(
     if (state.mode !== 'sim' && state.mode !== 'hardware') {
       throw new Error('Command mode is not command-capable.');
     }
+    logTaskEvent('INFO', 'hmi_client', 'COMMAND', 'submitting_intent', `Sending user intent to supervisor: "${rawText}"`, { rawText });
     const response = await client.submitCommand({
       sessionId,
       operatorId,
@@ -310,12 +519,13 @@ export function useGP4Bridge(
       setState(response.snapshot);
     }
     return response;
-  }, [client, operatorId, sessionId, state.lease.leaseToken, state.mode]);
+  }, [client, operatorId, sessionId, state.lease.leaseToken, state.mode, logTaskEvent]);
 
   const submitQuickCommand = useCallback(async (quickCommandId: string) => {
     if (state.mode !== 'sim' && state.mode !== 'hardware') {
       throw new Error('Command mode is not command-capable.');
     }
+    logTaskEvent('INFO', 'hmi_client', 'COMMAND', 'submitting_intent', `Sending quick command to supervisor: "${quickCommandId}"`, { quickCommandId });
     const response = await client.submitCommand({
       sessionId,
       operatorId,
@@ -327,7 +537,7 @@ export function useGP4Bridge(
       setState(response.snapshot);
     }
     return response;
-  }, [client, operatorId, sessionId, state.lease.leaseToken, state.mode]);
+  }, [client, operatorId, sessionId, state.lease.leaseToken, state.mode, logTaskEvent]);
 
   const confirmCommandById = useCallback(async (commandId: string, planFingerprint: string) => {
     const response = await client.confirmCommand(commandId, {
@@ -343,6 +553,10 @@ export function useGP4Bridge(
   }, [client, operatorId, sessionId, state.lease.leaseToken]);
 
   const confirmActiveCommand = useCallback(async () => {
+    logTaskEvent('INFO', 'hmi_client', 'COMMAND', 'confirming_command', 'Confirming command execution...', {
+      commandId: state.activeCommand?.commandId,
+      sequenceId: state.activeSequence?.sequenceId,
+    });
     if (state.activeSequence?.planFingerprint) {
       const response = await client.confirmSequence(state.activeSequence.sequenceId, {
         sessionId,
@@ -359,9 +573,14 @@ export function useGP4Bridge(
       return null;
     }
     return confirmCommandById(state.activeCommand.commandId, state.activeCommand.planFingerprint);
-  }, [client, confirmCommandById, operatorId, sessionId, state.activeCommand, state.activeSequence, state.lease.leaseToken]);
+  }, [client, confirmCommandById, operatorId, sessionId, state.activeCommand, state.activeSequence, state.lease.leaseToken, logTaskEvent]);
 
   const abortActiveCommand = useCallback(async (reason?: string) => {
+    logTaskEvent('INFO', 'hmi_client', 'COMMAND', 'aborting_command', `Sending cancellation request... Reason: ${reason || 'none'}`, {
+      commandId: state.activeCommand?.commandId,
+      sequenceId: state.activeSequence?.sequenceId,
+      reason,
+    });
     if (state.activeSequence) {
       const response = await client.abortSequence(state.activeSequence.sequenceId, {
         sessionId,
@@ -387,7 +606,7 @@ export function useGP4Bridge(
       setState(response.snapshot);
     }
     return response;
-  }, [client, operatorId, sessionId, state.activeCommand, state.activeSequence, state.lease.leaseToken]);
+  }, [client, operatorId, sessionId, state.activeCommand, state.activeSequence, state.lease.leaseToken, logTaskEvent]);
 
   const startServo = useCallback(async () => {
     if (!state.lease.leaseToken) {
@@ -438,5 +657,6 @@ export function useGP4Bridge(
     startServo,
     holdServo,
     refreshReplay,
+    reconnect,
   };
 }

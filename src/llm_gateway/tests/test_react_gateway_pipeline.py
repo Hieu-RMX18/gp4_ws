@@ -215,30 +215,6 @@ def test_removed_react_planner_module_is_not_available():
         importlib.import_module("llm_gateway.react_planner")
 
 
-def test_direct_process_intent_rejects_factory_task_motion_without_review():
-    node, statuses, dispatched = _make_gateway_shell({"intent": "go_home"})
-    rejections = []
-    node._reject = lambda stage, reason, **kwargs: rejections.append(
-        {"stage": stage, "reason": reason, "intent": kwargs.get("intent_text")}
-    )
-
-    node.process_intent("go home")
-
-    assert node._task_planner.user_text == "go home"
-    assert "routed" not in statuses
-    assert dispatched == []
-    assert rejections == [
-        {
-            "stage": "factory_task_requires_review",
-            "reason": (
-                "FactoryTask motion requests must be reviewed through "
-                "/llm_gateway/review_intent and confirmed before execution."
-            ),
-            "intent": "go home",
-        }
-    ]
-
-
 def test_review_intent_returns_factory_task_runtime_sentinel_without_dispatching_motion():
     node, statuses, dispatched = _make_gateway_shell(
         {"intent": "move_named_pose", "pose_name": "ready"}

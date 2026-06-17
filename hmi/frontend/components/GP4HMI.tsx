@@ -9,6 +9,7 @@ import {
   formatTimestamp,
   humanizeLabel,
   JOINT_ORDER,
+  parseBackendTimestamp,
   resolveDeclineReason,
   shouldShowMessageInSystemLog,
   summarizeMutationResponse,
@@ -62,7 +63,28 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
     abortActiveCommand,
     startServo,
     holdServo,
+    taskEvents,
+    reconnect,
   } = bridge;
+
+  const [clearChatTimestamp, setClearChatTimestamp] = useState<string | null>(() =>
+    localStorage.getItem('clearChatTimestamp'),
+  );
+
+  const visibleMessages = useMemo(() => {
+    if (!clearChatTimestamp) return state.messages;
+    const clearTime = new Date(clearChatTimestamp).getTime();
+    return state.messages.filter((m) => {
+      const parsed = parseBackendTimestamp(m.timestamp);
+      return parsed ? parsed.getTime() > clearTime : true;
+    });
+  }, [state.messages, clearChatTimestamp]);
+
+  const handleClearChat = () => {
+    const nowStr = new Date().toISOString();
+    localStorage.setItem('clearChatTimestamp', nowStr);
+    setClearChatTimestamp(nowStr);
+  };
 
   const readOnlyBridge = state.capabilities.readOnly;
   const canSubmitCommands =
@@ -152,7 +174,13 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
 
   const logEntries = useMemo<LogEntryView[]>(() => {
     const reviewEntries = buildReviewLogEntries(activeReviewJob, blockingReasons, declineReason, state.generatedAt);
-    const entries: LogEntryView[] = state.messages
+    const messagesToLog = clearChatTimestamp
+      ? state.messages.filter((m) => {
+          const parsed = parseBackendTimestamp(m.timestamp);
+          return parsed ? parsed.getTime() > new Date(clearChatTimestamp).getTime() : true;
+        })
+      : state.messages;
+    const entries: LogEntryView[] = messagesToLog
       .filter(shouldShowMessageInSystemLog)
       .slice(-25)
       .map((m) => ({ id: m.id, time: formatTimestamp(m.timestamp), level: toLogLevel(m), message: m.text, source: m.source ?? null }));
@@ -162,7 +190,7 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
     }
     if (entries.length > 0) return entries.slice(0, 30);
     return [{ id: 'runtime-bootstrap', time: formatTimestamp(state.generatedAt), level: state.runtime.blocking ? 'warn' as const : 'info' as const, message: state.runtime.statusText, source: null }];
-  }, [actionFeedback, activeReviewJob, blockingReasons, declineReason, state.generatedAt, state.messages, state.runtime.blocking, state.runtime.statusText]);
+  }, [actionFeedback, activeReviewJob, blockingReasons, declineReason, state.generatedAt, state.messages, state.runtime.blocking, state.runtime.statusText, clearChatTimestamp]);
 
   // ── Action handlers ─────────────────────────────────────────────────────
 
@@ -374,7 +402,7 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
           <div className="chat-messages">
             <RuntimeStateBanner runtime={state.runtime} />
             <ChatPanel
-              messages={state.messages}
+              messages={visibleMessages}
               activeCommand={activeCommand}
               activeSequence={activeSequence}
               canConfirm={canConfirmCommands}
@@ -395,6 +423,8 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
             actionFeedback={actionFeedback}
             onSubmit={() => void handleSubmit()}
             onClearError={() => setSubmitError(null)}
+            onClearChat={handleClearChat}
+            isChatEmpty={visibleMessages.length === 0}
           />
         </main>
 
@@ -414,7 +444,11 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
             onAcquire={() => void handleAcquireLease()}
             onRelease={() => void handleReleaseLease()}
           />
-          <SystemLog logEntries={logEntries} />
+          <SystemLog
+            logEntries={logEntries}
+            taskEvents={taskEvents}
+            onReconnect={reconnect}
+          />
         </aside>
       </div>
     </div>

@@ -366,7 +366,9 @@ class LLMGatewayNode(Node):
             pkg_share = get_package_share_directory("llm_gateway")
             path = os.path.join(pkg_share, "config", "station_semantic_map.yaml")
             return StationSceneGraph.from_file(path)
-        except Exception:
+        except Exception as e:
+            import logging
+            logging.getLogger("llm_gateway").exception("ERROR in _load_station_scene_graph_safe")
             return None
 
     def _declare_parameters(self) -> None:
@@ -545,14 +547,17 @@ class LLMGatewayNode(Node):
                 source="direct",
                 summary=str(direct_review.get("intent") or "")[:80],
             )
+            self._emit_task_event("GATEWAY", "direct_pre_parsed", f"Intent matched direct rule: {direct_review.get('intent')}", source="direct", data=dict(direct_review))
             validated = dict(direct_review)
             validated["_parse_source"] = "direct"
             return validated
 
         if self._planner_enabled and self._task_planner is not None:
             self._emit_trace("llm_request_started", "reasoning", source="task_planner")
+            self._emit_task_event("GATEWAY", "llm_request_started", f"Routing '{intent_text[:60]}...' to LLM Task Planner", source="task_planner")
             planner_result = self._task_planner.plan(intent_text)
             self._emit_trace("llm_response_received", "reasoning", source="task_planner")
+            self._emit_task_event("GATEWAY", "llm_response_received", "LLM Task Planner returned a response", source="task_planner", data=planner_result)
             if is_factory_task(planner_result):
                 return self._compile_factory_task_review_result(
                     planner_result, parse_source="llm_factory_task"
@@ -568,8 +573,10 @@ class LLMGatewayNode(Node):
             }
 
         self._emit_trace("llm_request_started", "reasoning", source="llm")
+        self._emit_task_event("GATEWAY", "llm_request_started", f"Routing '{intent_text[:60]}...' to raw LLM Client", source="llm")
         llm_response = self._llm_client.generate_response(intent_text)
         self._emit_trace("llm_response_received", "reasoning", source="llm")
+        self._emit_task_event("GATEWAY", "llm_response_received", "Raw LLM Client returned a response", source="llm", data={"response": llm_response})
         parsed = self._parser.parse(llm_response)
         if is_factory_task(parsed):
             return self._compile_factory_task_review_result(
@@ -577,6 +584,7 @@ class LLMGatewayNode(Node):
             )
         parsed["_parse_source"] = "llm"
         self._emit_trace("parsed", "parsing", source="llm")
+        self._emit_task_event("GATEWAY", "intent_parsed", "Successfully parsed raw LLM response payload", source="llm", data=parsed)
         return parsed
 
     def _compile_factory_task_review_result(
@@ -939,10 +947,17 @@ class LLMGatewayNode(Node):
         self._active_command_id = str(getattr(request, "command_id", "") or "").strip()
         intent_text = str(getattr(request, "raw_text", "") or "").strip()
         self._emit_trace("prompt_received", "ingress", summary=intent_text[:80])
+        self._emit_task_event(
+            "GATEWAY", "ingress_prompt",
+            f"Received user prompt: '{intent_text}'",
+            source="gateway",
+            data={"command_id": self._active_command_id}
+        )
         if not intent_text:
             response.accepted = False
             response.error = "raw_text is required for intent review."
             response.semantic_ir_json = ""
+            self._emit_task_event("SAFETY", "validate_rejected", "Validation rejected: empty raw_text", level="ERR", source="gateway")
             return response
 
         authorization_error = self._authorize_review_intent(request)
@@ -950,6 +965,7 @@ class LLMGatewayNode(Node):
             response.accepted = False
             response.error = authorization_error
             response.semantic_ir_json = ""
+            self._emit_task_event("SAFETY", "validate_rejected", f"Validation rejected (auth): {authorization_error}", level="ERR", source="gateway")
             return response
 
         effective_runtime_mode = self._runtime_mode
@@ -959,6 +975,7 @@ class LLMGatewayNode(Node):
                 "gateway runtime_mode must be 'sim' or 'hardware' for intent review."
             )
             response.semantic_ir_json = ""
+            self._emit_task_event("SAFETY", "validate_rejected", f"Validation rejected (runtime_mode): {response.error}", level="ERR", source="gateway")
             return response
 
         requested_runtime_mode = str(getattr(request, "runtime_mode", "") or "").strip()
@@ -970,6 +987,7 @@ class LLMGatewayNode(Node):
                 f"gateway={effective_runtime_mode}."
             )
             response.semantic_ir_json = ""
+            self._emit_task_event("SAFETY", "validate_rejected", f"Validation rejected (runtime mismatch): {response.error}", level="ERR", source="gateway")
             return response
 
         try:
@@ -978,12 +996,14 @@ class LLMGatewayNode(Node):
             response.accepted = False
             response.error = str(exc)
             response.semantic_ir_json = ""
+            self._emit_task_event("SAFETY", "validate_rejected", f"Validation rejected (exception): {response.error}", level="ERR", source="gateway")
             return response
 
         if not isinstance(semantic_ir, dict):
             response.accepted = False
             response.error = "review result must be a JSON object."
             response.semantic_ir_json = ""
+            self._emit_task_event("SAFETY", "validate_rejected", f"Validation rejected (invalid format): {response.error}", level="ERR", source="gateway")
             return response
 
         semantic_ir = self._prepare_review_semantic_ir(semantic_ir)
@@ -1001,6 +1021,7 @@ class LLMGatewayNode(Node):
                 separators=(",", ":"),
                 ensure_ascii=True,
             )
+            self._emit_task_event("SAFETY", "validate_rejected", f"Validation rejected (contract): {contract.reason}", level="ERR", source="gateway")
             return response
 
         response.semantic_ir_json = json.dumps(
@@ -1011,10 +1032,12 @@ class LLMGatewayNode(Node):
         if "error" in semantic_ir:
             response.accepted = False
             response.error = self._review_error_message(semantic_ir)
+            self._emit_task_event("SAFETY", "validate_rejected", f"Validation rejected (error IR): {response.error}", level="ERR", source="gateway")
             return response
         if "intent" not in semantic_ir:
             response.accepted = False
             response.error = "review result must be Semantic IR with an intent field."
+            self._emit_task_event("SAFETY", "validate_rejected", f"Validation rejected: {response.error}", level="ERR", source="gateway")
             return response
         draw_err = self._validate_draw_params(semantic_ir)
         if draw_err:
@@ -1025,6 +1048,7 @@ class LLMGatewayNode(Node):
                 separators=(",", ":"),
                 ensure_ascii=True,
             )
+            self._emit_task_event("SAFETY", "validate_rejected", f"Validation rejected (draw params): {draw_err}", level="ERR", source="gateway")
             return response
         if (
             not is_factory_task_runtime_sentinel(semantic_ir)
@@ -1045,6 +1069,7 @@ class LLMGatewayNode(Node):
             except Exception as exc:
                 response.accepted = False
                 response.error = self._review_exception_message(exc)
+                self._emit_task_event("SAFETY", "validate_rejected", f"Validation rejected (routing exception): {response.error}", level="ERR", source="gateway")
                 return response
             if routed.route_type == "error":
                 error_payload = routed.error_payload or {}
@@ -1059,10 +1084,12 @@ class LLMGatewayNode(Node):
                         "intent": error_payload.get("intent"),
                     }
                 )
+                self._emit_task_event("SAFETY", "validate_rejected", f"Validation rejected (routing error): {response.error}", level="ERR", source="gateway")
                 return response
 
         response.accepted = True
         response.error = ""
+        self._emit_task_event("SAFETY", "validate_ok", "Semantic validation passed successfully", source="gateway", data=semantic_ir)
         return response
 
     def _state_joint_state_callback(self, msg: JointState) -> None:
@@ -2000,12 +2027,29 @@ class LLMGatewayNode(Node):
         msg.data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
         pub.publish(msg)
 
+    def _make_json_serializable(self, obj):
+        if isinstance(obj, dict):
+            return {k: self._make_json_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple, set)):
+            return [self._make_json_serializable(v) for v in obj]
+        elif hasattr(obj, "get_fields_and_field_types"):
+            try:
+                from rosidl_runtime_py import message_to_dict
+                return self._make_json_serializable(message_to_dict(obj))
+            except Exception:
+                pass
+        if hasattr(obj, "__slots__"):
+            return {slot: self._make_json_serializable(getattr(obj, slot)) for slot in obj.__slots__}
+        if isinstance(obj, (int, float, str, bool)) or obj is None:
+            return obj
+        return str(obj)
+
     def _emit_task_event(self, category, event, detail, *, level="INFO", source="gateway", data=None):
         import datetime
         self._runtime_event_sink({
             "ts": datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3],
             "level": level, "source": source, "category": category,
-            "event": event, "detail": detail, "data": data or {},
+            "event": event, "detail": detail, "data": self._make_json_serializable(data) if data is not None else {},
         })
 
     def _semantic_ir_for_runtime_skill(
@@ -2155,17 +2199,28 @@ class LLMGatewayNode(Node):
     def _validate_runtime_command(
         self, command: Dict[str, Any]
     ) -> RuntimeStepResult:
+        prim = command.get("primitive_type", "unknown")
+        self._emit_task_event("SAFETY", "command_validate", f"Checking safety of command: {prim}", source="gateway", data=command)
         ok, reason, normalized_command, _payload = self._runtime_command_is_safe(command)
         if not ok:
+            self._emit_task_event("SAFETY", "validate_rejected", f"Command safety check failed: {reason}", level="ERR", source="gateway")
             return RuntimeStepResult(success=False, reason=reason)
         # Query commands (GET_POSE) validated above carry no motion goal.
         if normalized_command is not None and self._is_query_command(
             str(normalized_command.get("primitive_type") or "")
         ):
+            self._emit_task_event("SAFETY", "validate_ok", f"Query command safety check passed: {prim}", source="gateway")
             return RuntimeStepResult(success=True)
         if normalized_command is None:
+            self._emit_task_event("SAFETY", "validate_ok", f"Command safety check passed: {prim}", source="gateway")
             return RuntimeStepResult(success=True)
+        self._emit_task_event("SAFETY", "validate_ok", f"Command safety check passed: {prim}", source="gateway")
+        self._emit_task_event("MOTION", "dispatch_start", f"Dispatching motion to ROS hw_adapter: {prim}", source="gateway", data=normalized_command)
         outcome = self._dispatch_runtime_goal(normalized_command)
+        if outcome.ok:
+            self._emit_task_event("MOTION", "dispatch_success", f"Motion completed successfully: {prim}", source="gateway")
+        else:
+            self._emit_task_event("MOTION", "dispatch_failed", f"Motion failed: {outcome.reason}", level="ERR", source="gateway")
         return RuntimeStepResult(success=outcome.ok, reason=outcome.reason)
 
     def _on_confirm_execution(

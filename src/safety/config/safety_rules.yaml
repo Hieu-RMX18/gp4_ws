@@ -148,12 +148,12 @@ composite_limits:
   approach_axis_whitelist: ["+z_base", "-z_base", "+x_base", "-x_base", "+y_base", "-y_base"]
 
 gripper:
-  write_single_io_service: "/io_set"
-  read_single_io_service: "/read_single_io"
-  open_output_address: VERIFY_CONFIG
-  open_output_value: VERIFY_CONFIG
-  close_output_address: VERIFY_CONFIG
-  close_output_value: VERIFY_CONFIG
-  closed_input_address: VERIFY_CONFIG
-  closed_input_active_value: VERIFY_CONFIG
+  write_single_io_service: "/yaskawa/write_single_io"
+  read_single_io_service: "/yaskawa/read_single_io"
+  open_output_address: 10017
+  open_output_value: 0
+  close_output_address: 10017
+  close_output_value: 1
+  closed_input_address: 30017
+  closed_input_active_value: 1
   feedback_timeout_sec: 1.0

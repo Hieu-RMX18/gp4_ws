@@ -299,6 +299,12 @@ export function createBridgeClient(basePath = '/api/hmi'): GP4BridgeClient {
                 runtimeState: payload.snapshot.runtime.systemState,
                 mode: payload.snapshot.mode,
               });
+            } else if (payload.type === 'task_event') {
+              // Minimal client trace for task_event (full rendering happens in UI)
+              traceClient('info', 'WebSocket event task_event', {
+                category: payload.taskEvent.category,
+                event: payload.taskEvent.event,
+              });
             }
             onEvent(payload);
           } catch (error) {

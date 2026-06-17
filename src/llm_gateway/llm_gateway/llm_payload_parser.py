@@ -3,15 +3,21 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict
 
 
 def _strip_code_fences(text: str) -> str:
     stripped_text = text.strip()
-    if stripped_text.startswith("```"):
-        lines = stripped_text.splitlines()
-        if len(lines) >= 2 and lines[-1].strip() == "```":
-            stripped_text = "\n".join(lines[1:-1]).strip()
+    match = re.search(r"```(?:json)?\s*\n(.*?)\n```", stripped_text, re.DOTALL)
+    if match:
+        return match.group(1).strip()
+    
+    start_idx = stripped_text.find("{")
+    end_idx = stripped_text.rfind("}")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        return stripped_text[start_idx:end_idx+1]
+        
     return stripped_text
 
 

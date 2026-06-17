@@ -219,6 +219,20 @@ def _default_named_pose_srdf_path() -> str:
     )
 
 
+def _default_station_semantic_map_path() -> str:
+    """Resolve station_semantic_map.yaml from installed package or local source tree."""
+    if get_package_share_directory is not None:
+        try:
+            pkg_share = get_package_share_directory("llm_gateway")
+            candidate = os.path.join(pkg_share, "config", "station_semantic_map.yaml")
+            if os.path.exists(candidate):
+                return candidate
+        except Exception:
+            pass
+    return str(Path(__file__).resolve().parents[1] / "config" / "station_semantic_map.yaml")
+
+
+
 def load_srdf_named_poses(srdf_path: str | None = None) -> Dict[str, List[float]]:
     """Load gp4_arm group_state joint targets from the MoveIt SRDF."""
     resolved_path = srdf_path or _default_named_pose_srdf_path()
@@ -321,6 +335,14 @@ class IntentRouter(DrawRouterMixin):
         self._macro_policy = load_macro_policy(macro_policy_path)
         self._runtime_mode = str(runtime_mode).strip().lower() or "hardware"
         self._named_pose_targets = load_srdf_named_poses(named_pose_srdf_path)
+        if station_semantic_map is None:
+            try:
+                path = _default_station_semantic_map_path()
+                if os.path.exists(path):
+                    with open(path, "r", encoding="utf-8") as f:
+                        station_semantic_map = yaml.safe_load(f) or {}
+            except Exception:
+                pass
         self._station_semantic_map = station_semantic_map
 
     def route(self, payload: Dict[str, Any]) -> RouteResult:
@@ -483,7 +505,6 @@ class IntentRouter(DrawRouterMixin):
                         "z": safe_z
                     }
                 }
-                command["keep_current_orientation"] = True
                 command["planner_id"] = str(command.get("planner_id") or "PILZ_PTP")
                 return command
 

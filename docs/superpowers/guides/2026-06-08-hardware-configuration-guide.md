@@ -67,18 +67,16 @@ Hệ thống MotoROS2 giao tiếp với tay gắp qua các chân tín hiệu (I/
 
 ## 3. Khai báo Offset Công Cụ (TCP Offset)
 
-**Kiểm tra file:** `src/gp4_moveit_config/config/motoman_gp4.urdf.xacro` (hoặc tương đương)
+**ĐÃ HOÀN THÀNH:** `src/gp4_moveit_config/config/motoman_gp4.urdf.xacro` và `motoman_gp4.srdf`
 
-Khoảng cách từ mặt bích của robot (joint_6) đến mũi kẹp (TCP tool) được đo là **12cm**. Hiện tại, logic sinh tọa độ đang áp dụng một khoảng bù tạm thời `tcp_offset_m` dọc theo trục `z_base` trên code.
+Khoảng cách từ mặt bích của robot (`joint_6`/`tool0`) đến mũi kẹp (TCP tool) đã được chuẩn hóa là **11cm (0.11m)**. 
 
-### Quy trình chuẩn mực:
-Thay vì tính toán bù trừ trên code, bạn phải cấu hình hẳn một Frame cho đầu gắp trong hệ thống ROS:
-1. Sử dụng số đo **12cm (0.12m)** tính từ tâm mặt bích (`joint_6`).
-2. Thêm thẻ joint và link vào tệp URDF để định nghĩa `tcp_link` nối cứng vào `joint_6` với offset tương ứng trên trục (thường là dọc theo trục Z hoặc X của joint_6, tùy gốc tọa độ bạn định nghĩa).
-3. Sửa cấu hình Planning Group (MoveIt) để công cụ lập kế hoạch dùng `tcp_link` thay vì `tool0`/`joint_6` làm end-effector chuẩn.
+Hệ thống đã loại bỏ việc tính toán bù trừ trên code (`tcp_offset_m`) và cấu hình thẳng một Frame cho đầu gắp trong hệ thống ROS:
+1. Đã thêm `tcp_link` nối cứng vào `tool0` với khoảng dịch `z = 0.11m`.
+2. Planning Group (MoveIt) đã cấu hình dùng `tcp_link` thay vì `tool0` làm end-effector chuẩn.
 
 > [!TIP]
-> Việc cấu hình `tcp_link` dài 12cm trong URDF sẽ giúp Rviz hiển thị chính xác vùng không gian bị chiếm dụng của tay gắp, giúp thuật toán nội bộ của MoveIt tự động tránh va chạm (collision) giữa tay gắp và các vật cản một cách mượt mà nhất.
+> Việc cấu hình `tcp_link` dài 11cm trong URDF giúp Rviz hiển thị chính xác và thuật toán nội bộ của MoveIt tự động tránh va chạm (collision) giữa tay gắp và các vật cản một cách mượt mà nhất.
 
 ---
 

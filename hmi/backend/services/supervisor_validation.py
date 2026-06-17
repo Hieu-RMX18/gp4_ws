@@ -172,8 +172,15 @@ class SupervisorValidationMixin:
                 return parsed, None
 
             from llm_gateway.factory_task import IntentRouter, Normalizer
+            from .intent_constants import ROUTED_DRAW_METADATA_FIELDS
+
             if "primitive_type" in structured_intent:
                 normalized_command = self._to_jsonable(Normalizer().normalize(structured_intent))
+                if isinstance(normalized_command, dict):
+                    normalized_command = {
+                        k: v for k, v in normalized_command.items()
+                        if k not in ROUTED_DRAW_METADATA_FIELDS
+                    }
                 primitive_type = str(normalized_command["primitive_type"])
                 parameters = {
                     key: value
@@ -200,6 +207,15 @@ class SupervisorValidationMixin:
                     missing_slots=["action|intent|primitive_type"],
                 )
 
+            if hasattr(self, "_prepare_semantic_ir_for_routing"):
+                try:
+                    current_joints = self._current_joints()
+                    structured_intent = self._prepare_semantic_ir_for_routing(
+                        structured_intent, current_joints
+                    )
+                except Exception as exc:
+                    raise IntentResolutionError(str(exc))
+
             routed = IntentRouter(runtime_mode=runtime_mode_str).route(structured_intent)
             if routed.route_type == "error":
                 message = (routed.error_payload or {}).get("message") or (
@@ -215,6 +231,11 @@ class SupervisorValidationMixin:
 
             raw_cmd = routed.commands[0]
             normalized_command = self._to_jsonable(Normalizer().normalize(raw_cmd))
+            if isinstance(normalized_command, dict):
+                normalized_command = {
+                    k: v for k, v in normalized_command.items()
+                    if k not in ROUTED_DRAW_METADATA_FIELDS
+                }
             primitive_type = str(normalized_command["primitive_type"])
             parameters = {
                 key: value

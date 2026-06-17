@@ -11,5 +11,6 @@ def test_task_event_message_is_forwarded_to_stream():
     adapter._on_task_events(msg)
 
     assert len(captured) == 1
-    assert captured[0]["channel"] == "task_event"
-    assert captured[0]["event"]["category"] == "TASK"
+    assert captured[0]["type"] == "task_event"
+    assert captured[0]["taskEvent"]["category"] == "TASK"
+

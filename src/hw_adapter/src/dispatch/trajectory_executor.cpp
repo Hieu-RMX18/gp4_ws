@@ -195,6 +195,15 @@ TrajectoryExecutionResult TrajectoryExecutor::execute_blocking(
 
   FollowJointTrajectory::Goal goal;
   goal.trajectory = request.trajectory;
+  if (!goal.trajectory.points.empty()) {
+    auto &last_point = goal.trajectory.points.back();
+    if (!last_point.velocities.empty()) {
+      std::fill(last_point.velocities.begin(), last_point.velocities.end(), 0.0);
+    }
+    if (!last_point.accelerations.empty()) {
+      std::fill(last_point.accelerations.begin(), last_point.accelerations.end(), 0.0);
+    }
+  }
 
   std::string guard_reason;
   const auto guard_mode = request.extended_mode

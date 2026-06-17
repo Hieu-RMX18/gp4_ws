@@ -749,3 +749,11 @@ def test_circular_move_missing_target_pose_rejects():
                 "auxiliary_pose": {"position": {"x": 0.32, "y": 0.05, "z": 0.42}},
             }
         )
+
+
+def test_intent_router_loads_default_semantic_map():
+    from llm_gateway.factory_task import IntentRouter
+    router = IntentRouter()
+    assert router._station_semantic_map is not None
+    assert "conveyor" in router._station_semantic_map.get("regions", {})
+

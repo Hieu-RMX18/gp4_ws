@@ -1,8 +1,4 @@
-"""Unit tests for the narrowed direct review path.
-
-Free-form motion language belongs to the ReAct/LLM path. The only raw-text
-direct review shortcut left in llm_gateway is the protective stop command.
-"""
+"""Hợp đồng tầng direct (đã chuyển sang llm_gateway.direct_commands) + draw params."""
 
 from __future__ import annotations
 
@@ -11,35 +7,39 @@ import pytest
 
 @pytest.fixture
 def direct_review():
-    from llm_gateway.llm_gateway_node import LLMGatewayNode
+    from llm_gateway import direct_commands
 
-    return LLMGatewayNode._direct_review_semantic_ir
+    return direct_commands.parse
 
 
-class TestDirectReviewProtectiveOnly:
+class TestDirectReviewDeterministicSafety:
     @pytest.mark.parametrize(
-        "raw_text",
-        ["stop", "stop motion", "cancel motion", "halt"],
+        ("raw_text", "expected"),
+        [
+            ("stop", {"intent": "stop"}),
+            ("alarm_reset", {"intent": "alarm_reset"}),
+            ("get_pose", {"intent": "get_pose", "reference_frame": "base_link"}),
+        ],
     )
-    def test_protective_stop_stays_direct(self, direct_review, raw_text):
-        assert direct_review(raw_text) == {"intent": "stop"}
+    def test_exact_safety_and_read_only_shortcuts_stay_direct(
+        self, direct_review, raw_text, expected
+    ):
+        assert direct_review(raw_text) == expected
 
     @pytest.mark.parametrize(
         "raw_text",
         [
+            "move to pose A",
+            "move to Cartesian x 300 mm y 0 z 400",
             "move down 2 cm",
-            "move delta down 2 cm",
-            "rotate joint s +15 degrees",
+            "repeat 2 times move to pose A then home",
+            "đi đến gá phôi",
+            "xoay khớp số 3 +15 độ",
             "draw circle radius 5cm",
             "vẽ hình tròn bán kính 5cm",
-            "go home",
-            "get pose",
-            "wait 2 s",
         ],
     )
-    def test_motion_and_utility_language_goes_to_react_or_llm(
-        self, direct_review, raw_text
-    ):
+    def test_free_form_language_goes_to_planner_or_llm(self, direct_review, raw_text):
         assert direct_review(raw_text) is None
 
 

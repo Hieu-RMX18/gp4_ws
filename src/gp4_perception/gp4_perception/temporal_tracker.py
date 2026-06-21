@@ -29,6 +29,9 @@ class _Track:
     class_id: str
     centroid: np.ndarray
     hits: deque = field(default_factory=deque)
+    last_detection: Any | None = None
+    missed_frames: int = 0
+    confirmed: bool = False
 
     def score(self, window: int) -> float:
         return sum(self.hits) / window
@@ -40,6 +43,9 @@ class TemporalTracker:
     A detection is returned only once its track has accumulated ``min_hits``
     hits within the last ``window_frames`` frames, and only while consecutive
     matches stay within ``jitter_max_mm`` of the track centroid.
+
+    Confirmed tracks survive up to ``miss_tolerance_frames`` consecutive missed
+    frames before being evicted (hysteresis).
     """
 
     def __init__(
@@ -47,18 +53,18 @@ class TemporalTracker:
         window_frames: int = 5,
         min_hits: int = 3,
         jitter_max_mm: float = 15.0,
+        miss_tolerance_frames: int = 2,
     ) -> None:
         self._window = int(window_frames)
         self._min_hits = int(min_hits)
         self._jitter_max_m = float(jitter_max_mm) / 1000.0
+        self._miss_tolerance = int(miss_tolerance_frames)
         self._tracks: list[_Track] = []
 
     def update(self, detections: list[Any]) -> list[tuple[Any, float]]:
-        """Advance one frame; return ``(detection, temporal_score)`` for tracks
-        that meet the stability threshold this frame."""
+        """Advance one frame; return ``(detection, temporal_score)`` for
+        confirmed tracks, including those coasting through missed frames."""
         matched_tracks: set[int] = set()
-        results: list[tuple[Any, float]] = []
-        used_detections: list[tuple[Any, _Track]] = []
 
         for det in detections:
             cls = _class_id(det)
@@ -68,24 +74,41 @@ class TemporalTracker:
                 track = _Track(class_id=cls, centroid=cen)
                 self._tracks.append(track)
             track.centroid = cen
+            track.last_detection = det
+            track.missed_frames = 0
             track.hits.append(1)
             matched_tracks.add(id(track))
-            used_detections.append((det, track))
 
         # Tracks not matched this frame record a miss.
         for track in self._tracks:
             if id(track) not in matched_tracks:
                 track.hits.append(0)
+                track.missed_frames += 1
 
-        # Trim each track's window and evict dead tracks.
+        # Trim each track's window.
         for track in self._tracks:
             while len(track.hits) > self._window:
                 track.hits.popleft()
-        self._tracks = [t for t in self._tracks if sum(t.hits) > 0]
 
-        for det, track in used_detections:
+        # Update confirmed status.
+        for track in self._tracks:
             if sum(track.hits) >= self._min_hits:
-                results.append((det, track.score(self._window)))
+                track.confirmed = True
+
+        # Evict dead tracks:
+        # - Unconfirmed: keep while sum(hits) > 0 (still accumulating)
+        # - Confirmed: keep while missed_frames <= miss_tolerance
+        self._tracks = [
+            t for t in self._tracks
+            if (t.confirmed and t.missed_frames <= self._miss_tolerance)
+            or (not t.confirmed and sum(t.hits) > 0)
+        ]
+
+        # Emit all confirmed tracks that have a detection to report.
+        results: list[tuple[Any, float]] = []
+        for track in self._tracks:
+            if track.confirmed and track.last_detection is not None:
+                results.append((track.last_detection, track.score(self._window)))
         return results
 
     def _match(

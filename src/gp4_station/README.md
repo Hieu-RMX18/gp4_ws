@@ -15,12 +15,12 @@ cp /path/to/station3.stl \
 ### 2. Make sure `motoman_gp4_support` is in the workspace
 
 ```bash
-# The package lives under the motoman_ros2_support_packages vendor tree
-ls ~/gp4_ws/src/motoman_ros2_support_packages/motoman_gp4_support/urdf/gp4_macro.xacro
+# The package lives under the checked-in references vendor tree
+ls ~/gp4_ws/references/motoman_ros2_support_packages/motoman_gp4_support/urdf/gp4_macro.xacro
 ```
 
 If it is not present, clone or symlink the MotoPlus support package under
-`~/gp4_ws/src/motoman_ros2_support_packages/` before building.
+`~/gp4_ws/references/motoman_ros2_support_packages/` before building.
 
 ## Build
 

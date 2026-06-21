@@ -47,34 +47,34 @@ def macro_policy_path() -> str:
 
 @pytest.fixture
 def parser():
-    from llm_gateway.intent_engine import LLMParser
+    from llm_gateway.factory_task import LLMParser
 
     return LLMParser()
 
 
 @pytest.fixture
 def validator(schema_path: str):
-    from llm_gateway.intent_engine import SchemaValidator
+    from llm_gateway.factory_task import SchemaValidator
 
     return SchemaValidator(schema_path)
 
 
 @pytest.fixture
 def normalizer():
-    from llm_gateway.intent_engine import Normalizer
+    from llm_gateway.factory_task import Normalizer
 
     return Normalizer(default_velocity_scale=0.06, default_acceleration_scale=0.06)
 
 
 @pytest.fixture
 def semantic_validator():
-    from llm_gateway.intent_engine import SemanticValidator
+    from llm_gateway.factory_task import SemanticValidator
 
     return SemanticValidator()
 
 
 @pytest.fixture(autouse=True)
-def disable_react_for_legacy_gateway_tests(request, monkeypatch):
+def disable_planner_for_legacy_gateway_tests(request, monkeypatch):
     """Keep legacy gateway integration tests on the mocked single-shot LLM path."""
     if request.module.__name__.split(".")[-1] not in {
         "test_get_pose",
@@ -85,7 +85,7 @@ def disable_react_for_legacy_gateway_tests(request, monkeypatch):
         from llm_gateway.llm_gateway_node import LLMGatewayNode
     except ImportError:
         return
-    monkeypatch.setattr(LLMGatewayNode, "_load_react_enabled", lambda self: False)
+    monkeypatch.setattr(LLMGatewayNode, "_load_planner_enabled", lambda self: False)
 
 
 @pytest.fixture

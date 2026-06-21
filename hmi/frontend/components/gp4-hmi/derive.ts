@@ -89,12 +89,13 @@ export function formatMetric(value: number | null, digits = 2, suffix = ''): str
 // ── Timestamp helpers ───────────────────────────────────────────────────────
 
 export function parseBackendTimestamp(value: string): Date | null {
-  const timeOnlyMatch = /^(\d{2}):(\d{2}):(\d{2})$/.exec(value);
+  const timeOnlyMatch = /^(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?$/.exec(value);
   if (timeOnlyMatch) {
     const now = new Date();
+    const ms = timeOnlyMatch[4] ? Number(timeOnlyMatch[4].padEnd(3, '0').slice(0, 3)) : 0;
     const parsed = new Date(
       Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(),
-        Number(timeOnlyMatch[1]), Number(timeOnlyMatch[2]), Number(timeOnlyMatch[3])),
+        Number(timeOnlyMatch[1]), Number(timeOnlyMatch[2]), Number(timeOnlyMatch[3]), ms),
     );
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
@@ -119,7 +120,9 @@ export function formatTimestamp(value: string): string {
   const parsed = parseBackendTimestamp(value);
   if (!parsed) return value;
   const parts = getDateTimeParts(parsed);
-  return `${parts.hour}:${parts.minute}:${parts.second}`;
+  const msMatch = /\.(\d+)/.exec(value);
+  const msStr = msMatch ? `.${msMatch[1].slice(0, 3)}` : '';
+  return `${parts.hour}:${parts.minute}:${parts.second}${msStr}`;
 }
 
 export function formatClock(value: Date): string {

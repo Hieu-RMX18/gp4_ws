@@ -21,9 +21,16 @@ This tier covers:
 | `test_intent_router.py`           | Semantic IR → primitive routing               |
 | `test_drawing.py`                 | Drawing geometry, draw_shape, draw_text, stroke font |
 | `test_sequence_validator.py`      | Sequence prevalidation logic                  |
-| `test_prompt_builder_v2_1.py`     | System prompt contract tests                  |
+| `test_factory_task_prompt.py`     | FactoryTask system prompt contract tests      |
 | `test_react_agent.py`             | ReAct agent loop, state injector, iteration budget |
+| `test_station_scene_graph.py`     | Station map loader, alias resolver, VERIFY_CONFIG guards |
+| `test_composite_tools.py`         | Composite ReAct tools, candidate poses, postconditions, MTC selector, verify_grasp |
+| `test_scene_cache.py`             | Scene snapshot cache: TTL, invalidation, world-change |
+| `test_gripper_adapter.py`         | Gripper adapter fail-closed behavior |
+| `test_factory_task_contract.py`   | FactoryTask schema, compiler, runtime-control sentinel, policy decisions |
+| `test_pick_white_workpiece_sim.py`| Sim integration: pick/place goal compiler and mocked scene |
 | `test_react_tools.py`             | Source-level ReAct tool safety contracts      |
+| `test_react_gateway_pipeline.py`  | ReAct-to-gateway contract and FactoryTask repair paths |
 | `test_llm_backend.py`             | LLM backend config and retry behavior         |
 | `test_get_pose.py` (Tier 1 tests) | GET_POSE schema, normalizer, semantic, parser |
 

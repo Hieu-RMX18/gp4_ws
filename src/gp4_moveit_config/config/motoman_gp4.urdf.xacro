@@ -13,6 +13,14 @@
     <!-- Import motoman_gp4 urdf file -->
     <xacro:include filename="$(find motoman_gp4_support)/urdf/gp4.urdf" />
 
+    <!-- TCP Link configuration: 11cm (0.11m) from tool0 -->
+    <link name="tcp_link" />
+    <joint name="tool0_to_tcp" type="fixed">
+      <parent link="tool0" />
+      <child link="tcp_link" />
+      <origin xyz="0.05 0 0.115" rpy="0 0 0" />
+    </joint>
+
     <!-- Import ros2_control xacro -->
     <xacro:include filename="motoman_gp4.ros2_control.xacro" />
 

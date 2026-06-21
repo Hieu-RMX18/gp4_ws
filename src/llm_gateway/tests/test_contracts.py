@@ -22,14 +22,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from llm_gateway.intent_engine import Normalizer
-from llm_gateway.react_planner import (
+from llm_gateway.factory_task import Normalizer
+from llm_gateway.task_planner import (
     FROZEN_SEMANTIC_INTENTS,
     FROZEN_TOP_LEVEL_OUTPUT_INTENTS,
     build_system_prompt,
 )
-from llm_gateway.intent_engine import SchemaValidator
-from llm_gateway.intent_engine import SemanticValidator
+from llm_gateway.factory_task import SchemaValidator
+from llm_gateway.factory_task import SemanticValidator
 
 
 # Frozen public primitive set for the current sprint contract.
@@ -121,17 +121,13 @@ def test_normalizer_planner_defaults_cover_public_primitives():
         ), f"Normalizer missing planner default for motion primitive '{prim}'"
 
 
-def test_prompt_builder_mentions_all_semantic_intents():
-    """The system prompt must mention every frozen semantic intent.
-
-    v2.1 change: prompt outputs Semantic IR with 'intent' field, not
-    direct primitive_type. We verify intent names instead of primitive names.
-    """
+def test_prompt_builder_uses_factory_task_contract_not_semantic_ir():
+    """The LLM-facing prompt must request FactoryTask, not frozen Semantic IR."""
     prompt = build_system_prompt("{}")
-    for intent_name in FROZEN_SEMANTIC_INTENTS:
-        assert (
-            intent_name in prompt
-        ), f"Prompt builder does not mention semantic intent '{intent_name}'"
+    assert "FactoryTask" in prompt
+    assert '"task_type": "factory_task"' in prompt
+    assert "Semantic IR (normal path)" not in prompt
+    assert '"intent":"sequence"' not in prompt
 
 
 def test_intent_to_primitive_mapping_covers_all_primitives():
@@ -165,7 +161,7 @@ def test_intent_to_primitive_mapping_matches_frozen_intents():
 
 def test_intent_router_covers_all_frozen_intents():
     """IntentRouter must handle every intent in FROZEN_SEMANTIC_INTENTS."""
-    from llm_gateway.intent_engine import IntentRouter
+    from llm_gateway.factory_task import IntentRouter
     import inspect
 
     router = IntentRouter(
@@ -225,7 +221,7 @@ def test_schema_declares_explicit_unit_hints():
 
 
 def test_router_output_with_explicit_units_survives_schema_and_normalizer():
-    from llm_gateway.intent_engine import IntentRouter
+    from llm_gateway.factory_task import IntentRouter
 
     router = IntentRouter()
     routed = router.route(
@@ -391,6 +387,19 @@ class TestAcceptsValidSemanticIR:
         )
         assert result.valid is True
 
+    def test_factory_task_runtime_sentinel(self):
+        result = validate_semantic_ir_contract(
+            {
+                "intent": "factory_task_runtime",
+                "_factory_task_runtime": True,
+                "metadata": {
+                    "runtime_plan": {"type": "fallback", "children": []},
+                    "factory_task": {"task_id": "fallback-home"},
+                },
+            }
+        )
+        assert result.valid is True
+
 
 class TestRejectsPrimitiveTypeLeakage:
     def test_rejects_primitive_type_field(self):
@@ -458,6 +467,11 @@ class TestRejectsUnknownIntent:
         assert result.valid is False
         assert "only valid inside a sequence" in result.reason
 
+    def test_rejects_bare_factory_task_runtime_sentinel(self):
+        result = validate_semantic_ir_contract({"intent": "factory_task_runtime"})
+        assert result.valid is False
+        assert "Unsupported semantic intent" in result.reason
+
 
 class TestAcceptsErrorPayloads:
     def test_missing_slot_error(self):
@@ -476,11 +490,11 @@ class TestAcceptsErrorPayloads:
         )
         assert result.valid is True
 
-    def test_react_handoff_error(self):
+    def test_unsupported_error_with_message_and_hint(self):
         result = validate_semantic_ir_contract(
             {
-                "error": "REACT_HANDOFF",
-                "message": "budget exceeded",
+                "error": "UNSUPPORTED_OR_AMBIGUOUS_COMMAND",
+                "message": "planner returned neither FactoryTask nor error",
                 "hint": "try again",
             }
         )

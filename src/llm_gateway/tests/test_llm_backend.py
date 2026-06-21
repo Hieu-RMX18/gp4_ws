@@ -3,12 +3,12 @@
 
 
 # ---- test_llm_config.py ----
-"""Tests for llm_gateway.react_planner secret loading."""
+"""Tests for llm_gateway.task_planner secret loading."""
 
 
 from pathlib import Path
 
-from llm_gateway.react_planner import load_llm_backend_config
+from llm_gateway.task_planner import load_llm_backend_config
 
 
 def _write_config(
@@ -77,11 +77,11 @@ from unittest.mock import patch
 
 import pytest
 
-from llm_gateway.react_planner import (
+from llm_gateway.task_planner import (
     OpenAICompatibleLLMClient,
     _TRANSIENT_HTTP_STATUS,
 )
-from llm_gateway.react_planner import LLMBackendConfig
+from llm_gateway.task_planner import LLMBackendConfig
 
 
 def _make_config(**overrides) -> LLMBackendConfig:

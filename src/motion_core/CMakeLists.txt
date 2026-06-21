@@ -25,6 +25,7 @@ find_package(moveit_msgs REQUIRED)
 find_package(geometric_shapes REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
+find_package(moveit_task_constructor_core QUIET)
 
 add_library(${PROJECT_NAME}_components SHARED
   src/planning/angle_branch_utils.cpp
@@ -40,6 +41,7 @@ add_library(${PROJECT_NAME}_components SHARED
   src/guards/trajectory_validator.cpp
   src/planning/orientation_filter.cpp
   src/planning/planning_scene_manager.cpp
+  src/planning/mtc_pick_place_server.cpp
   src/node/execute_motion_action_support.cpp
   src/execution/non_motion_primitive_executor.cpp
   src/execution/dispatch_trajectory_executor.cpp
@@ -303,6 +305,18 @@ if(BUILD_TESTING)
       sensor_msgs
       builtin_interfaces
       moveit_core
+    )
+  endif()
+
+  ament_add_gtest(test_mtc_pick_place_server
+    test/test_mtc_pick_place_server.cpp
+  )
+  if(TARGET test_mtc_pick_place_server)
+    target_link_libraries(test_mtc_pick_place_server
+      ${PROJECT_NAME}_components
+    )
+    target_include_directories(test_mtc_pick_place_server PRIVATE
+      include
     )
   endif()
 endif()

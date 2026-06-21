@@ -12,7 +12,7 @@ Frame convention
 ────────────────
 - **Accepted frame:** ``base_link`` (robot base).
 - **Accepted units:** meters (SI). Callers holding millimeters / degrees
-  must normalize upstream (see ``llm_gateway.intent_engine.Normalizer``).
+  must normalize upstream (see ``llm_gateway.factory_task.Normalizer``).
 - **Orientation:** ignored. This guard checks translation only.
 - **End-effector flange vs TCP:** the caller decides which point is
   checked. Station bounds in ``safety_rules.yaml`` are defined for the

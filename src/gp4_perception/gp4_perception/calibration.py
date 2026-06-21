@@ -459,6 +459,9 @@ class CalibrationService(Node):
         self._samples: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
         # (R_base2gripper, t_base2gripper, R_target2cam, t_target2cam)
 
+        self._last_robot_pose: tuple[np.ndarray, np.ndarray] | None = None
+        self._last_robot_pose_time = 0.0
+
         if extrinsics_path is None:
             from ament_index_python.packages import get_package_share_directory
 
@@ -636,7 +639,30 @@ class CalibrationService(Node):
             f"n_samples={len(self._samples)}"
         )
 
+        import time as _time
+        now = _time.monotonic()
+
         with self._lock:
+            # --- STATIONARY CHECK ---
+            if self._last_robot_pose is not None:
+                last_R, last_t = self._last_robot_pose
+                trans_diff, rot_diff = _robot_pose_delta(
+                    last_R, last_t, R_base2gripper, t_base2gripper
+                )
+                # If moved > 2mm or > 0.5 degrees, reset stationary timer
+                if trans_diff > 0.002 or rot_diff > 0.0087:
+                    self._last_robot_pose = (R_base2gripper, t_base2gripper)
+                    self._last_robot_pose_time = now
+                    return
+                # Stationary, but not for 1 full second yet
+                elif now - self._last_robot_pose_time < 1.0:
+                    return
+            else:
+                self._last_robot_pose = (R_base2gripper, t_base2gripper)
+                self._last_robot_pose_time = now
+                return
+            
+            # If we reach here, the robot has been stationary for >= 1.0 seconds.
             duplicate, translation_delta_m, rotation_delta_rad = (
                 _is_duplicate_robot_pose(
                     self._samples,
@@ -776,8 +802,7 @@ class CalibrationService(Node):
         samples, n_rejected = _reject_outlier_samples(samples)
         if n_rejected > 0:
             self.get_logger().info(
-                "Outlier rejection removed %d sample(s); %d remain.",
-                n_rejected, len(samples),
+                f"Outlier rejection removed {n_rejected} sample(s); {len(samples)} remain."
             )
         n = len(samples)  # update count after rejection
 
@@ -805,7 +830,7 @@ class CalibrationService(Node):
 
         solver_name, R_cam2base, t_cam2base, reproj_mm = best_result
         self.get_logger().info(
-            "Solver: %s (residual=%.2f mm)", solver_name, reproj_mm,
+            f"Solver: {solver_name} (residual={reproj_mm:.2f} mm)"
         )
 
         if not np.isfinite(reproj_mm) or reproj_mm > _REPROJECTION_ERROR_MAX_MM:

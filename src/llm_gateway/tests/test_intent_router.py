@@ -14,7 +14,7 @@ def _macro_policy_path() -> str:
 
 
 def _router(runtime_mode: str = "hardware"):
-    from llm_gateway.intent_engine import IntentRouter
+    from llm_gateway.factory_task import IntentRouter
 
     return IntentRouter(
         macro_policy_path=_macro_policy_path(), runtime_mode=runtime_mode
@@ -268,11 +268,15 @@ def test_wait():
     assert cmd["wait_duration_sec"] == 3.0
 
 
-def test_wait_missing_duration_raises():
+def test_wait_missing_duration_defaults_to_two_seconds():
+    """When LLM omits wait_duration_sec, the router defaults to 2.0 s."""
     router = _router()
 
-    with pytest.raises(ValueError, match="wait_duration_sec"):
-        router.route({"intent": "wait"})
+    result = router.route({"intent": "wait"})
+
+    cmd = result.commands[0]
+    assert cmd["primitive_type"] == "WAIT"
+    assert cmd["wait_duration_sec"] == 2.0
 
 
 # ── move_relative ────────────────────────────────────────────────────────────
@@ -745,3 +749,11 @@ def test_circular_move_missing_target_pose_rejects():
                 "auxiliary_pose": {"position": {"x": 0.32, "y": 0.05, "z": 0.42}},
             }
         )
+
+
+def test_intent_router_loads_default_semantic_map():
+    from llm_gateway.factory_task import IntentRouter
+    router = IntentRouter()
+    assert router._station_semantic_map is not None
+    assert "conveyor" in router._station_semantic_map.get("regions", {})
+

@@ -136,7 +136,7 @@ ros2 topic info /camera/depth/color/points -v
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Stale calibration error on launch | extrinsics.yaml has `<NOT_CALIBRATED>` or date >30 days | Re-run calibration service |
+| Stale calibration error on launch | extrinsics.yaml has `<NOT_CALIBRATED>` | Re-run calibration service |
 | Frame mismatch in TF tree | Missing or conflicting camera root/optical transforms | Check `base_link -> camera_link` in extrinsics and RealSense `camera_link -> camera_color_optical_frame` TF |
 | Random missing depth pixels | IR projector cross-talk with fluorescent lighting | Set `emitter_enabled:=false` in launch |
 | Scene processor callback never fires | QoS mismatch (RELIABLE subscriber vs BEST_EFFORT publisher) | Ensure `qos_profile_sensor_data` is used |
@@ -144,10 +144,9 @@ ros2 topic info /camera/depth/color/points -v
 
 ## Safety guards
 
-Three guards run before any perception result is used:
-1. **Calibration freshness** — rejects if >30 days old
-2. **Reprojection error** — rejects if >3 mm
-3. **Depth noise** — range-aware interpolated threshold from perception.yaml breakpoints
+Two guards run before any perception result is used:
+1. **Reprojection error** — rejects if >3 mm
+2. **Depth noise** — range-aware interpolated threshold from perception.yaml breakpoints
 
 These are also checked by `tools/validate_safety_chain.py` at CI time.
 

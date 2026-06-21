@@ -127,11 +127,9 @@ def generate_launch_description() -> LaunchDescription:
                         # Alignment and sync
                         "align_depth.enable": align_depth,
                         "enable_sync": enable_sync,
-                        # Point cloud. stream_filter=2 selects the color stream
-                        # as texture source for packed RGB in PointCloud2.
+                        # Point cloud
                         "pointcloud.enable": pointcloud,
-                        "pointcloud.stream_filter": pointcloud_stream_filter,
-                        "pointcloud.stream_index_filter": pointcloud_stream_index_filter,
+                        "pointcloud.stream_profile": 2,
                         # Post-processing filters
                         "spatial_filter.enable": spatial_filter,
                         "temporal_filter.enable": temporal_filter,

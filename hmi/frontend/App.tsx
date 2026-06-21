@@ -52,9 +52,10 @@ export function App() {
           Joint Jog Pendant
         </button>
       </nav>
-      {activeTab === 'command' ? (
+      {activeTab === 'command' && (
         <GP4HMI bridge={bridge} />
-      ) : (
+      )}
+      {activeTab === 'jog' && (
         <JogPendant
           jogBridgeStatus={bridge.jogBridgeStatus}
           jointPositions={bridge.state.jointPositions}

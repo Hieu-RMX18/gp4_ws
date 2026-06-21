@@ -477,6 +477,20 @@ class JogCommandRequestModel(StrictModel):
     stepDegrees: float = Field(0.0, ge=0.0, le=10.0)
 
 
+class TaskEventModel(StrictModel):
+    ts: str
+    level: Literal["DEBUG", "INFO", "WARN", "ERR"]
+    source: str
+    category: str
+    event: str
+    detail: str
+    data: dict[str, Any]
+
+class TaskEventStreamEventModel(StrictModel):
+    type: Literal["task_event"]
+    taskEvent: TaskEventModel
+
+
 HMI_STREAM_EVENT_ADAPTER = TypeAdapter(
     SnapshotStreamEventModel
     | HeartbeatStreamEventModel
@@ -485,4 +499,5 @@ HMI_STREAM_EVENT_ADAPTER = TypeAdapter(
     | SequenceLifecycleStreamEventModel
     | ReplayUpdatedStreamEventModel
     | JogBridgeStatusStreamEventModel
+    | TaskEventStreamEventModel
 )

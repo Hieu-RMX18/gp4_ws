@@ -313,6 +313,8 @@ HwAdapterExecutionReport HwAdapterNode::execute_trajectory_internal(
     last_execution_success_ = report.success;
     last_error_was_fatal_ = report.fatal_error;
     last_status_message_ = status_message;
+    RCLCPP_INFO(get_logger(),
+                "finalize: cleared execution_in_progress=FALSE dispatch_goal_reserved=FALSE");
   };
 
   std::string reason;
@@ -616,9 +618,11 @@ rclcpp_action::GoalResponse HwAdapterNode::handle_dispatch_goal(
     if (execution_in_progress_ || dispatch_goal_reserved_) {
       last_status_message_ = "dispatch rejected: execution already in progress";
       RCLCPP_WARN(get_logger(),
-                  "Rejecting DispatchTrajectory goal_id=%s: execution already "
-                  "in progress or reserved.",
-                  goal_uuid_to_string(uuid).c_str());
+                  "Rejecting DispatchTrajectory goal_id=%s: execution_in_progress=%s "
+                  "dispatch_goal_reserved=%s",
+                  goal_uuid_to_string(uuid).c_str(),
+                  execution_in_progress_ ? "TRUE" : "FALSE",
+                  dispatch_goal_reserved_ ? "TRUE" : "FALSE");
       return rclcpp_action::GoalResponse::REJECT;
     }
 

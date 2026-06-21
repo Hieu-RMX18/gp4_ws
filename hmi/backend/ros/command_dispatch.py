@@ -161,6 +161,37 @@ class CommandDispatchMixin:
                 dispatched_to_ros=False,
             )
 
+        if command_payload.get("primitive_type") == "FACTORY_TASK_RUNTIME":
+            import json
+            self._trace(
+                "confirm.factory_task_runtime",
+                command_id=command_id,
+                correlation_id=correlation_id,
+                plan_fingerprint=plan_fingerprint,
+            )
+            exec_res = self.confirm_execution(
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                parsed_intent_json=json.dumps(parsed_intent),
+                requested_mode=requested_mode or "sim",
+            )
+            return self._execution_response(
+                accepted=exec_res.get("accepted", False),
+                status="succeeded" if exec_res.get("accepted", False) else "failed",
+                summary=exec_res.get("reason") or exec_res.get("execution_summary") or "FactoryTask runtime completed.",
+                command_id=command_id,
+                plan_fingerprint=plan_fingerprint,
+                operator_id=operator_id,
+                session_id=session_id,
+                lease_id=lease_id,
+                correlation_id=correlation_id,
+                dispatched_to_ros=True,
+            )
+
+
         return self._dispatch_execute_motion(
             command_id=command_id,
             plan_fingerprint=plan_fingerprint,
@@ -170,6 +201,7 @@ class CommandDispatchMixin:
             correlation_id=correlation_id,
             command_payload=command_payload,
         )
+
 
     def abort_command(self, *, command_id: str) -> tuple[bool, str]:
         with self._goal_lock:
@@ -191,7 +223,8 @@ class CommandDispatchMixin:
         try:
             cancel_future = goal_handle.cancel_goal_async()
             wrapped = self._wait_for_future(
-                cancel_future, DEFAULT_ACTION_WAIT_TIMEOUT_SEC
+                cancel_future, DEFAULT_ACTION_WAIT_TIMEOUT_SEC,
+                context=f"/execute_motion cancel (command_id={command_id})",
             )
         except Exception as exc:
             self._trace(
@@ -452,6 +485,7 @@ class CommandDispatchMixin:
             response = self._wait_for_future(
                 self._validate_client.call_async(request),
                 DEFAULT_VALIDATE_TIMEOUT_SEC,
+                context=f"/validate_command (command_id={command_id})",
             )
         except Exception as exc:
             self._trace(
@@ -563,6 +597,7 @@ class CommandDispatchMixin:
             goal_handle = self._wait_for_future(
                 self._execute_client.send_goal_async(goal),
                 DEFAULT_ACTION_WAIT_TIMEOUT_SEC,
+                context=f"/execute_motion send_goal (command_id={command_id})",
             )
         except Exception as exc:
             self._trace(
@@ -617,6 +652,7 @@ class CommandDispatchMixin:
             wrapped_result = self._wait_for_future(
                 goal_handle.get_result_async(),
                 DEFAULT_EXECUTION_TIMEOUT_SEC,
+                context=f"/execute_motion get_result (command_id={command_id})",
             )
         except Exception as exc:
             self._trace(
@@ -805,10 +841,22 @@ class CommandDispatchMixin:
         pose.orientation.w = float(orientation.get("w", 1.0))
         return pose
 
-    def _wait_for_future(self, future: Any, timeout_sec: float) -> Any:
+    def _wait_for_future(
+        self,
+        future: Any,
+        timeout_sec: float,
+        *,
+        context: str | None = None,
+    ) -> Any:
         deadline = time.monotonic() + max(timeout_sec, 0.0)
         while not future.done():
             if time.monotonic() >= deadline:
-                raise TimeoutError("ROS future timed out.")
+                scope = context or "ROS call"
+                raise TimeoutError(
+                    f"{scope} timed out after {timeout_sec:.1f}s. "
+                    "The ROS service/action may be busy, not running, or the "
+                    "robot stack may need to be relaunched. Check "
+                    "`ros2 node list` and `ros2 service list` before retrying."
+                )
             time.sleep(0.05)
         return future.result()

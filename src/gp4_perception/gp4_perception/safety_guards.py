@@ -30,12 +30,11 @@ EXTRINSICS_SCHEMA = {
 
 
 def check_calibration_freshness(
-    extrinsics_yaml: dict, max_age_days: int = 0
+    extrinsics_yaml: dict
 ) -> tuple[bool, str]:
     """Return (ok, reason) — only checks that a calibration_date exists.
-
-    The *max_age_days* parameter is kept in the signature for API
-    compatibility but is **ignored**.  No time-based expiry is enforced.
+    
+    No time-based expiry is enforced.
     """
     date_str = extrinsics_yaml.get("hand_eye_extrinsics", {}).get("calibration_date")
     if not date_str or date_str == "<NOT_CALIBRATED>":

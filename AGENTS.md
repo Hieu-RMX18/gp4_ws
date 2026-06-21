@@ -1,7 +1,7 @@
 # GUIDES
 
-Check `home/hieu2/gp4_ws/.codex/AGENTS.md`
-More details about catalog robot and offical repos yaskawa check `home/hieu2/gp4_ws/references/`.
+Check `/home/hieu2/gp4_ws/.codex/AGENTS.md`.
+For robot catalog material and official Yaskawa reference repositories, check `/home/hieu2/gp4_ws/references/`.
 
 ## 1. `.codex` Workspace Metadata
 The `.codex/` folder is reserved for Codex-specific workspace guidance and reusable agent instructions, not ROS2 runtime packages.
@@ -75,7 +75,7 @@ After modifying files:
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **gp4_ws** (54701 symbols, 96566 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **gp4_ws** (56221 symbols, 98890 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

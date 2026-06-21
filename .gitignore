@@ -61,3 +61,4 @@ secrets/
 *.pyc
 # Thêm rule cho pytest cache
 .pytest_cache/
+.superpowers/

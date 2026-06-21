@@ -145,8 +145,6 @@ def query_perception(
     context_state: dict[str, Any],
     max_reprojection_error_mm: float = 5.0,
     extrinsics_path: Path | None = None,
-    # Legacy parameter kept for API compatibility — ignored.
-    max_age_days: int = 0,
 ) -> dict[str, Any]:
     """Body of the query_perception tool.
 
@@ -155,7 +153,6 @@ def query_perception(
         context_state: agent context state snapshot; must include "mode".
         max_reprojection_error_mm: calibration residual threshold.
         extrinsics_path: override path to extrinsics.yaml.
-        max_age_days: **Ignored** — kept for call-site compatibility.
 
     Returns:
         dict with keys ok, error, payload following ToolResult convention.

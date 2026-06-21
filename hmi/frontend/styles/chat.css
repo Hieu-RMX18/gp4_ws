@@ -456,3 +456,34 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.input-actions-column {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 88px;
+}
+
+.clear-chat-btn {
+  min-height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--border-radius-sm);
+  background: #dc2626;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms ease;
+  text-align: center;
+}
+
+.clear-chat-btn:hover:not(:disabled) {
+  background: #b91c1c;
+}
+
+.clear-chat-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+

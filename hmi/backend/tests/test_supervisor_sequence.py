@@ -371,5 +371,129 @@ class BuildBlendedSequenceStepTests(unittest.TestCase):
         self.assertEqual(blended["targetSummary"], "A -> B")
 
 
+class RuntimePlanRepeatNodeTests(unittest.TestCase):
+    """Adapter must expand a FactoryTask runtime `repeat` node into N flat steps."""
+
+    def _adapter(self) -> SupervisorSequenceMixin:
+        # _runtime_plan_to_semantic_steps is a regular method (uses self only
+        # via current_pose_loader, which we pass as a no-op).
+        return SupervisorSequenceMixin()
+
+    def test_repeat_node_expands_children_n_times(self) -> None:
+        adapter = self._adapter()
+        runtime_plan = {
+            "type": "repeat",
+            "count": 2,
+            "body": {
+                "type": "sequence",
+                "children": [
+                    {"type": "skill", "name": "go_home"},
+                    {"type": "skill", "name": "stop"},
+                ],
+            },
+        }
+        steps = adapter._runtime_plan_to_semantic_steps(
+            runtime_plan,
+            current_pose_loader=lambda: None,
+        )
+        intents = [step["intent"] for step in steps]
+        self.assertEqual(
+            intents,
+            ["go_home", "stop", "go_home", "stop"],
+        )
+
+    def test_repeat_node_count_one_returns_single_expansion(self) -> None:
+        adapter = self._adapter()
+        runtime_plan = {
+            "type": "repeat",
+            "count": 1,
+            "body": {
+                "type": "sequence",
+                "children": [{"type": "skill", "name": "go_home"}],
+            },
+        }
+        steps = adapter._runtime_plan_to_semantic_steps(
+            runtime_plan,
+            current_pose_loader=lambda: None,
+        )
+        self.assertEqual([step["intent"] for step in steps], ["go_home"])
+
+    def test_repeat_node_with_zero_count_rejected(self) -> None:
+        adapter = self._adapter()
+        runtime_plan = {
+            "type": "repeat",
+            "count": 0,
+            "body": {"type": "sequence", "children": []},
+        }
+        from hmi.backend.services.supervisor_validation import (
+            IntentResolutionError,
+        )
+
+        with self.assertRaises(IntentResolutionError) as ctx:
+            adapter._runtime_plan_to_semantic_steps(
+                runtime_plan,
+                current_pose_loader=lambda: None,
+            )
+        self.assertIn("count", str(ctx.exception).lower())
+
+    def test_repeat_node_with_oversized_count_rejected(self) -> None:
+        adapter = self._adapter()
+        runtime_plan = {
+            "type": "repeat",
+            "count": 10_000,
+            "body": {
+                "type": "sequence",
+                "children": [{"type": "skill", "name": "go_home"}],
+            },
+        }
+        from hmi.backend.services.supervisor_validation import (
+            IntentResolutionError,
+        )
+
+        with self.assertRaises(IntentResolutionError) as ctx:
+            adapter._runtime_plan_to_semantic_steps(
+                runtime_plan,
+                current_pose_loader=lambda: None,
+            )
+        self.assertIn("100", str(ctx.exception))
+
+    def test_repeat_node_missing_body_rejected(self) -> None:
+        adapter = self._adapter()
+        runtime_plan = {"type": "repeat", "count": 2}
+        from hmi.backend.services.supervisor_validation import (
+            IntentResolutionError,
+        )
+
+        with self.assertRaises(IntentResolutionError) as ctx:
+            adapter._runtime_plan_to_semantic_steps(
+                runtime_plan,
+                current_pose_loader=lambda: None,
+            )
+        self.assertIn("body", str(ctx.exception).lower())
+
+    def test_repeat_node_nested_inside_sequence(self) -> None:
+        adapter = self._adapter()
+        runtime_plan = {
+            "type": "sequence",
+            "children": [
+                {"type": "skill", "name": "go_home"},
+                {
+                    "type": "repeat",
+                    "count": 3,
+                    "body": {
+                        "type": "sequence",
+                        "children": [{"type": "skill", "name": "stop"}],
+                    },
+                },
+            ],
+        }
+        steps = adapter._runtime_plan_to_semantic_steps(
+            runtime_plan,
+            current_pose_loader=lambda: None,
+        )
+        intents = [step["intent"] for step in steps]
+        self.assertEqual(intents, ["go_home", "stop", "stop", "stop"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -13,6 +13,8 @@ interface CommandComposerProps {
   actionFeedback: ActionFeedbackView | null;
   onSubmit: () => void;
   onClearError: () => void;
+  onClearChat: () => void;
+  isChatEmpty: boolean;
 }
 
 export function CommandComposer({
@@ -25,20 +27,24 @@ export function CommandComposer({
   actionFeedback,
   onSubmit,
   onClearError,
+  onClearChat,
+  isChatEmpty,
 }: CommandComposerProps) {
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.nativeEvent.isComposing || event.repeat) {
       return;
     }
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-      event.preventDefault();
-      onSubmit();
+    if (event.key === 'Enter') {
+      if (event.shiftKey || event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        onSubmit();
+      }
     }
   };
 
   const placeholder = readOnlyBridge
     ? 'Command ingress is read only until mode + telemetry + preflight gates are satisfied.'
-    : 'Type intent in English or Vietnamese. Ctrl+Enter to submit · Shift+Enter for newline.';
+    : 'Type intent in English or Vietnamese. Shift+Enter to submit · Enter for newline.';
 
   return (
     <div className="chat-input-wrap">
@@ -62,13 +68,23 @@ export function CommandComposer({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
         />
-        <button
-          className="send-btn"
-          disabled={!canSubmit || draft.trim().length === 0}
-          onClick={onSubmit}
-        >
-          Submit
-        </button>
+        <div className="input-actions-column">
+          <button
+            className="send-btn"
+            disabled={!canSubmit || draft.trim().length === 0}
+            onClick={onSubmit}
+          >
+            Submit
+          </button>
+          <button
+            type="button"
+            className="clear-chat-btn"
+            disabled={isChatEmpty}
+            onClick={onClearChat}
+          >
+            Clear History
+          </button>
+        </div>
       </div>
       {submitError ? <div className="input-error">{submitError}</div> : null}
       {actionFeedback ? (
@@ -94,3 +110,4 @@ export function CommandComposer({
     </div>
   );
 }
+

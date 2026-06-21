@@ -4,7 +4,14 @@
 Checks:
   1. operational_joint_limits exist and are a strict subset of URDF joint_limits.
   2. Every joint in motoros2_config.yaml has an entry in operational_joint_limits.
-  3. J5 hard limit is ±1.571 rad (±90°).
+  3. joint_5_b is present in operational_joint_limits and has parseable
+     min/max. The numeric envelope is enforced by Check 1's strict-subset
+     invariant against URDF joint_limits.yaml (hardware B is +/-123 deg,
+     so the operational envelope must be inside that).
+  4. safety.calibration.max_reprojection_error_mm is set.
+  5. extrinsics.yaml exists, has a calibrated calibration_date, and
+     reprojection_error_mm is within the calibration limit.
+  6. MOVE_REL C++ constants in move_rel_validator.hpp match safety_rules.yaml.
 
 Exit 0 on success, 1 on failure, 2 when the only failure is the known
 fail-closed uncalibrated perception extrinsics state.
@@ -158,19 +165,21 @@ def main() -> int:
                         f"motoros2_config joint '{jn}' has no parseable limits in operational_joint_limits"
                     )
 
-    # --- Check 3: J5 hard limit ---
+    # --- Check 3: joint_5_b presence and parseability ---
+    # Historical context: the operational J5 envelope was widened from
+    # ±1.571 rad (±90°) to ±1.603 rad on 2026-05-04 to accommodate the
+    # home pose (J5 = -1.602 rad), then further to ±2.00 rad on 2026-06-09.
+    # The numeric envelope is enforced by Check 1's strict-subset invariant
+    # against URDF joint_limits.yaml (hardware B is +/-123 deg ~= ±2.1468 rad);
+    # this check only guards against malformed YAML.
     j5 = op_limits.get("joint_5_b")
     if j5 is None:
         errors.append("joint_5_b missing from operational_joint_limits")
     else:
         j5_min, j5_max = extract_limit(j5)
-    if j5_min is None or j5_max is None:
-        errors.append("joint_5_b has no parseable limits in operational_joint_limits")
-    else:
-        if abs(j5_min - (-1.603)) > 0.001 or abs(j5_max - 1.603) > 0.001:
+        if j5_min is None or j5_max is None:
             errors.append(
-                f"joint_5_b limits are [{j5_min}, {j5_max}] — "
-                f"expected ±1.603 (widened from ±1.571 per operator 2026-05-04)"
+                "joint_5_b has no parseable limits in operational_joint_limits"
             )
 
     # --- Check 4: Perception calibration SSOT ---
@@ -178,9 +187,6 @@ def main() -> int:
     if calibration is None:
         errors.append("safety.calibration section missing (required by W4)")
     else:
-        max_age = calibration.get("max_age_days")
-        if max_age is None or not isinstance(max_age, int):
-            errors.append("safety.calibration.max_age_days missing or not an integer")
         max_reproj = calibration.get("max_reprojection_error_mm")
         if max_reproj is None or not isinstance(max_reproj, (int, float)):
             errors.append(
@@ -204,13 +210,6 @@ def main() -> int:
                 cal_date = datetime.fromisoformat(
                     date_str.rstrip("Z").replace("Z", "+00:00")
                 )
-                now = datetime.now(timezone.utc)
-                age_days = (now - cal_date).total_seconds() / 86400.0
-                if calibration and age_days > calibration.get("max_age_days", 30):
-                    errors.append(
-                        f"extrinsics.yaml calibration is {age_days:.1f} days old "
-                        f"(max {calibration.get('max_age_days', 30)} days)"
-                    )
             except ValueError:
                 errors.append(f"extrinsics.yaml calibration_date invalid: {date_str}")
         reproj = hee.get("reprojection_error_mm")

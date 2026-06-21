@@ -2,6 +2,7 @@
 
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 
@@ -175,7 +176,7 @@ class TestFrameTransform:
                 "is_bigendian": False,
             },
         )()
-        processor._on_synced(fake_cloud, object())
+        processor._process_cloud(fake_cloud)
 
         assert processor._last_detections == []
 
@@ -240,7 +241,7 @@ class TestPerceptionContracts:
         )
 
         fake_cloud = type("Cloud", (), {"header": object()})()
-        processor._on_synced(fake_cloud, object())
+        processor._process_cloud(fake_cloud)
 
         assert processor._last_detections == []
 
@@ -449,4 +450,19 @@ class TestDisplayName:
 
     def test_single_word(self):
         assert _display_name("sphere") == "sphere"
+
+
+def test_scene_processor_does_not_wait_for_camera_info_sync():
+    source = Path(__file__).parents[1] / "gp4_perception" / "scene_processor.py"
+    text = source.read_text()
+    assert "ApproximateTimeSynchronizer" not in text
+    assert "CameraInfo" not in text
+
+
+def test_scene_processor_uses_latest_cloud_worker():
+    source = Path(__file__).parents[1] / "gp4_perception" / "scene_processor.py"
+    text = source.read_text()
+    assert "LatestValueSlot" in text
+    assert "_process_latest_cloud" in text
+    assert "_latest_cloud.put(cloud)" in text
 

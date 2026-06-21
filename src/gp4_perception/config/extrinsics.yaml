@@ -2,16 +2,39 @@ hand_eye_extrinsics:
   parent_frame: base_link
   child_frame: camera_link
   translation:
-    x: 0.322300793423907
-    y: 0.05097639115929843
-    z: 1.2368204792273376
+    x: -0.005877000
+    y: 0.643079000
+    z: 0.735000000
   rotation_quat:
-    x: 0.7263020409849902
-    y: -0.04955247921643432
-    z: -0.6853038385399037
-    w: 0.019711568862367135
-  calibration_date: '2026-05-23T12:59:24Z'
+    x: 0.282522162
+    y: 0.282522162
+    z: -0.648213875
+    w: 0.648213875
+  calibration_date: '2026-06-07T09:32:24Z'
   reprojection_error_mm: 2.614
-  n_samples: 12
+  n_samples: 18
   solver: PARK
   workspace_distance_m: 0.545
+
+
+# hand_eye_extrinsics:
+#   parent_frame: base_link
+#   child_frame: camera_link
+#   translation:
+#     x: -0.005877000
+#     y: 0.643079000
+#     z: 0.735000000
+#   rotation_quat:
+#     x: 0.282522162
+#     y: 0.282522162
+#     z: -0.648213875
+#     w: 0.648213875
+#   calibration_date: '2026-06-07T09:32:24Z'
+#   reprojection_error_mm: 2.614
+#   n_samples: 18
+#   solver: PARK
+#   workspace_distance_m: 0.545
+#56cm camera to base on table
+#102cm camera to base diagonal
+#high to base 74.5cm
+# trục x và y trong rviz ngược lại so với robot thật

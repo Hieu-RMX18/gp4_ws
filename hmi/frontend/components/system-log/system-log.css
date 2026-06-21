@@ -1,0 +1,94 @@
+.system-log-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.system-log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-surface-elevated);
+}
+
+.system-log-filters {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.system-log-table-container {
+  flex: 1;
+  overflow: auto;
+}
+
+.system-log-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.system-log-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-surface-elevated);
+  text-align: left;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.log-row {
+  border-bottom: 1px solid var(--border-color-light);
+  cursor: pointer;
+}
+
+.log-row:hover {
+  background: var(--bg-surface-hover);
+}
+
+.log-row td {
+  padding: 0.25rem 0.5rem;
+  vertical-align: top;
+}
+
+.log-level-INFO { color: var(--color-info); }
+.log-level-WARN { color: var(--color-warning); }
+.log-level-ERR { color: var(--color-error); }
+.log-level-DEBUG { color: var(--color-text-muted); }
+
+.log-detail-expanded {
+  background: var(--bg-surface-dark);
+}
+
+.log-json-block {
+  margin: 0;
+  padding: 0.5rem;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 0.8rem;
+}
+
+.robot-status-strip {
+  display: flex;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  background: var(--bg-surface-elevated);
+  border-top: 1px solid var(--border-color);
+  font-size: 0.85rem;
+}
+
+.status-badge {
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-weight: bold;
+}
+.status-badge.ok { background: var(--color-success-bg); color: var(--color-success); }
+.status-badge.error { background: var(--color-error-bg); color: var(--color-error); }
+.status-badge.warning { background: var(--color-warning-bg); color: var(--color-warning); }

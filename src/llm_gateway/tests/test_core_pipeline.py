@@ -43,7 +43,7 @@ def test_parse_non_json_content_rejected(parser):
 
 
 # ---- test_command_pipeline.py ----
-"""Unit tests for llm_gateway.intent_engine — pure helpers.
+"""Unit tests for llm_gateway.factory_task — pure helpers.
 
 These tests run without ROS2 because the helpers have no ROS dependencies.
 """
@@ -54,7 +54,7 @@ from typing import Any, Dict, Optional
 
 import pytest
 
-from llm_gateway.intent_engine import (
+from llm_gateway.factory_task import (
     command_from_sanitized_json,
     hydrate_draw_workplane,
     prepare_execution_command,
@@ -255,7 +255,7 @@ class TestHydrateWorkplaneHandler(unittest.TestCase):
 
     def _make_handler(self, fetch_current_pose=None):
         """Create a handler function that mimics _on_hydrate_workplane."""
-        from llm_gateway.intent_engine import hydrate_draw_workplane
+        from llm_gateway.factory_task import hydrate_draw_workplane
 
         def handler(request, response):
             try:

@@ -317,7 +317,7 @@ export interface HmiStateSnapshot {
   jointPositions: JointPosition[];
   planMetrics: PlanMetrics | null;
   replayItems: ReplayListItem[];
-  toolPose: ToolPose | null;
+  toolPose: { tcp: ToolPose; tool0: ToolPose } | null;
 }
 
 export interface RuntimeStateResponse {
@@ -418,6 +418,16 @@ export interface ReplayListResponse {
   items: ReplayListItem[];
 }
 
+export interface TaskEvent {
+  ts: string;
+  level: 'DEBUG' | 'INFO' | 'WARN' | 'ERR';
+  source: string;
+  category: string;
+  event: string;
+  detail: string;
+  data: Record<string, unknown>;
+}
+
 export type HmiStreamEvent =
   | { type: 'snapshot'; snapshot: HmiStateSnapshot }
   | { type: 'heartbeat'; schemaVersion: string; generatedAt: string; transportState: TransportState; telemetryState: TelemetryState }
@@ -426,7 +436,8 @@ export type HmiStreamEvent =
   | { type: 'sequence_lifecycle'; sequence: SequenceView; messages?: ChatMessage[] }
   | { type: 'replay_updated'; replayItems: ReplayListItem[] }
   | { type: 'connection_state'; transportState: TransportState; connections?: BridgeConnection[] }
-  | { type: 'jog_bridge_status'; jogBridgeStatus: JogBridgeStatusSnapshot };
+  | { type: 'jog_bridge_status'; jogBridgeStatus: JogBridgeStatusSnapshot }
+  | { type: 'task_event'; taskEvent: TaskEvent };
 
 // ── Jog Pendant Types ──────────────────────────────────────────────────────
 

@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: gp4_perception
+Version: 0.1.0
+Summary: Perception stack for GP4 workcell.
+Maintainer: hieu2
+Maintainer-email: hieu2@example.com
+License: Apache-2.0
+Requires-Dist: setuptools
+Requires-Dist: numpy
+Requires-Dist: pyyaml
+Requires-Dist: scipy
+Dynamic: license
+Dynamic: maintainer
+Dynamic: maintainer-email
+Dynamic: requires-dist
+Dynamic: summary

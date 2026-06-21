@@ -12,14 +12,13 @@ from gp4_perception.safety_guards import (
 
 class TestCalibrationFreshness:
     def test_missing_date_rejects(self):
-        ok, reason = check_calibration_freshness({}, max_age_days=30)
+        ok, reason = check_calibration_freshness({})
         assert not ok
         assert "missing" in reason
 
     def test_not_calibrated_rejects(self):
         ok, reason = check_calibration_freshness(
-            {"hand_eye_extrinsics": {"calibration_date": "<NOT_CALIBRATED>"}},
-            max_age_days=30,
+            {"hand_eye_extrinsics": {"calibration_date": "<NOT_CALIBRATED>"}}
         )
         assert not ok
         assert "missing" in reason
@@ -27,8 +26,7 @@ class TestCalibrationFreshness:
     def test_fresh_accept(self):
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         ok, reason = check_calibration_freshness(
-            {"hand_eye_extrinsics": {"calibration_date": now}},
-            max_age_days=30,
+            {"hand_eye_extrinsics": {"calibration_date": now}}
         )
         assert ok
         assert reason == ""
@@ -40,16 +38,14 @@ class TestCalibrationFreshness:
             .replace("+00:00", "Z")
         )
         ok, reason = check_calibration_freshness(
-            {"hand_eye_extrinsics": {"calibration_date": old}},
-            max_age_days=30,
+            {"hand_eye_extrinsics": {"calibration_date": old}}
         )
         assert ok
         assert reason == ""
 
     def test_very_old_date_still_accepted(self):
         ok, reason = check_calibration_freshness(
-            {"hand_eye_extrinsics": {"calibration_date": "2020-01-01T00:00:00Z"}},
-            max_age_days=30,
+            {"hand_eye_extrinsics": {"calibration_date": "2020-01-01T00:00:00Z"}}
         )
         assert ok
         assert reason == ""

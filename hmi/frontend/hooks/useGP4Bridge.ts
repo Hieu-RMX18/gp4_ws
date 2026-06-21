@@ -417,9 +417,9 @@ export function useGP4Bridge(
           const nextPose = event.snapshot?.toolPose;
           if (prevPose && nextPose) {
             const dist = Math.sqrt(
-              Math.pow(nextPose.x - prevPose.x, 2) +
-              Math.pow(nextPose.y - prevPose.y, 2) +
-              Math.pow(nextPose.z - prevPose.z, 2)
+              Math.pow(nextPose.tcp.x - prevPose.tcp.x, 2) +
+              Math.pow(nextPose.tcp.y - prevPose.tcp.y, 2) +
+              Math.pow(nextPose.tcp.z - prevPose.tcp.z, 2)
             );
             if (dist > 0.005) {
               logTaskEvent(
@@ -427,7 +427,7 @@ export function useGP4Bridge(
                 'hw_adapter',
                 'ROBOT',
                 'pose_changed',
-                `Robot TCP moved: X=${nextPose.x.toFixed(3)}, Y=${nextPose.y.toFixed(3)}, Z=${nextPose.z.toFixed(3)}`,
+                `Robot TCP moved: X=${nextPose.tcp.x.toFixed(3)}, Y=${nextPose.tcp.y.toFixed(3)}, Z=${nextPose.tcp.z.toFixed(3)}`,
                 { prevPose, nextPose }
               );
             }

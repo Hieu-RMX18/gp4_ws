@@ -317,7 +317,7 @@ export interface HmiStateSnapshot {
   jointPositions: JointPosition[];
   planMetrics: PlanMetrics | null;
   replayItems: ReplayListItem[];
-  toolPose: ToolPose | null;
+  toolPose: { tcp: ToolPose; tool0: ToolPose } | null;
 }
 
 export interface RuntimeStateResponse {

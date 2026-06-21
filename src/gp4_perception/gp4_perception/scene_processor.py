@@ -37,6 +37,7 @@ from vision_msgs.msg import (
 from .latest_frame import LatestValueSlot
 from .query_perception_tool import load_extrinsics
 from .safety_guards import (
+    check_calibration_freshness,
     check_reprojection_error,
     classify_depth_quality,
 )
@@ -651,14 +652,15 @@ class SceneProcessor(Node):
                 (False, f"calibration_invalid: {exc}", "", 0.0),
             )
 
-        # Verify calibration_date exists (no age expiry enforced).
+        # Verify calibration_date exists and is valid ISO 8601 (no age expiry enforced).
         data = extrinsics.get("hand_eye_extrinsics", {})
-        calibration_date = str(data.get("calibration_date", ""))
-        if not calibration_date or calibration_date == "<NOT_CALIBRATED>":
+        ok, reason = check_calibration_freshness(extrinsics)
+        if not ok:
             return self._cache_calibration_status(
                 current_mtime_ns,
-                (False, "calibration_invalid: calibration_date missing", "", 0.0),
+                (False, f"calibration_invalid: {reason}", "", 0.0),
             )
+        calibration_date = str(data.get("calibration_date", ""))
 
         ok, reason = check_reprojection_error(
             extrinsics, max_mm=REPROJECTION_ERROR_MAX_MM

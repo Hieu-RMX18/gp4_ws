@@ -1983,8 +1983,8 @@ class UnifiedVisualizer(Node):
         cv2.putText(bar, status, (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
                     0.55, _TEXT_DARK, 1, cv2.LINE_AA)
 
-        # Inline dashboard panel — FIXED height to prevent window flicker.
-        _DASH_H = 200
+        # Inline dashboard panel — Dynamic height to show all detections.
+        _DASH_H = max(200, 58 + len(dashboard_data) * 34 + 14)
         dash_panel = np.full((_DASH_H, bar_w, 3), _PANEL_BG, dtype=np.uint8)
         cv2.line(dash_panel, (0, 0), (bar_w, 0), _PANEL_BORDER, 1)
         # Header.

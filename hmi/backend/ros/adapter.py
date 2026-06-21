@@ -40,6 +40,7 @@ def _load_joint_state_type() -> Any:
 
 try:
     import rclpy
+    from tf2_ros import Buffer, TransformListener
     from geometry_msgs.msg import Pose
     from diagnostic_msgs.msg import DiagnosticStatus
     from industrial_msgs.msg import RobotMode as IndustrialRobotMode
@@ -182,6 +183,8 @@ class WorkspaceRosAdapter(
         self._context: Any = None
         self._node: Any = None
         self._executor: Any = None
+        self._tf_buffer: Any = None
+        self._tf_listener: Any = None
         self._thread: Thread | None = None
         self._subscriptions: list[Any] = []
         self._validate_client: Any = None
@@ -211,6 +214,8 @@ class WorkspaceRosAdapter(
             self._context = rclpy.context.Context()
             rclpy.init(args=None, context=self._context)
             self._node = rclpy.create_node(self._node_name, context=self._context)
+            self._tf_buffer = Buffer()
+            self._tf_listener = TransformListener(self._tf_buffer, self._node)
             self._executor = SingleThreadedExecutor(context=self._context)
             self._executor.add_node(self._node)
             self._create_subscriptions()
@@ -426,35 +431,86 @@ class WorkspaceRosAdapter(
             },
         }
 
-    def read_tool_pose(self) -> dict[str, Any] | None:
-        """Return tool0 XYZ-RPY in base_link frame, or None if unavailable."""
-        pose = self.get_current_pose(reference_frame="base_link")
-        if pose is None:
+    def _pose_from_tf(self, frame_id: str) -> dict[str, Any] | None:
+        if self._tf_buffer is None:
             return None
-        ori = pose.get("orientation", {})
-        x = float(ori.get("x", 0.0))
-        y = float(ori.get("y", 0.0))
-        z = float(ori.get("z", 0.0))
-        w = float(ori.get("w", 1.0))
-        # Quaternion to RPY (roll-pitch-yaw / XYZ convention)
-        sinr_cosp = 2.0 * (w * x + y * z)
-        cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
-        roll = math.atan2(sinr_cosp, cosr_cosp)
-        sinp = 2.0 * (w * y - z * x)
-        sinp = max(-1.0, min(1.0, sinp))
-        pitch = math.asin(sinp)
-        siny_cosp = 2.0 * (w * z + x * y)
-        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
-        yaw = math.atan2(siny_cosp, cosy_cosp)
-        pos = pose.get("position", {})
+        try:
+            from rclpy.time import Time
+            from rclpy.duration import Duration
+            trans = self._tf_buffer.lookup_transform(
+                "base_link", frame_id, Time(), Duration(seconds=0.1)
+            )
+            pos = trans.transform.translation
+            ori = trans.transform.rotation
+            x, y, z = pos.x, pos.y, pos.z
+            qx, qy, qz, qw = ori.x, ori.y, ori.z, ori.w
+            
+            sinr_cosp = 2.0 * (qw * qx + qy * qz)
+            cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
+            roll = math.atan2(sinr_cosp, cosr_cosp)
+            sinp = 2.0 * (qw * qy - qz * qx)
+            sinp = max(-1.0, min(1.0, sinp))
+            pitch = math.asin(sinp)
+            siny_cosp = 2.0 * (qw * qz + qx * qy)
+            cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+
+            return {
+                "x": round(x, 4),
+                "y": round(y, 4),
+                "z": round(z, 4),
+                "roll": round(roll, 4),
+                "pitch": round(pitch, 4),
+                "yaw": round(yaw, 4),
+                "frameId": frame_id,
+            }
+        except Exception:
+            return None
+
+    def read_tool_pose(self) -> dict[str, Any] | None:
+        """Return both tool0 and tcp_link XYZ-RPY in base_link frame, or None if unavailable."""
+        tcp_pose = self._pose_from_tf("tcp_link")
+        tool0_pose = self._pose_from_tf("tool0")
+        
+        if tcp_pose is None or tool0_pose is None:
+            # Fallback to get_current_pose if TF is not available
+            pose = self.get_current_pose(reference_frame="base_link")
+            if pose is None:
+                return None
+            ori = pose.get("orientation", {})
+            pos = pose.get("position", {})
+            x = float(pos.get("x", 0.0))
+            y = float(pos.get("y", 0.0))
+            z = float(pos.get("z", 0.0))
+            qx = float(ori.get("x", 0.0))
+            qy = float(ori.get("y", 0.0))
+            qz = float(ori.get("z", 0.0))
+            qw = float(ori.get("w", 1.0))
+            
+            sinr_cosp = 2.0 * (qw * qx + qy * qz)
+            cosr_cosp = 1.0 - 2.0 * (qx * qx + qy * qy)
+            roll = math.atan2(sinr_cosp, cosr_cosp)
+            sinp = 2.0 * (qw * qy - qz * qx)
+            sinp = max(-1.0, min(1.0, sinp))
+            pitch = math.asin(sinp)
+            siny_cosp = 2.0 * (qw * qz + qx * qy)
+            cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+
+            return {
+                "tcp": {
+                    "x": round(x, 4), "y": round(y, 4), "z": round(z, 4),
+                    "roll": round(roll, 4), "pitch": round(pitch, 4), "yaw": round(yaw, 4), "frameId": "tcp_link",
+                },
+                "tool0": {
+                    "x": round(x, 4), "y": round(y, 4), "z": round(z, 4),
+                    "roll": round(roll, 4), "pitch": round(pitch, 4), "yaw": round(yaw, 4), "frameId": "tool0",
+                }
+            }
+        
         return {
-            "x": round(float(pos.get("x", 0.0)), 4),
-            "y": round(float(pos.get("y", 0.0)), 4),
-            "z": round(float(pos.get("z", 0.0)), 4),
-            "roll": round(roll, 4),
-            "pitch": round(pitch, 4),
-            "yaw": round(yaw, 4),
-            "frameId": "base_link",
+            "tcp": tcp_pose,
+            "tool0": tool0_pose
         }
 
     # ── W5.T4 new service clients ─────────────────────────────────────────

@@ -1,4 +1,4 @@
-from llm_gateway.llm_gateway_node import _SceneSnapshotCache
+from llm_gateway.scene_cache import _SceneSnapshotCache
 from llm_gateway.llm_gateway_node import LLMGatewayNode
 
 
@@ -35,4 +35,4 @@ def test_gateway_scene_cache_lazy_initializes_for_source_level_tests():
 
     node._invalidate_scene_cache()
 
-    assert isinstance(node._scene_snapshot_cache, _SceneSnapshotCache)
+    assert isinstance(node._get_scene_snapshot_cache(), _SceneSnapshotCache)

@@ -1,5 +1,5 @@
 llm_backend:
-  provider: "provider"
+  provider: "9router"
   base_url: "http://localhost:20128/v1"
   # API key is resolved from GP4_LLM_API_KEY / LLM_API_KEY / OPENAI_API_KEY env vars.
   api_key: "${GP4_LLM_API_KEY}"

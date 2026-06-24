@@ -75,6 +75,40 @@ class GripperIoAdapter:
             self._config.close_output_address, self._config.close_output_value
         )
 
+    def verify_grasp(self) -> GripperResult:
+        return self._read_guarded(
+            self._config.closed_input_address, self._config.closed_input_active_value
+        )
+
+    def _read_guarded(self, address: int | str, expected_value: int | str) -> GripperResult:
+        if not self._config.verified():
+            return GripperResult(ok=False, error="verify_config_required")
+        if self._robot_mode_fn() != "IDLE":
+            return GripperResult(ok=False, error="robot_not_idle")
+        
+        client = getattr(self._node, "_read_single_io_client", None)
+        if client is None or not client.service_is_ready():
+            return GripperResult(ok=False, error="runtime_unavailable")
+        
+        try:
+            from motoros2_interfaces.srv import ReadSingleIO
+            request = ReadSingleIO.Request()
+            request.address = int(address)
+            future = client.call_async(request)
+            wait_fn = getattr(self._node, "_wait_for_future_without_spinning", None)
+            if not callable(wait_fn):
+                return GripperResult(ok=False, error="runtime_unavailable")
+            done, response = wait_fn(future, self._config.feedback_timeout_sec)
+            if not done or response is None:
+                return GripperResult(ok=False, error="io_timeout")
+            if not response.success:
+                return GripperResult(ok=False, error=f"io_failed: {response.message}")
+            if response.value != int(expected_value):
+                return GripperResult(ok=False, error="grasp_failed")
+            return GripperResult(ok=True)
+        except Exception as exc:
+            return GripperResult(ok=False, error=f"io_exception: {exc}")
+
     def _write_guarded(self, address: int | str, value: int | str) -> GripperResult:
         if not self._config.verified():
             return GripperResult(ok=False, error="verify_config_required")

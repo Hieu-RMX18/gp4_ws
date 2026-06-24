@@ -489,6 +489,66 @@ class SequenceValidationError(ValueError):
         super().__init__(f"{prefix}: {reason}")
 
 
+def validate_draw_params(semantic_ir: Dict[str, Any]) -> str | None:
+    """Return an error string if required draw params are missing, None if valid."""
+    intent = str(semantic_ir.get("intent", "")).strip()
+    if intent == "draw_shape":
+        shape = str(semantic_ir.get("shape_type", "")).strip().lower()
+        params = semantic_ir.get("params") or {}
+        if not isinstance(params, dict):
+            return "draw_shape params must be an object."
+        if shape == "circle":
+            has_radius = any(k in params for k in ("radius", "radius_m"))
+            has_diameter = any(k in params for k in ("diameter", "diameter_m", "size", "size_m"))
+            if not has_radius and not has_diameter:
+                return "draw_shape circle requires params.radius or params.diameter"
+        if shape in {"polygon", "polyline"}:
+            has_points = any(k in params for k in ("points", "vertices"))
+            has_size = any(
+                k in params
+                for k in ("n_sides", "sides", "radius", "radius_m", "side", "side_m", "side_m")
+            )
+            if not has_points and not has_size:
+                return f"draw_shape {shape} requires params with size or points"
+            if shape == "polygon" and not has_points:
+                has_n_sides = any(k in params for k in ("n_sides", "sides"))
+                if not has_n_sides:
+                    return "draw_shape polygon requires params.n_sides"
+        if shape == "arc":
+            has_radius = any(k in params for k in ("radius", "radius_m"))
+            if not has_radius:
+                return "draw_shape arc requires params.radius"
+        if shape in {"square", "rectangle", "triangle"}:
+            has_explicit = any(k in params for k in ("points", "vertices"))
+            if not has_explicit:
+                if shape == "rectangle":
+                    has_width = any(k in params for k in ("width_m", "width"))
+                    has_height = any(k in params for k in ("height_m", "height"))
+                    if not has_width:
+                        return "draw_shape rectangle requires params.width"
+                    if not has_height:
+                        return "draw_shape rectangle requires params.height"
+                else:
+                    side_keys = ("side_m", "side", "size_m", "size")
+                    has_side = any(k in params for k in side_keys)
+                    if not has_side:
+                        return f"draw_shape {shape} requires params.side or explicit points"
+    elif intent == "draw_text":
+        text = str(semantic_ir.get("text", "")).strip()
+        if not text:
+            return "draw_text requires a non-empty text string."
+        font = semantic_ir.get("font") or {}
+        if not isinstance(font, dict):
+            return "draw_text font must be an object."
+        height_keys = ("height_m", "height", "char_height_m")
+        has_height = any(k in semantic_ir for k in height_keys) or any(
+            k in font for k in height_keys
+        )
+        if not has_height:
+            return "draw_text requires font.height."
+    return None
+
+
 class SequenceValidator:
     """Prevalidate a full routed primitive sequence before any dispatch occurs."""
 

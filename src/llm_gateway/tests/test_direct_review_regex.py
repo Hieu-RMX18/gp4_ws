@@ -48,8 +48,8 @@ class TestDrawParamsValidation:
 
     @staticmethod
     def _validate(payload: dict) -> str | None:
-        from llm_gateway.llm_gateway_node import LLMGatewayNode
-        return LLMGatewayNode._validate_draw_params(payload)
+        from llm_gateway.validation import validate_draw_params
+        return validate_draw_params(payload)
 
     def test_valid_circle_passes(self):
         result = self._validate({

@@ -251,6 +251,56 @@ def normalize_joints(
     return [_wrap_to_pi(value) for value in joints]
 
 
+def rotate_tool_delta_to_base(
+    delta: Any, current_pose: Dict[str, Any]
+) -> Dict[str, float]:
+    """Rotate tool-relative delta by current quaternion orientation.
+    
+    Uses standard quaternion rotation formula: v' = v + 2*cross(q_xyz, cross(q_xyz, v) + qw*v)
+    """
+    if not isinstance(delta, dict):
+        raise ValueError("tool-relative move requires a delta object")
+    orientation = current_pose.get("orientation")
+    if not isinstance(orientation, dict):
+        raise ValueError("current pose is missing orientation")
+    vx = float(delta.get("x", 0.0))
+    vy = float(delta.get("y", 0.0))
+    vz = float(delta.get("z", 0.0))
+    qx = float(orientation.get("x", 0.0))
+    qy = float(orientation.get("y", 0.0))
+    qz = float(orientation.get("z", 0.0))
+    qw = float(orientation.get("w", 1.0))
+    norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+    if not math.isfinite(norm) or norm <= 1e-9:
+        raise ValueError("current pose orientation quaternion is invalid")
+    qx /= norm
+    qy /= norm
+    qz /= norm
+    qw /= norm
+
+    # Cross product: q_xyz x v
+    cross_x = qy * vz - qz * vy
+    cross_y = qz * vx - qx * vz
+    cross_z = qx * vy - qy * vx
+
+    # Add qw * v to cross product
+    add_x = cross_x + qw * vx
+    add_y = cross_y + qw * vy
+    add_z = cross_z + qw * vz
+
+    # Cross product: q_xyz x (cross + qw*v)
+    cross2_x = qy * add_z - qz * add_y
+    cross2_y = qz * add_x - qx * add_z
+    cross2_z = qx * add_y - qy * add_x
+
+    # Final: v' = v + 2 * cross2
+    return {
+        "x": vx + 2.0 * cross2_x,
+        "y": vy + 2.0 * cross2_y,
+        "z": vz + 2.0 * cross2_z,
+    }
+
+
 class Normalizer:
     """Class wrapper used by node code."""
 

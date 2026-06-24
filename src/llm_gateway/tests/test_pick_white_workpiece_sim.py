@@ -213,7 +213,7 @@ def test_task_runtime_replan_replaces_failed_pick_with_go_home(tmp_path: Path):
 
 def test_scene_cache_hit_rate_above_50_pct_for_repeated_queries():
     """Cache hit rate test: same perception query returns cached result on second call."""
-    from llm_gateway.llm_gateway_node import _SceneSnapshotCache
+    from llm_gateway.scene_cache import _SceneSnapshotCache
 
     hit_count = 0
     miss_count = 0

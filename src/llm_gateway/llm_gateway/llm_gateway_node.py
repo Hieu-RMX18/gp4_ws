@@ -75,51 +75,13 @@ from llm_gateway.semantic_ir_contract import (
 
 
 EXECUTOR_SHUTDOWN_TIMEOUT_SEC = 2.0
-@dataclass
-class _SceneSnapshotCache:
-    def __init__(self, ttl_sec: float, now_fn=time.monotonic):
-        self._ttl_sec = float(ttl_sec)
-        self._now_fn = now_fn
-        self._entries: Dict[tuple[str, str], tuple[float, Dict[str, Any]]] = {}
-
-    def get(self, args: Dict[str, Any]) -> Dict[str, Any] | None:
-        key = self._key(args)
-        entry = self._entries.get(key)
-        if entry is None:
-            return None
-        stamp, payload = entry
-        if self._now_fn() - stamp > self._ttl_sec:
-            self._entries.pop(key, None)
-            return None
-        cached = dict(payload)
-        cached["cache_hit"] = True
-        return cached
-
-    def store(self, args: Dict[str, Any], payload: Dict[str, Any]) -> None:
-        stored = dict(payload)
-        stored["cache_hit"] = False
-        self._entries[self._key(args)] = (self._now_fn(), stored)
-
-    def snapshots(self) -> List[Dict[str, Any]]:
-        snapshots: List[Dict[str, Any]] = []
-        for class_filter, frame in list(self._entries.keys()):
-            payload = self.get({"class_filter": class_filter, "frame": frame})
-            if payload is not None:
-                snapshots.append(payload)
-        return snapshots
-
-    def invalidate(self) -> None:
-        self._entries.clear()
-
-    @staticmethod
-    def _key(args: Dict[str, Any]) -> tuple[str, str]:
-        return (
-            str(args.get("class_filter") or ""),
-            str(args.get("frame") or "base_link"),
-        )
 
 
-class LLMGatewayNode(Node):
+
+from llm_gateway.telemetry import TelemetryMixin
+from llm_gateway.scene_cache import SceneCacheMixin
+
+class LLMGatewayNode(Node, TelemetryMixin, SceneCacheMixin):
     """Convert /llm_intent or /llm_text_input text into a validated ExecuteMotion goal."""
 
     def __init__(
@@ -210,7 +172,7 @@ class LLMGatewayNode(Node):
         self._latest_joint_positions_by_name_rad: Dict[str, float] = {}
         self._latest_pose_by_frame: Dict[str, Dict[str, Any]] = {}
         self._current_pose_cache_ttl_sec = 5.0
-        self._scene_snapshot_cache = _SceneSnapshotCache(ttl_sec=2.0)
+        self._current_pose_cache_ttl_sec = 5.0
         llm_backend_config = load_llm_backend_config(llm_config_path)
         self._llm_client = llm_client or OpenAICompatibleLLMClient(
             llm_backend_config, self._schema_validator.schema_as_json()
@@ -478,65 +440,6 @@ class LLMGatewayNode(Node):
             intent_text=intent_text,
         )
 
-    @staticmethod
-    def _validate_draw_params(semantic_ir: Dict[str, Any]) -> str | None:
-        """Return an error string if required draw params are missing, None if valid."""
-        intent = str(semantic_ir.get("intent", "")).strip()
-        if intent == "draw_shape":
-            shape = str(semantic_ir.get("shape_type", "")).strip().lower()
-            params = semantic_ir.get("params") or {}
-            if not isinstance(params, dict):
-                return "draw_shape params must be an object."
-            if shape == "circle":
-                has_radius = any(k in params for k in ("radius", "radius_m"))
-                has_diameter = any(k in params for k in ("diameter", "diameter_m", "size", "size_m"))
-                if not has_radius and not has_diameter:
-                    return "draw_shape circle requires params.radius or params.diameter"
-            if shape in {"polygon", "polyline"}:
-                has_points = any(k in params for k in ("points", "vertices"))
-                has_size = any(
-                    k in params
-                    for k in ("n_sides", "sides", "radius", "radius_m", "side", "side_m", "side_m")
-                )
-                if not has_points and not has_size:
-                    return f"draw_shape {shape} requires params with size or points"
-                if shape == "polygon" and not has_points:
-                    has_n_sides = any(k in params for k in ("n_sides", "sides"))
-                    if not has_n_sides:
-                        return "draw_shape polygon requires params.n_sides"
-            if shape == "arc":
-                has_radius = any(k in params for k in ("radius", "radius_m"))
-                if not has_radius:
-                    return "draw_shape arc requires params.radius"
-            if shape in {"square", "rectangle", "triangle"}:
-                has_explicit = any(k in params for k in ("points", "vertices"))
-                if not has_explicit:
-                    if shape == "rectangle":
-                        has_width = any(k in params for k in ("width_m", "width"))
-                        has_height = any(k in params for k in ("height_m", "height"))
-                        if not has_width:
-                            return "draw_shape rectangle requires params.width"
-                        if not has_height:
-                            return "draw_shape rectangle requires params.height"
-                    else:
-                        side_keys = ("side_m", "side", "size_m", "size")
-                        has_side = any(k in params for k in side_keys)
-                        if not has_side:
-                            return f"draw_shape {shape} requires params.side or explicit points"
-        elif intent == "draw_text":
-            text = str(semantic_ir.get("text", "")).strip()
-            if not text:
-                return "draw_text requires a non-empty text string."
-            font = semantic_ir.get("font") or {}
-            if not isinstance(font, dict):
-                return "draw_text font must be an object."
-            height_keys = ("height_m", "height", "char_height_m")
-            has_height = any(k in semantic_ir for k in height_keys) or any(
-                k in font for k in height_keys
-            )
-            if not has_height:
-                return "draw_text requires font.height."
-        return None
 
     def _generate_review_semantic_ir(self, intent_text: str) -> Dict[str, Any]:
         direct_review = direct_commands.parse(intent_text)
@@ -806,8 +709,9 @@ class LLMGatewayNode(Node):
                 "hint": "Verify /get_current_pose is available and returns base_link pose.",
             }
 
+        from llm_gateway.normalization import rotate_tool_delta_to_base
         try:
-            base_delta = self._rotate_tool_delta_to_base(
+            base_delta = rotate_tool_delta_to_base(
                 payload.get("delta", {}), current_pose
             )
         except ValueError as exc:
@@ -876,55 +780,6 @@ class LLMGatewayNode(Node):
             return "relative move requires direction and distance."
         return message
 
-    @staticmethod
-    def _rotate_tool_delta_to_base(
-        delta: Any, current_pose: Dict[str, Any]
-    ) -> Dict[str, float]:
-        """Rotate tool-relative delta by current quaternion orientation.
-        
-        Uses standard quaternion rotation formula: v' = v + 2*cross(q_xyz, cross(q_xyz, v) + qw*v)
-        """
-        if not isinstance(delta, dict):
-            raise ValueError("tool-relative move requires a delta object")
-        orientation = current_pose.get("orientation")
-        if not isinstance(orientation, dict):
-            raise ValueError("current pose is missing orientation")
-        vx = float(delta.get("x", 0.0))
-        vy = float(delta.get("y", 0.0))
-        vz = float(delta.get("z", 0.0))
-        qx = float(orientation.get("x", 0.0))
-        qy = float(orientation.get("y", 0.0))
-        qz = float(orientation.get("z", 0.0))
-        qw = float(orientation.get("w", 1.0))
-        norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
-        if not math.isfinite(norm) or norm <= 1e-9:
-            raise ValueError("current pose orientation quaternion is invalid")
-        qx /= norm
-        qy /= norm
-        qz /= norm
-        qw /= norm
-
-        # Cross product: q_xyz x v
-        cross_x = qy * vz - qz * vy
-        cross_y = qz * vx - qx * vz
-        cross_z = qx * vy - qy * vx
-
-        # Add qw * v to cross product
-        add_x = cross_x + qw * vx
-        add_y = cross_y + qw * vy
-        add_z = cross_z + qw * vz
-
-        # Cross product: q_xyz x (cross + qw*v)
-        cross2_x = qy * add_z - qz * add_y
-        cross2_y = qz * add_x - qx * add_z
-        cross2_z = qx * add_y - qy * add_x
-
-        # Final: v' = v + 2 * cross2
-        return {
-            "x": vx + 2.0 * cross2_x,
-            "y": vy + 2.0 * cross2_y,
-            "z": vz + 2.0 * cross2_z,
-        }
 
     def _authorize_review_intent(self, request: ReviewIntent.Request) -> str:
         """Return an error string when required HMI metadata is missing."""
@@ -1039,7 +894,8 @@ class LLMGatewayNode(Node):
             response.error = "review result must be Semantic IR with an intent field."
             self._emit_task_event("SAFETY", "validate_rejected", f"Validation rejected: {response.error}", level="ERR", source="gateway")
             return response
-        draw_err = self._validate_draw_params(semantic_ir)
+        from llm_gateway.validation import validate_draw_params
+        draw_err = validate_draw_params(semantic_ir)
         if draw_err:
             response.accepted = False
             response.error = draw_err
@@ -1313,12 +1169,6 @@ class LLMGatewayNode(Node):
         if not done or response is None or not response.success:
             return False
         return int(response.value) == int(config.closed_input_active_value)
-    def _get_scene_snapshot_cache(self) -> _SceneSnapshotCache:
-        cache = getattr(self, "_scene_snapshot_cache", None)
-        if cache is None:
-            cache = _SceneSnapshotCache(ttl_sec=2.0)
-            self._scene_snapshot_cache = cache
-        return cache
 
     def _current_planner_robot_mode(self) -> str:
         snapshot = self._state_injector.snapshot()
@@ -1329,35 +1179,7 @@ class LLMGatewayNode(Node):
     def _tri_state_is_true(value: Any) -> bool:
         return int(getattr(value, "val", TriState.UNKNOWN)) == int(TriState.TRUE)
 
-    def _emit_trace(
-        self,
-        event: str,
-        phase: str,
-        level: str = "INFO",
-        summary: str = "",
-        command_id: str = "",
-        source: str = "",
-        **details,
-    ) -> None:
-        """Publish structured command trace event to /llm_debug."""
-        import json
-        import time
-        trace_payload = {
-            "t": "command_trace",
-            "ts": time.time(),
-            "cmd_id": command_id or getattr(self, "_active_command_id", ""),
-            "layer": "llm_gateway",
-            "phase": phase,
-            "event": event,
-            "level": level,
-            "summary": summary,
-            "details": details if details else None,
-        }
-        if source:
-            trace_payload["source"] = source
-        payload = json.dumps(trace_payload)
-        if hasattr(self, "_llm_debug_publisher") and self._llm_debug_publisher is not None:
-            self._llm_debug_publisher.publish(String(data=payload))
+
 
     def process_intent(self, intent_text: str) -> None:
         self.publish_status("received")
@@ -1983,6 +1805,9 @@ class LLMGatewayNode(Node):
                 return self.node._semantic_ir_for_runtime_skill(self.task_payload, name, args)
             def validate_and_dispatch(self, semantic_ir):
                 return self.node._validate_runtime_semantic_ir(semantic_ir)
+            def verify_grasp(self):
+                result = self.node._gripper_adapter.verify_grasp()
+                return RuntimeStepResult(success=result.ok, reason=result.error)
 
         _execute_skill = RuntimeSkillExecutor(_NodeDeps(self, task_payload))
 
@@ -2019,38 +1844,7 @@ class LLMGatewayNode(Node):
         response.dispatched_to_ros = report.success
         return response
 
-    def _runtime_event_sink(self, event: dict) -> None:
-        pub = getattr(self, "_task_events_pub", None)
-        if pub is None:
-            return
-        msg = String()
-        msg.data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
-        pub.publish(msg)
 
-    def _make_json_serializable(self, obj):
-        if isinstance(obj, dict):
-            return {k: self._make_json_serializable(v) for k, v in obj.items()}
-        elif isinstance(obj, (list, tuple, set)):
-            return [self._make_json_serializable(v) for v in obj]
-        elif hasattr(obj, "get_fields_and_field_types"):
-            try:
-                from rosidl_runtime_py import message_to_dict
-                return self._make_json_serializable(message_to_dict(obj))
-            except Exception:
-                pass
-        if hasattr(obj, "__slots__"):
-            return {slot: self._make_json_serializable(getattr(obj, slot)) for slot in obj.__slots__}
-        if isinstance(obj, (int, float, str, bool)) or obj is None:
-            return obj
-        return str(obj)
-
-    def _emit_task_event(self, category, event, detail, *, level="INFO", source="gateway", data=None):
-        import datetime
-        self._runtime_event_sink({
-            "ts": datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3],
-            "level": level, "source": source, "category": category,
-            "event": event, "detail": detail, "data": self._make_json_serializable(data) if data is not None else {},
-        })
 
     def _semantic_ir_for_runtime_skill(
         self,
@@ -2285,54 +2079,7 @@ class LLMGatewayNode(Node):
         response.dispatched_to_ros = False
         return response
 
-    def _cache_current_pose_snapshot(
-        self, reference_frame: str, pose: Any
-    ) -> Dict[str, Any]:
-        frame = str(reference_frame or "base_link")
-        pose_data = {
-            "position": {
-                "x": float(pose.position.x),
-                "y": float(pose.position.y),
-                "z": float(pose.position.z),
-            },
-            "orientation": {
-                "x": float(pose.orientation.x),
-                "y": float(pose.orientation.y),
-                "z": float(pose.orientation.z),
-                "w": float(pose.orientation.w),
-            },
-        }
-        if not hasattr(self, "_latest_pose_by_frame"):
-            self._latest_pose_by_frame = {}
-        self._latest_pose_by_frame[frame] = {
-            "pose": pose_data,
-            "timestamp": time.monotonic(),
-        }
-        return pose_data
 
-    def _get_cached_current_pose_snapshot(
-        self, reference_frame: str
-    ) -> Dict[str, Any] | None:
-        frame = str(reference_frame or "base_link")
-        cache = getattr(self, "_latest_pose_by_frame", {})
-        entry = cache.get(frame) if isinstance(cache, dict) else None
-        if not isinstance(entry, dict):
-            return None
-        timestamp = entry.get("timestamp")
-        pose = entry.get("pose")
-        ttl = float(getattr(self, "_current_pose_cache_ttl_sec", 5.0))
-        if not isinstance(timestamp, (int, float)) or time.monotonic() - timestamp > ttl:
-            return None
-        if not isinstance(pose, dict):
-            return None
-        position = pose.get("position")
-        orientation = pose.get("orientation")
-        if not isinstance(position, dict) or not isinstance(orientation, dict):
-            return None
-        return {
-            "position": dict(position),
-            "orientation": dict(orientation),
-        }
 
     def _request_current_pose_snapshot(
         self, reference_frame: str

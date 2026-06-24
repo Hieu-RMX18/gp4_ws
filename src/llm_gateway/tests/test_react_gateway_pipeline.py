@@ -288,7 +288,7 @@ def test_review_intent_returns_runtime_sentinel_for_hmi_visible_policy_metadata(
 
 
 def test_review_intent_factory_task_move_to_object_preserves_runtime_grounding_plan():
-    from llm_gateway.llm_gateway_node import _SceneSnapshotCache
+    from llm_gateway.scene_cache import _SceneSnapshotCache
 
     node, statuses, dispatched = _make_gateway_shell(
         {

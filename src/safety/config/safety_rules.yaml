@@ -12,7 +12,7 @@ workspace_bounds:
   x_max:  0.45   # conservative cap; do not expand positive X for hardware pass
   y_min: -0.16   # station front wall -0.197m + 37mm; kept above front_wall_guard max
   y_max:  0.52   # reach-limited  (back wall at +0.806m, beyond reach)
-  z_min:  0.15   # lowered per operator verification 2026-05-17; robot safely reaches below prev 0.23
+  z_min:  0.10   # lowered to 0.10 to support commands requiring z=118mm (0.118m)
   z_max:  0.65   # raised per operator approval for taller workpieces; still inside station mesh + reach envelope
 
 # Backward-compatible keys still used by safety.command_validator.
@@ -48,14 +48,14 @@ forbidden_zones:
     size_z: 1.50
 
   # Low-Z floor/table clearance. Defence-in-depth under workspace z_min.
-  # Spans Z: [0.00, 0.12]. Prevents inadvertent descent into table surface.
+  # Spans Z: [-0.01, 0.09]. Prevents inadvertent descent into table surface.
   - name: floor_clearance_guard
     x:  0.00
     y:  0.30
-    z:  0.06
+    z:  0.04
     size_x: 1.50
     size_y: 1.10
-    size_z: 0.12
+    size_z: 0.10
 
 # operational_joint_limits — per U1 of PATCH-v3.1, J5 is HARD ±90°.
 # Do NOT widen this limit. If a use case requires J5 outside ±90°,

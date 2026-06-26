@@ -24,9 +24,9 @@ _SHAPE_FLAT_R01_MAX = 0.3
 _COLOR_RANGES = [
     ("red", 0, 10, 80, 60),
     ("red", 170, 180, 80, 60),
-    ("orange", 10, 25, 80, 60),
-    ("yellow", 25, 35, 80, 60),
-    ("green", 35, 85, 50, 40),
+    ("orange", 10, 15, 80, 60),
+    ("yellow", 15, 40, 80, 60),
+    ("green", 40, 85, 50, 40),
     ("blue", 85, 130, 50, 40),
     ("purple", 130, 170, 50, 40),
 ]
@@ -506,6 +506,10 @@ def _semantic_class_id(
     # -- Non-sphere red objects → red_box (defensive: flat/unknown too) --
     if color == "red" and shape in {"box", "flat", "unknown"}:
         return "red_box"
+
+    # -- Non-sphere yellow objects → yellow_box -------------------------
+    if color == "yellow" and shape in {"box", "flat", "unknown"}:
+        return "yellow_box"
 
     # -- Non-sphere blue objects → blue_rectangle -----------------------
     if color == "blue" and shape in {"box", "flat", "unknown"}:

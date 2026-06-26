@@ -217,13 +217,11 @@ class SupervisorSequenceMixin:
                 working_payload, current_joints
             )
         except IntentResolutionError as exc:
-            return {
-                "parsed_steps": None,
-                "diagnostics": diagnostics,
-                "parse_error": str(exc),
-                "route_metadata": route_metadata,
-                "structured_intent": working_payload,
-            }
+            # If we cannot prepare a sequence, return None.
+            # This allows the caller (submit_intent) to fall back to single-command
+            # execution, which is required for FactoryTask runtime commands that
+            # contain skills the HMI Phase 1 adapter cannot unroll (e.g., observe, io_set).
+            return None
 
         if intent_name == "factory_task_runtime":
             runtime_plan = working_payload.get("metadata", {}).get("runtime_plan", {})
@@ -295,13 +293,10 @@ class SupervisorSequenceMixin:
                 )
                 diagnostics.extend(validation.diagnostics)
             except (IntentResolutionError, SequenceValidationError, ValueError) as exc:
-                return {
-                    "parsed_steps": None,
-                    "diagnostics": diagnostics,
-                    "parse_error": str(exc),
-                    "route_metadata": route_metadata,
-                    "structured_intent": working_payload,
-                }
+                # If we cannot unroll the FactoryTask for HMI display, we MUST return None
+                # so that submit_intent treats it as a single command. The llm_gateway TaskRuntime
+                # will execute it autonomously and natively handle observe, io_set, etc.
+                return None
             return {
                 "parsed_steps": parsed_steps,
                 "diagnostics": diagnostics,
@@ -501,6 +496,12 @@ class SupervisorSequenceMixin:
                     },
                 }
             return [semantic_ir]
+        if node_type == "observe":
+            return [{
+                "intent": "get_pose",
+                "reference_frame": "base_link",
+                "metadata": {"purpose": "observe", "region": str(runtime_plan.get("args", {}).get("region") or "")}
+            }]
         raise IntentResolutionError(
             f"FactoryTask runtime node '{node_type or '<empty>'}' is not supported by the HMI Phase 1 adapter."
         )
@@ -641,6 +642,13 @@ class SupervisorSequenceMixin:
             payload = {"intent": name}
             payload.update(args)
             return payload
+        if name in {"move_to_object", "pick_object", "place_object", "pick_and_place"}:
+            object_ref = str(args.get("object_ref") or args.get("object") or args.get("object_id") or "object").strip()
+            return {
+                "intent": "get_pose",
+                "reference_frame": "base_link",
+                "metadata": {"purpose": name, "target": object_ref}
+            }
         raise IntentResolutionError(
             f"FactoryTask runtime skill '{name or '<empty>'}' is not supported by the HMI Phase 1 adapter."
         )

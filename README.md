@@ -306,6 +306,7 @@ ros2 launch gp4_perception calibration_collect.launch.py serial:=943222073917
 ros2 launch gp4_perception camera.launch.py serial:=943222073917
 
 # Full perception stack (camera + unified visualization)
+source install/setup.bash
 ros2 launch gp4_perception perception_full.launch.py serial:=943222073917
 ```
 

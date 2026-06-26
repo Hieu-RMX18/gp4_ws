@@ -18,6 +18,29 @@ def test_velocity_scale_exceeds(safety_rules):
     assert "exceeds max allowed" in reason
 
 
+def test_move_rel_allows_higher_velocity(safety_rules):
+    """MOVE_REL may run at 0.09 (above the global 0.06 cap)."""
+    validator = CommandValidator(safety_rules)
+    cmd = json.dumps(
+        {"primitive_type": "MOVE_REL", "delta_x": 0.0, "delta_y": 0.0,
+         "delta_z": -0.05, "velocity_scale": 0.09}
+    )
+    valid, reason = validator.validate(cmd)
+    assert valid is True, reason
+
+
+def test_move_rel_velocity_still_capped(safety_rules):
+    """MOVE_REL above its own cap (0.09) is rejected."""
+    validator = CommandValidator(safety_rules)
+    cmd = json.dumps(
+        {"primitive_type": "MOVE_REL", "delta_x": 0.0, "delta_y": 0.0,
+         "delta_z": -0.05, "velocity_scale": 0.10}
+    )
+    valid, reason = validator.validate(cmd)
+    assert valid is False
+    assert "exceeds max allowed" in reason
+
+
 def test_malformed_json(safety_rules):
     validator = CommandValidator(safety_rules)
     cmd = "{invalid_json:"

@@ -13,9 +13,11 @@
 namespace motion_core {
 ExecuteMotionActionSupport::ExecuteMotionActionSupport(
     rclcpp::Logger logger, const double max_velocity_scale,
-    const double max_acceleration_scale)
+    const double max_acceleration_scale,
+    const double max_move_rel_velocity_scale)
     : logger_(std::move(logger)), max_velocity_scale_(max_velocity_scale),
-      max_acceleration_scale_(max_acceleration_scale) {}
+      max_acceleration_scale_(max_acceleration_scale),
+      max_move_rel_velocity_scale_(max_move_rel_velocity_scale) {}
 
 void ExecuteMotionActionSupport::cleanup_finished_workers() {
   std::lock_guard<std::mutex> lock(worker_mutex_);
@@ -76,9 +78,13 @@ rclcpp_action::GoalResponse ExecuteMotionActionSupport::handle_goal(
     return rclcpp_action::GoalResponse::REJECT;
   }
 
-  if (goal->velocity_scale > max_velocity_scale_) {
+  // MOVE_REL (grasp descend/lift) may run slightly faster than the global cap.
+  const double velocity_cap = (primitive == "MOVE_REL")
+                                  ? max_move_rel_velocity_scale_
+                                  : max_velocity_scale_;
+  if (goal->velocity_scale > velocity_cap) {
     RCLCPP_WARN(logger_, "Rejecting goal: velocity_scale %.3f exceeds %.3f.",
-                goal->velocity_scale, max_velocity_scale_);
+                goal->velocity_scale, velocity_cap);
     return rclcpp_action::GoalResponse::REJECT;
   }
 

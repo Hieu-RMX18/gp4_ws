@@ -1,29 +1,18 @@
-import { useEffect, useRef, useState, useMemo } from 'react';
+import { useRef, useState, useMemo } from 'react';
 import { formatTimestamp } from './derive';
-import type { LogEntryView } from './types';
 import type { TaskEvent } from '../../../shared/contracts';
 
 interface SystemLogProps {
-  logEntries: LogEntryView[];
   taskEvents: TaskEvent[];
   onReconnect: () => void;
 }
 
-export function SystemLog({ logEntries, taskEvents, onReconnect }: SystemLogProps) {
-  const [activeTab, setActiveTab] = useState<'pipeline' | 'system'>('pipeline');
+export function SystemLog({ taskEvents, onReconnect }: SystemLogProps) {
   const [levelFilter, setLevelFilter] = useState<'ALL' | 'INFO' | 'WARN' | 'ERR' | 'DEBUG'>('ALL');
   const [searchText, setSearchText] = useState('');
   const [expandedEventIdx, setExpandedEventIdx] = useState<number | null>(null);
 
-  const pipelineRef = useRef<HTMLDivElement>(null);
   const systemRef = useRef<HTMLDivElement>(null);
-
-  // Auto-scroll pipeline logs to bottom
-  useEffect(() => {
-    if (activeTab === 'pipeline' && pipelineRef.current) {
-      pipelineRef.current.scrollTop = pipelineRef.current.scrollHeight;
-    }
-  }, [logEntries.length, activeTab]);
 
   const filteredEvents = useMemo(() => {
     return taskEvents.filter((ev) => {
@@ -57,36 +46,7 @@ export function SystemLog({ logEntries, taskEvents, onReconnect }: SystemLogProp
 
   return (
     <div className="system-log-container">
-      <div className="log-tabs">
-        <button
-          type="button"
-          className={`log-tab-btn ${activeTab === 'pipeline' ? 'active' : ''}`}
-          onClick={() => setActiveTab('pipeline')}
-        >
-          Pipeline Logs
-        </button>
-        <button
-          type="button"
-          className={`log-tab-btn ${activeTab === 'system' ? 'active' : ''}`}
-          onClick={() => setActiveTab('system')}
-        >
-          System Events ({taskEvents.length})
-        </button>
-      </div>
-
-      {activeTab === 'pipeline' ? (
-        <div className="log-area" ref={pipelineRef}>
-          {logEntries.map((entry) => (
-            <div key={entry.id} className="log-entry">
-              <span className="log-time">{entry.time}</span>
-              <span className={`log-level ${entry.level}`}>{entry.level.toUpperCase()}</span>
-              {entry.source && <span className="log-source">{entry.source}</span>}
-              <span className="log-msg">{entry.message}</span>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="system-events-wrap">
+      <div className="system-events-wrap">
           <div className="log-filters">
             <select
               value={levelFilter}
@@ -158,7 +118,6 @@ export function SystemLog({ logEntries, taskEvents, onReconnect }: SystemLogProp
             )}
           </div>
         </div>
-      )}
     </div>
   );
 }

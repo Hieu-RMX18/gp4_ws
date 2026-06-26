@@ -29,7 +29,7 @@ struct MoveRelLimits {
   static constexpr double kYMin =
       -0.16; // front wall -0.197 + 37mm; above front_wall_guard max
   static constexpr double kYMax = 0.52; // reach-limited
-  static constexpr double kZMin = 0.15; // lowered per operator verification 2026-05-17
+  static constexpr double kZMin = 0.10; // sync with safety_rules.yaml z_min=0.10 (118mm Z support); floor_clearance_guard still blocks z<0.12
   static constexpr double kZMax =
       0.65; // raised per operator approval for taller workpieces
 

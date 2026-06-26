@@ -22,7 +22,8 @@ public:
       std::function<void(const std::shared_ptr<GoalHandleExecuteMotion> &)>;
 
   ExecuteMotionActionSupport(rclcpp::Logger logger, double max_velocity_scale,
-                             double max_acceleration_scale);
+                             double max_acceleration_scale,
+                             double max_move_rel_velocity_scale);
 
   void cleanup_finished_workers();
   void wait_for_workers();
@@ -48,6 +49,7 @@ private:
   rclcpp::Logger logger_;
   double max_velocity_scale_;
   double max_acceleration_scale_;
+  double max_move_rel_velocity_scale_;
   mutable std::mutex worker_mutex_;
   std::vector<std::future<void>> worker_futures_;
 };

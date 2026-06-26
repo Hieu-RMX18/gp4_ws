@@ -498,13 +498,17 @@ class IntentRouter(DrawRouterMixin):
 
                 command = self._base_command("PTP", payload)
                 command["reference_frame"] = str(region_data.get("frame_id", _FRAME_BASE_LINK))
-                command["target_pose"] = {
-                    "position": {
-                        "x": float(center.get("x", 0.0)),
-                        "y": float(center.get("y", 0.0)),
-                        "z": safe_z
-                    }
-                }
+                command["target_pose"] = self._resolve_target_pose(
+                    target_pose={
+                        "position": {
+                            "x": float(center.get("x", 0.0)),
+                            "y": float(center.get("y", 0.0)),
+                            "z": safe_z
+                        }
+                    },
+                    orientation_preset="tool-down",
+                    keep_current_orientation=False
+                )
                 command["planner_id"] = str(command.get("planner_id") or "PILZ_PTP")
                 return command
 

@@ -77,11 +77,9 @@ ament_target_dependencies(${PROJECT_NAME}_components
 target_link_libraries(${PROJECT_NAME}_components
   yaml-cpp
 )
-
 add_executable(motion_core_node
   src/node/motion_core_node.cpp
 )
-
 target_link_libraries(motion_core_node
   ${PROJECT_NAME}_components
 )

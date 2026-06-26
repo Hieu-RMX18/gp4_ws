@@ -127,8 +127,9 @@ bool WristFlipGuard::check_wrist_sign_flips(
         }
       }
 
-      // Skip near-zero deltas (no motion)
-      if (std::abs(delta) < 1e-6) {
+      // Skip near-zero deltas (no motion) - increased from 1e-6 to 0.01 rad (~0.57 deg)
+      // to avoid counting numerical IK jitter as sign flips
+      if (std::abs(delta) < 0.01) {
         continue;
       }
 

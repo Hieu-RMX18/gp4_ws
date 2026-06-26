@@ -47,6 +47,8 @@ _QUICK_COMMAND_STATIC_MAP: dict[str, dict[str, Any]] = {
             {"intent": "go_home"},
         ],
     },
+    "air_on": {"intent": "io_set", "io_address": 10017, "io_value": 1},
+    "air_off": {"intent": "io_set", "io_address": 10017, "io_value": 0},
 }
 
 

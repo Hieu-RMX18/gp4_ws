@@ -30,6 +30,7 @@ class _Track:
     centroid: np.ndarray
     hits: deque = field(default_factory=deque)
     last_detection: Any | None = None
+    user_data: Any | None = None
     missed_frames: int = 0
     confirmed: bool = False
 
@@ -61,12 +62,12 @@ class TemporalTracker:
         self._miss_tolerance = int(miss_tolerance_frames)
         self._tracks: list[_Track] = []
 
-    def update(self, detections: list[Any]) -> list[tuple[Any, float]]:
-        """Advance one frame; return ``(detection, temporal_score)`` for
+    def update(self, items: list[tuple[Any, Any]]) -> list[tuple[Any, float, Any]]:
+        """Advance one frame; return ``(detection, temporal_score, user_data)`` for
         confirmed tracks, including those coasting through missed frames."""
         matched_tracks: set[int] = set()
 
-        for det in detections:
+        for det, user_data in items:
             cls = _class_id(det)
             cen = _centroid(det)
             track = self._match(cls, cen, matched_tracks)
@@ -75,6 +76,7 @@ class TemporalTracker:
                 self._tracks.append(track)
             track.centroid = cen
             track.last_detection = det
+            track.user_data = user_data
             track.missed_frames = 0
             track.hits.append(1)
             matched_tracks.add(id(track))
@@ -105,10 +107,10 @@ class TemporalTracker:
         ]
 
         # Emit all confirmed tracks that have a detection to report.
-        results: list[tuple[Any, float]] = []
+        results: list[tuple[Any, float, Any]] = []
         for track in self._tracks:
             if track.confirmed and track.last_detection is not None:
-                results.append((track.last_detection, track.score(self._window)))
+                results.append((track.last_detection, track.score(self._window), track.user_data))
         return results
 
     def _match(

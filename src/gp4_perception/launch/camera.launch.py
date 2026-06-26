@@ -129,7 +129,8 @@ def generate_launch_description() -> LaunchDescription:
                         "enable_sync": enable_sync,
                         # Point cloud
                         "pointcloud.enable": pointcloud,
-                        "pointcloud.stream_profile": 2,
+                        "pointcloud.stream_filter": pointcloud_stream_filter,
+                        "pointcloud.stream_index_filter": pointcloud_stream_index_filter,
                         # Post-processing filters
                         "spatial_filter.enable": spatial_filter,
                         "temporal_filter.enable": temporal_filter,

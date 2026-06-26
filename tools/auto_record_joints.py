@@ -23,7 +23,7 @@ class AutoRecorder(Node):
         self.idle_start_time = None
         self.vel_threshold = 0.005 # Ngưỡng vận tốc để nhận diện chuyển động (rad/s)
         self.stop_debounce_time = 0.5 # Thời gian chờ sau khi dừng để đóng file (giây)
-        self.joint_idx = 0 # Mặc định là khớp 0 (sẽ tự tìm khớp J1)
+        self.joint_indices = [] # Sẽ tự động tìm cả 6 khớp
         
         # Thư mục lưu dữ liệu
         self.output_dir = 'joint_records'
@@ -36,8 +36,8 @@ class AutoRecorder(Node):
     def reset_data(self):
         self.data = {
             'time': [],
-            'pos': [],
-            'vel': []
+            'pos': [[] for _ in range(6)],
+            'vel': [[] for _ in range(6)]
         }
         self.start_time = None
 
@@ -50,25 +50,32 @@ class AutoRecorder(Node):
             max_vel = max([abs(v) for v in vels])
             is_moving = max_vel > self.vel_threshold
             
-            # Tự động map khớp J1 (khớp đầu tiên)
-            if 'joint_1_s' in msg.name:
-                self.joint_idx = msg.name.index('joint_1_s')
-            elif 'group_1/joint_1' in msg.name:
-                self.joint_idx = msg.name.index('group_1/joint_1')
+            # Tự động map 6 khớp
+            if len(self.joint_indices) == 0:
+                if 'joint_1_s' in msg.name:
+                    names = ['joint_1_s', 'joint_2_l', 'joint_3_u', 'joint_4_r', 'joint_5_b', 'joint_6_t']
+                    self.joint_indices = [msg.name.index(n) for n in names if n in msg.name]
+                elif 'group_1/joint_1' in msg.name:
+                    names = [f'group_1/joint_{i}' for i in range(1, 7)]
+                    self.joint_indices = [msg.name.index(n) for n in names if n in msg.name]
+                else:
+                    self.joint_indices = list(range(min(6, len(msg.name))))
             
             # Bắt đầu di chuyển -> Ghi dữ liệu
             if not self.is_recording and is_moving:
                 self.is_recording = True
                 self.reset_data()
                 self.start_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-                self.get_logger().info('🟢 Robot bắt đầu chạy! Đang ghi dữ liệu...')
+                self.get_logger().info('🟢 Robot bắt đầu chạy! Đang ghi dữ liệu 6 khớp...')
                 
             # Đang trong quá trình di chuyển
             if self.is_recording:
                 current_t = (msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9) - self.start_time
                 self.data['time'].append(current_t)
-                self.data['pos'].append(msg.position[self.joint_idx])
-                self.data['vel'].append(msg.velocity[self.joint_idx])
+                for i, idx in enumerate(self.joint_indices):
+                    if i < 6:
+                        self.data['pos'][i].append(msg.position[idx])
+                        self.data['vel'][i].append(msg.velocity[idx])
                 
                 # Cảm nhận robot đã dừng
                 if not is_moving:
@@ -92,64 +99,81 @@ class AutoRecorder(Node):
             return
             
         timestamp = datetime.now().strftime('%H%M%S')
+        num_joints = min(6, len(self.joint_indices))
         
-        # Tính gia tốc bằng đạo hàm (do joint_states thường không có trường acceleration)
-        acc = np.gradient(self.data['vel'], self.data['time'])
-        
-        # Lọc nhiễu nhẹ cho gia tốc (tuỳ chọn) bằng numpy
-        window_acc = 5
-        acc_smooth = np.convolve(acc, np.ones(window_acc)/window_acc, mode='same')
-        
-        # Tính Jerk (đạo hàm của gia tốc)
-        jerk = np.gradient(acc_smooth, self.data['time'])
-        
-        # Lọc nhiễu cho Jerk để đồ thị mượt mà dễ so sánh hơn
-        window_jerk = 7
-        jerk_smooth = np.convolve(jerk, np.ones(window_jerk)/window_jerk, mode='same')
-        
-        # Tạo dictionary chứa dữ liệu để truyền vào plot và ghi csv
         df = {
             'time': self.data['time'],
-            'pos': self.data['pos'],
-            'vel': self.data['vel'],
-            'acc': acc,
-            'acc_smooth': acc_smooth,
-            'jerk': jerk,
-            'jerk_smooth': jerk_smooth
+            'pos': [], 'vel': [], 'acc': [], 'acc_smooth': [], 'jerk': [], 'jerk_smooth': []
         }
+        
+        window_acc = 5
+        window_jerk = 7
+
+        for i in range(num_joints):
+            vel = self.data['vel'][i]
+            pos = self.data['pos'][i]
+            
+            # Tính gia tốc bằng đạo hàm
+            acc = np.gradient(vel, self.data['time'])
+            # Lọc nhiễu nhẹ cho gia tốc bằng numpy
+            acc_smooth = np.convolve(acc, np.ones(window_acc)/window_acc, mode='same')
+            
+            # Tính Jerk (đạo hàm của gia tốc)
+            jerk = np.gradient(acc_smooth, self.data['time'])
+            # Lọc nhiễu cho Jerk
+            jerk_smooth = np.convolve(jerk, np.ones(window_jerk)/window_jerk, mode='same')
+            
+            df['pos'].append(pos)
+            df['vel'].append(vel)
+            df['acc'].append(acc)
+            df['acc_smooth'].append(acc_smooth)
+            df['jerk'].append(jerk)
+            df['jerk_smooth'].append(jerk_smooth)
         
         # 1. Lưu ra CSV
         csv_path = os.path.join(self.output_dir, f'record_{timestamp}.csv')
         with open(csv_path, 'w', newline='') as f:
             writer = csv.writer(f)
-            writer.writerow(['time', 'pos', 'vel', 'acc', 'acc_smooth', 'jerk', 'jerk_smooth'])
-            for i in range(len(df['time'])):
-                writer.writerow([df['time'][i], df['pos'][i], df['vel'][i], df['acc'][i], df['acc_smooth'][i], df['jerk'][i], df['jerk_smooth'][i]])
+            headers = ['time']
+            for i in range(num_joints):
+                headers.extend([f'pos_J{i+1}', f'vel_J{i+1}', f'acc_J{i+1}', f'acc_smooth_J{i+1}', f'jerk_J{i+1}', f'jerk_smooth_J{i+1}'])
+            writer.writerow(headers)
+            
+            for k in range(len(df['time'])):
+                row = [df['time'][k]]
+                for i in range(num_joints):
+                    row.extend([
+                        df['pos'][i][k], df['vel'][i][k], df['acc'][i][k], 
+                        df['acc_smooth'][i][k], df['jerk'][i][k], df['jerk_smooth'][i][k]
+                    ])
+                writer.writerow(row)
                 
         self.get_logger().info(f'✅ Đã lưu file CSV: {csv_path}')
         
         # 2. Vẽ đồ thị tự động
-        self.plot_data(df, timestamp)
+        self.plot_data(df, timestamp, num_joints)
         
-    def plot_data(self, df, timestamp):
+    def plot_data(self, df, timestamp, num_joints):
         plt.rcParams.update({'font.size': 12, 'font.family': 'serif'})
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
         
-        # Vẽ đường gia tốc thô (nét mờ) và đã lọc nhiễu (nét đậm)
-        ax1.plot(df['time'], df['acc'], color='gray', linewidth=1, alpha=0.5, label='Gia tốc thô (Đạo hàm)')
-        ax1.plot(df['time'], df['acc_smooth'], color='#e74c3c', linewidth=2, label='Gia tốc (Smooth)')
-        ax1.set_title(f'So sánh Gia tốc & Jerk Khớp J1 (Mã test: {timestamp})', fontsize=13, pad=15, fontweight='bold')
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+        
+        for i in range(num_joints):
+            c = colors[i % len(colors)]
+            ax1.plot(df['time'], df['acc_smooth'][i], color=c, linewidth=2, label=f'J{i+1}')
+            ax2.plot(df['time'], df['jerk_smooth'][i], color=c, linewidth=2, label=f'J{i+1}')
+            
+        ax1.set_title(f'So sánh Gia tốc 6 Khớp (Mã test: {timestamp})', fontsize=13, pad=15, fontweight='bold')
         ax1.set_ylabel('Gia tốc (rad/s²)')
         ax1.grid(True, linestyle=':', alpha=0.7)
-        ax1.legend(loc='upper right')
+        ax1.legend(loc='upper right', ncol=3)
         
-        # Vẽ đường Jerk thô và đã lọc nhiễu
-        ax2.plot(df['time'], df['jerk'], color='gray', linewidth=1, alpha=0.5, label='Jerk thô (Đạo hàm)')
-        ax2.plot(df['time'], df['jerk_smooth'], color='#3498db', linewidth=2, label='Jerk (Smooth)')
+        ax2.set_title(f'So sánh Jerk 6 Khớp', fontsize=13, pad=15, fontweight='bold')
         ax2.set_xlabel('Thời gian (s)')
         ax2.set_ylabel('Jerk (rad/s³)')
         ax2.grid(True, linestyle=':', alpha=0.7)
-        ax2.legend(loc='upper right')
+        ax2.legend(loc='upper right', ncol=3)
         
         plt.tight_layout()
         img_path = os.path.join(self.output_dir, f'plot_{timestamp}.png')

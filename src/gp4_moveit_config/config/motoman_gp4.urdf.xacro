@@ -11,7 +11,7 @@
     <xacro:arg name="controller_port"         default="50240" />
 
     <!-- Import motoman_gp4 urdf file -->
-    <xacro:include filename="$(find motoman_gp4_support)/urdf/gp4.urdf" />
+    <xacro:include filename="$(find motoman_gp4_support)/urdf/gp4.xacro" />
 
     <!-- TCP Link configuration: 11cm (0.11m) from tool0 -->
     <link name="tcp_link" />

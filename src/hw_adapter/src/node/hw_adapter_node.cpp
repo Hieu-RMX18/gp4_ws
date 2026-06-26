@@ -900,7 +900,8 @@ void HwAdapterNode::handle_io_set(const std::shared_ptr<IoSet::Request> request,
     RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
     return;
   }
-  auto write_client = create_client<WriteSingleIO>(write_svc_name);
+  auto temp_node = std::make_shared<rclcpp::Node>("io_set_temp_client");
+  auto write_client = temp_node->create_client<WriteSingleIO>(write_svc_name);
 
   // If the parameter was empty or the service isn't ready, fail gracefully
   if (!write_client ||
@@ -917,7 +918,8 @@ void HwAdapterNode::handle_io_set(const std::shared_ptr<IoSet::Request> request,
   io_request->value = request->value;
 
   auto future = write_client->async_send_request(io_request);
-  if (future.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+  auto spin_status = rclcpp::spin_until_future_complete(temp_node, future, std::chrono::seconds(5));
+  if (spin_status != rclcpp::FutureReturnCode::SUCCESS) {
     response->success = false;
     response->message = "IO_SET timed out waiting for WriteSingleIO response";
     RCLCPP_WARN(get_logger(), "%s", response->message.c_str());

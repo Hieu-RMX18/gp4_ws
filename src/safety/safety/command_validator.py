@@ -28,6 +28,11 @@ class CommandValidator:
             "max_acceleration_scale",
             legacy_limits.get("max_acceleration_scale", _DEFAULT_MAX_SCALE),
         )
+        # MOVE_REL may use a slightly higher velocity cap than the global one;
+        # falls back to the global cap when unset.
+        self.max_move_rel_velocity = motion_limits.get(
+            "max_move_rel_velocity_scale", self.max_velocity
+        )
 
     def validate(self, command_json: str) -> tuple[bool, str]:
         if not command_json:
@@ -59,10 +64,15 @@ class CommandValidator:
             except (ValueError, TypeError):
                 return False, "Invalid velocity_scale format"
 
-            if velocity_scale > self.max_velocity:
+            velocity_cap = (
+                self.max_move_rel_velocity
+                if primitive_type == "MOVE_REL"
+                else self.max_velocity
+            )
+            if velocity_scale > velocity_cap:
                 return (
                     False,
-                    f"velocity_scale {velocity_scale} exceeds max allowed {self.max_velocity}",
+                    f"velocity_scale {velocity_scale} exceeds max allowed {velocity_cap}",
                 )
 
             if velocity_scale <= 0.0:

@@ -24,6 +24,9 @@ joint_limits_override:
 motion_limits:
   max_velocity_scale: 0.06
   max_acceleration_scale: 0.06
+  # MOVE_REL (grasp descend/lift nudges) may run slightly faster than the global
+  # cap; everything else stays at 0.06.
+  max_move_rel_velocity_scale: 0.09
   max_move_rel_translation: 0.21
 
 forbidden_zones:

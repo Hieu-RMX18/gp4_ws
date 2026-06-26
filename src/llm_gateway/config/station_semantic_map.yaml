@@ -7,21 +7,21 @@ regions:
     frame_id: base_link
     geometry:
       type: box
-      center: {x: -0.008, y: 0.368, z: 0.125}
-      size: {x: 0.580, y: 0.075, z: 0.130}
+      center: { x: -0.008, y: 0.368, z: 0.150 }
+      size: { x: 0.580, y: 0.075, z: 0.130 }
     aliases: ["băng tải", "băng chuyền", "bang tai", "bang chuyen", "conveyor"]
     zones:
       drop_zone:
         inset_m: 0.04
         default_clearance_m: 0.10
       inspect_zone:
-        offset: {x: 0.0, y: 0.0, z: 0.16}
+        offset: { x: 0.0, y: 0.0, z: 0.16 }
   fixture:
     frame_id: base_link
     geometry:
       type: box
-      center: {x: 0.281, y: 0.182, z: 0.128}
-      size: {x: 0.225, y: 0.120, z: 0.120}
+      center: { x: 0.281, y: 0.182, z: 0.150 }
+      size: { x: 0.225, y: 0.120, z: 0.120 }
     aliases: ["gá phôi", "ga phoi", "jig", "fixture"]
     zones:
       grasp_zone:
@@ -30,4 +30,26 @@ regions:
 objects:
   white_workpiece:
     class_id: white_workpiece
-    aliases: ["phoi trang", "white workpiece", "white_workpiece"]
+    aliases:
+      [
+        "phoi trang",
+        "white workpiece",
+        "white_workpiece",
+        "vật trắng",
+        "vat trang",
+        "phôi trắng",
+      ]
+  yellow_box:
+    class_id: yellow_box
+    aliases:
+      [
+        "hộp vàng",
+        "hop vang",
+        "yellow box",
+        "yellow_box",
+        "vật vàng",
+        "vat vang",
+      ]
+  red_box:
+    class_id: red_box
+    aliases: ["hộp đỏ", "hop do", "red box", "red_box", "vật đỏ", "vat do"]

@@ -139,7 +139,7 @@ class SemanticValidator:
     _DEFAULT_BOUNDS = {
         "x": (-0.45, 0.45),
         "y": (-0.16, 0.52),
-        "z": (0.15, 0.65),
+        "z": (0.10, 0.65),
     }
 
     def __init__(self, safety_rules: dict | None = None):

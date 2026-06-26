@@ -14,4 +14,9 @@ install(
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(
+  PROGRAMS scripts/tcp_path_tracker.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_package()

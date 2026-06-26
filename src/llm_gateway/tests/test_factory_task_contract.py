@@ -169,6 +169,41 @@ def test_compiler_rejects_object_motion_when_world_model_has_no_pose() -> None:
     with pytest.raises(FactoryTaskError, match="world model has no grounded pose"):
         TaskCompiler(world_model=WorldModel()).compile(task)
 
+def test_move_to_object_hovers_above_with_downward_tool() -> None:
+    # A grounded perception pose carries an identity orientation; move_to_object
+    # must not hand that to IK. It must hover above (z + clearance) with the tool
+    # pointing down, matching pick_object's reachable approach pose.
+    task = parse_factory_task(
+        {
+            "task_type": "factory_task",
+            "version": FACTORY_TASK_VERSION,
+            "task_id": "move-to-red-box",
+            "root": {
+                "type": "skill",
+                "name": "move_to_object",
+                "args": {"object_ref": "red_box"},
+            },
+        }
+    )
+    world_model = WorldModel(
+        objects={
+            "red_box": {
+                "pose": {
+                    "position": {"x": 0.30, "y": 0.10, "z": 0.05},
+                    "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                }
+            }
+        }
+    )
+
+    compiled = TaskCompiler(world_model=world_model).compile(task)
+
+    assert compiled.semantic_ir["intent"] == "absolute_move_ptp"
+    target = compiled.semantic_ir["target_pose"]
+    assert target["position"] == {"x": 0.30, "y": 0.10, "z": 0.05 + 0.08}
+    assert target["orientation"] == {"x": 1.0, "y": 0.0, "z": 0.0, "w": 0.0}
+
+
 def test_compiler_rejects_runtime_control_nodes_in_static_review_path() -> None:
     task = parse_factory_task(
         {

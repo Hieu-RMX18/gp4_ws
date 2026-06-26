@@ -228,6 +228,10 @@ def generate_launch_description():
                 # Real hardware: MotoROS2 FJT action
                 "follow_joint_trajectory_action": "/yaskawa/follow_joint_trajectory",
                 "dispatch_action_name": "/hw_adapter/dispatch_trajectory",
+                "read_single_io_service": "/yaskawa/read_single_io",
+                "write_single_io_service": "/yaskawa/write_single_io",
+                "tool_io_address": 10017,
+                "tool_poll_period_ms": 250,
             }
         ],
         additional_env={
@@ -267,6 +271,10 @@ def generate_launch_description():
                 "max_velocity_scale": _motion_limits.get("max_velocity_scale", 0.06),
                 "max_acceleration_scale": _motion_limits.get(
                     "max_acceleration_scale", 0.06
+                ),
+                "max_move_rel_velocity_scale": _motion_limits.get(
+                    "max_move_rel_velocity_scale",
+                    _motion_limits.get("max_velocity_scale", 0.06),
                 ),
             },
         ],

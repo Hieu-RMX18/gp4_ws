@@ -97,11 +97,12 @@ except Exception:  # pragma: no cover
 # sim execution fails closed less often on conservative profiles.
 DEFAULT_MOTION_VELOCITY_SCALE = 0.06
 DEFAULT_MOTION_ACCELERATION_SCALE = 0.06
-DEFAULT_VALIDATE_TIMEOUT_SEC = 5.0
+DEFAULT_VALIDATE_TIMEOUT_SEC = 60.0
 DEFAULT_REVIEW_INTENT_READY_TIMEOUT_SEC = 1.0
 DEFAULT_REVIEW_INTENT_TIMEOUT_SEC = 35.0
-DEFAULT_ACTION_WAIT_TIMEOUT_SEC = 5.0
+DEFAULT_ACTION_WAIT_TIMEOUT_SEC = 60.0
 DEFAULT_EXECUTION_TIMEOUT_SEC = 120.0
+DEFAULT_CONFIRM_EXECUTION_TIMEOUT_SEC = 300.0
 LOGGER = logging.getLogger("uvicorn.error")
 
 
@@ -622,7 +623,7 @@ class WorkspaceRosAdapter(
         try:
             response = self._wait_for_future(
                 self._confirm_execution_client.call_async(request),
-                DEFAULT_VALIDATE_TIMEOUT_SEC,
+                DEFAULT_CONFIRM_EXECUTION_TIMEOUT_SEC,
             )
         except Exception as exc:
             return {"accepted": False, "reason": str(exc)}

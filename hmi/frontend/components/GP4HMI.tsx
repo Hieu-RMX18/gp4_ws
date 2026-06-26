@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { UseGp4BridgeResult } from '../hooks/useGP4Bridge';
-import type { ActionFeedbackView, LogEntryView, StatusPillView, TopicView } from './gp4-hmi/types';
+import type { ActionFeedbackView, StatusPillView, TopicView } from './gp4-hmi/types';
 import {
-  buildReviewLogEntries,
   buildTraceSteps,
   formatClock,
   formatTimestamp,
@@ -11,9 +10,7 @@ import {
   JOINT_ORDER,
   parseBackendTimestamp,
   resolveDeclineReason,
-  shouldShowMessageInSystemLog,
   summarizeMutationResponse,
-  toLogLevel,
   toneFromConnectionHealth,
   toneFromLifecycle,
   toneFromMode,
@@ -171,26 +168,6 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
       fillWidth: c.health === 'healthy' ? 100 : c.health === 'degraded' ? 40 : 10,
     }));
   }, [state.connections, state.telemetrySources]);
-
-  const logEntries = useMemo<LogEntryView[]>(() => {
-    const reviewEntries = buildReviewLogEntries(activeReviewJob, blockingReasons, declineReason, state.generatedAt);
-    const messagesToLog = clearChatTimestamp
-      ? state.messages.filter((m) => {
-          const parsed = parseBackendTimestamp(m.timestamp);
-          return parsed ? parsed.getTime() > new Date(clearChatTimestamp).getTime() : true;
-        })
-      : state.messages;
-    const entries: LogEntryView[] = messagesToLog
-      .filter(shouldShowMessageInSystemLog)
-      .slice(-25)
-      .map((m) => ({ id: m.id, time: formatTimestamp(m.timestamp), level: toLogLevel(m), message: m.text, source: m.source ?? null }));
-    entries.unshift(...reviewEntries);
-    if (actionFeedback) {
-      entries.unshift({ id: actionFeedback.id, time: formatTimestamp(actionFeedback.timestamp), level: actionFeedback.level, message: actionFeedback.message, source: null });
-    }
-    if (entries.length > 0) return entries.slice(0, 30);
-    return [{ id: 'runtime-bootstrap', time: formatTimestamp(state.generatedAt), level: state.runtime.blocking ? 'warn' as const : 'info' as const, message: state.runtime.statusText, source: null }];
-  }, [actionFeedback, activeReviewJob, blockingReasons, declineReason, state.generatedAt, state.messages, state.runtime.blocking, state.runtime.statusText, clearChatTimestamp]);
 
   // ── Action handlers ─────────────────────────────────────────────────────
 
@@ -445,7 +422,6 @@ export function GP4HMI({ bridge }: GP4HMIProps) {
             onRelease={() => void handleReleaseLease()}
           />
           <SystemLog
-            logEntries={logEntries}
             taskEvents={taskEvents}
             onReconnect={reconnect}
           />

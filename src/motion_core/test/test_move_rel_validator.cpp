@@ -160,7 +160,7 @@ TEST(MoveRelValidatorTest, RejectsTargetBelowZMin) {
   geometry_msgs::msg::Pose target;
   target.position.x = 0.0;
   target.position.y = 0.0;
-  target.position.z = 0.10; // below kZMin = 0.15
+  target.position.z = 0.09; // below kZMin = 0.10
 
   std::string reason;
   EXPECT_FALSE(validate_move_rel_target_bounds(target, reason));
@@ -189,17 +189,18 @@ TEST(MoveRelValidatorTest, RejectsTargetBelowYMin) {
   EXPECT_NE(reason.find("outside workspace bounds"), std::string::npos);
 }
 
-TEST(MoveRelValidatorTest, RejectsTargetBelowZMinBeforeFloorClearanceGuard) {
-  // floor_clearance_guard Z=[0.0, 0.12] is entirely below workspace z_min=0.15.
-  // This test verifies the point is rejected by workspace bounds.
+TEST(MoveRelValidatorTest, RejectsTargetInFloorClearanceGuard) {
+  // With workspace z_min=0.10, floor_clearance_guard Z=[0.0, 0.12] now overlaps
+  // the in-bounds band Z=[0.10, 0.12]; targets there must be rejected by the
+  // floor guard (defense-in-depth), not by workspace bounds.
   geometry_msgs::msg::Pose target;
   target.position.x = 0.10;
   target.position.y = 0.05;
-  target.position.z = 0.12;
+  target.position.z = 0.11;
 
   std::string reason;
   EXPECT_FALSE(validate_move_rel_target_bounds(target, reason));
-  EXPECT_NE(reason.find("outside workspace bounds"), std::string::npos);
+  EXPECT_NE(reason.find("floor_clearance_guard"), std::string::npos);
 }
 
 TEST(MoveRelValidatorTest, RejectsTargetBelowXMin) {

@@ -138,7 +138,7 @@ properties:
   velocity_scale:
     type: number
     minimum: 0.01
-    maximum: 0.06
+    maximum: 0.09   # coarse bound; per-primitive policy enforced by safety (MOVE_REL=0.09, others 0.06)
   acceleration_scale:
     type: number
     minimum: 0.01
@@ -277,7 +277,7 @@ properties:
         velocity_scale:
           type: number
           minimum: 0.01
-          maximum: 0.06
+          maximum: 0.09   # coarse bound; per-primitive policy enforced by safety (MOVE_REL=0.09, others 0.06)
         acceleration_scale:
           type: number
           minimum: 0.01

@@ -48,4 +48,16 @@ export const INTENT_TEMPLATES: IntentTemplate[] = [
     title: 'Get pose / Lấy pose',
     subtitle: 'Query current TCP pose · Truy vấn pose TCP hiện tại',
   },
+  {
+    id: 'air_on',
+    intent: 'bật khí nén',
+    title: 'Air ON / Bật khí nén',
+    subtitle: 'Turn on compressed air · Bật khí nén',
+  },
+  {
+    id: 'air_off',
+    intent: 'tắt khí nén',
+    title: 'Air OFF / Tắt khí nén',
+    subtitle: 'Turn off compressed air · Tắt khí nén',
+  },
 ];

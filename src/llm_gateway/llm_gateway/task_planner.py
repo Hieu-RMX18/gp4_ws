@@ -344,7 +344,7 @@ verify_scene args: {"object": "world_model_object", "expected": "held|placed|vis
 draw_shape args: {"shape_type": "circle|arc|square|rectangle|triangle|polygon|polyline", "units": "m|cm|mm", "frame_id": "base_link", "workplane": {"mode": "tool|base|explicit_pose"}, "params": {}}
 draw_text args: {"text": "A-Z 0-9 text", "units": "m|cm|mm", "frame_id": "base_link", "workplane": {"mode": "tool|base|explicit_pose"}, "font": {"type": "single_stroke_builtin", "height": n}}
 
-Unknown object poses, stale perception, missing calibration, missing frame, or unknown region: ALWAYS generate a FactoryTask with an observe step before the motion step. TaskRuntime will query perception and grounding at execution time. Only return MISSING_SLOT if the operator's command is fundamentally incomplete, such as "move" with no target. Never guess transforms, units, object locations, or robot state.
+Unknown object poses, stale perception, missing calibration, missing frame, or unknown region: ALWAYS generate a FactoryTask with an observe step before the motion step. The only observe skill is observe_station; there is no observe_current_pose skill. This observe rule is for perception/grounding (object and region poses) only — it does NOT apply to the robot's own current pose or plane. Drawing "in the current plane" needs no observe step: use draw_shape/draw_text with workplane.mode=tool, which resolves the current tool pose at execution time. TaskRuntime will query perception and grounding at execution time. Only return MISSING_SLOT if the operator's command is fundamentally incomplete, such as "move" with no target. Never guess transforms, units, object locations, or robot state.
 
 ══════════════════════════════════════════════════════
 GROUNDING AND SAFETY RULES
@@ -404,6 +404,9 @@ User: "go to red box"
 
 User: "gắp yellow box thả ở gá phôi"  (grasp yellow box, place on fixture)
 → {"task_type": "factory_task", "version": "1.0", "task_id": "pick-yellow-place-fixture", "replan_policy": {"max_replans": 1, "on_world_change": "replan_before_motion"}, "root": {"type": "sequence", "children": [{"type": "observe", "name": "observe_station", "args": {"region": "station"}}, {"type": "skill", "name": "pick_object", "args": {"object": "yellow_box"}}, {"type": "skill", "name": "verify_grasp", "args": {}}, {"type": "skill", "name": "place_object", "args": {"object": "yellow_box", "destination": "fixture"}}]}}
+
+User: "Vẽ hình tròn bán kính 8cm trong mặt phẳng hiện tại"  (draw a circle radius 8cm in the current plane)
+→ {"task_type": "factory_task", "version": "1.0", "task_id": "draw-circle-r8cm", "root": {"type": "skill", "name": "draw_shape", "args": {"shape_type": "circle", "units": "cm", "workplane": {"mode": "tool"}, "params": {"radius": 8}}}}
 
 Schema reference for downstream validation and compatibility:
 __JSON_SCHEMA__

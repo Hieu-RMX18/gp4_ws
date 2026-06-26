@@ -69,6 +69,10 @@ _LOGGER = logging.getLogger(__name__)
 
 FACTORY_TASK_VERSION = "1.0"
 
+# Velocity scale for the pick/place descend + lift MOVE_REL steps. Bumped above
+# the conservative 0.06 default for real-cell commissioning; tune for hardware.
+_GRASP_MOVE_REL_VELOCITY_SCALE = 0.09
+
 _SUPPORTED_NODE_TYPES = frozenset(
     {
         "sequence",
@@ -576,9 +580,23 @@ class TaskCompiler:
             object_ref = args.get("object_ref") or args.get("object")
             if object_ref is None:
                 raise FactoryTaskError(f"move_to_object at {path} requires object_ref")
+            # Perception detections carry no usable TCP orientation (defaults to
+            # identity), so hover above the object with the tool pointing down —
+            # same reachable approach pose pick_object builds. Targeting the raw
+            # detection pose hands IK an unreachable orientation.
+            target = self._world_model.object_pose(object_ref)
+            pos = target.get("position") or target
+            clearance = float(args.get("approach_clearance_m", 0.08))
             return {
                 "intent": "absolute_move_ptp",
-                "target_pose": self._world_model.object_pose(object_ref),
+                "target_pose": {
+                    "position": {
+                        "x": float(pos["x"]),
+                        "y": float(pos["y"]),
+                        "z": float(pos["z"]) + clearance,
+                    },
+                    "orientation": {"x": 1.0, "y": 0.0, "z": 0.0, "w": 0.0},
+                },
                 "reference_frame": str(args.get("reference_frame") or "base_link"),
             }
         if node.name in {"pick_object", "place_object", "pick_and_place"}:
@@ -619,11 +637,13 @@ class TaskCompiler:
                     {"intent": "absolute_move_ptp", "target_pose": approach_pose,
                      "reference_frame": frame, "metadata": {"purpose": f"{purpose}_approach"}},
                     {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": -descend},
-                     "reference_frame": frame, "metadata": {"purpose": f"{purpose}_descend"}},
+                     "reference_frame": frame, "velocity_scale": _GRASP_MOVE_REL_VELOCITY_SCALE,
+                     "metadata": {"purpose": f"{purpose}_descend"}},
                     {"intent": "io_set", "io_address": int(io_address), "io_value": int(io_value),
                      "metadata": {"purpose": f"{purpose}_gripper"}},
                     {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": descend},
-                     "reference_frame": frame, "metadata": {"purpose": f"{purpose}_lift"}},
+                     "reference_frame": frame, "velocity_scale": _GRASP_MOVE_REL_VELOCITY_SCALE,
+                     "metadata": {"purpose": f"{purpose}_lift"}},
                 ],
             }
         if node.name == "verify_scene":

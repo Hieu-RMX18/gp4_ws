@@ -78,8 +78,11 @@ public:
                                                     kFailsafeMaxVelocityScale);
     max_acceleration_scale_ = declare_parameter<double>(
         "max_acceleration_scale", kFailsafeMaxAccelerationScale);
+    max_move_rel_velocity_scale_ = declare_parameter<double>(
+        "max_move_rel_velocity_scale", max_velocity_scale_);
     action_support_ = std::make_unique<ExecuteMotionActionSupport>(
-        get_logger(), max_velocity_scale_, max_acceleration_scale_);
+        get_logger(), max_velocity_scale_, max_acceleration_scale_,
+        max_move_rel_velocity_scale_);
     safety_rules_yaml_path_ =
         declare_parameter<std::string>("safety_rules_yaml_path", "");
     if (!safety_rules_yaml_path_.empty()) {
@@ -268,6 +271,7 @@ private:
   static constexpr double kFailsafeMaxAccelerationScale = 0.06;
   double max_velocity_scale_;
   double max_acceleration_scale_;
+  double max_move_rel_velocity_scale_;
   static constexpr double kPlanningTimeSec = 5.0;
   static constexpr const char *kPlanningGroup = "gp4_arm";
   // Production point-budget policy.
@@ -823,7 +827,9 @@ int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<motion_core::MotionCoreNode>();
   node->initialize();
-  rclcpp::spin(node);
+  rclcpp::executors::MultiThreadedExecutor executor;
+  executor.add_node(node);
+  executor.spin();
   rclcpp::shutdown();
   return 0;
 }

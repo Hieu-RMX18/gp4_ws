@@ -185,7 +185,13 @@ class SceneProcessor(Node):
         self._timer = self.create_timer(0.2, self._publish_detections)  # 5 Hz
         self._last_detections: list[
             tuple[float, Detection3D]
-        ] = []  # (timestamp, detection)
+        ] = []  # (timestamp, detection) — cloud clusters; feed collision + viz
+        # Grasp-grounding detections come from the RGB detector (unified_visualizer),
+        # which classifies colour off the full-resolution colour image. The cloud's
+        # per-point colour skews dark on depth-valid points and mis-votes (yellow→
+        # gray), so it is no longer the grounding source; it still owns geometry,
+        # depth-quality sampling, and collision objects.
+        self._last_rgb_detections: list[tuple[float, Detection3D]] = []
         self._published_collision_ids: set[str] = set()
         self._depth_noise_samples_mm: list[float] = []
         self._depth_in_range_samples: list[bool] = []
@@ -196,6 +202,12 @@ class SceneProcessor(Node):
         self._status_timer = self.create_timer(1.0, self._publish_status)
         self._status_pub = self.create_publisher(
             PerceptionStatus, "/perception/status", 10
+        )
+        self._rgb_detections_sub = self.create_subscription(
+            Detection3DArray,
+            "/perception/detections",
+            self._on_rgb_detections,
+            10,
         )
         self._object_query_srv = self.create_service(
             GetObjectPositions,
@@ -340,8 +352,7 @@ class SceneProcessor(Node):
             return
 
         now = time.time()
-        detections: list[Detection3D] = []
-        det_factors: dict[int, tuple[float, float, float]] = {}
+        tracker_items: list[tuple[Detection3D, tuple[float, float, float]]] = []
         debug_records: list[dict] = []
         for i, cluster_idx in enumerate(cluster_indices):
             cluster = pts[cluster_idx]
@@ -469,17 +480,14 @@ class SceneProcessor(Node):
                 )
             )
             det.bbox.size = dims
-            detections.append(det)
-            # Stash factors to recompute score with the temporal term once the
-            # tracker confirms stability.
-            det_factors[id(det)] = (color_conf, geometry_conf, depth_conf)
+            tracker_items.append((det, (color_conf, geometry_conf, depth_conf)))
 
         # 5. Temporal voting — keep only detections stable across frames and
         #    fold the temporal score into the published confidence.
-        stable = self._tracker.update(detections)
+        stable = self._tracker.update(tracker_items)
         published: list[Detection3D] = []
-        for obj_i, (det, temporal_score) in enumerate(stable):
-            color_conf, geometry_conf, depth_conf = det_factors[id(det)]
+        for obj_i, (det, temporal_score, factors) in enumerate(stable):
+            color_conf, geometry_conf, depth_conf = factors
             det.results[0].hypothesis.score = _confidence_score(
                 color_conf, geometry_conf, depth_conf, temporal_score
             )
@@ -727,6 +735,32 @@ class SceneProcessor(Node):
             self._collision_pub.publish(co)
         self._published_collision_ids = set()
 
+    def _on_rgb_detections(self, msg: Detection3DArray) -> None:
+        """Latest-snapshot store of RGB-detector detections for grasp grounding.
+
+        Each Detection3DArray is a complete frame, so we replace rather than
+        append; the service applies TTL so detections expire if the detector
+        stops publishing.
+        """
+        now = time.time()
+        # Only accept base_link-framed detections; the detector falls back to the
+        # camera frame when TF is unavailable, which must not reach grasp grounding.
+        self._last_rgb_detections = [
+            (now, d) for d in msg.detections if d.header.frame_id == "base_link"
+        ]
+
+    def _in_workspace(self, det: Detection3D) -> bool:
+        if not (self._bbox and self._enable_bbox_filter):
+            return True
+        if not det.results:
+            return False
+        p = det.results[0].pose.pose.position
+        return (
+            self._bbox["x"][0] <= p.x <= self._bbox["x"][1]
+            and self._bbox["y"][0] <= p.y <= self._bbox["y"][1]
+            and self._bbox["z"][0] <= p.z <= self._bbox["z"][1]
+        )
+
     def _handle_get_object_positions(
         self,
         request: GetObjectPositions.Request,
@@ -754,15 +788,15 @@ class SceneProcessor(Node):
             return response
 
         now = time.time()
-        self._last_detections = [
-            (t, d) for t, d in self._last_detections if (now - t) < self._ttl
+        self._last_rgb_detections = [
+            (t, d) for t, d in self._last_rgb_detections if (now - t) < self._ttl
         ]
-        # Execution path: exclude DEGRADED_DEPTH detections (defense-in-depth;
-        # the global depth gate above already blocks degraded frames).
+        # Execution path: keep in-workspace detections; exclude DEGRADED_DEPTH
+        # (defense-in-depth — the RGB detector already drops invalid-depth ones).
         executable = [
             d
-            for _, d in self._last_detections
-            if str(getattr(d, "id", "")) != "DEGRADED_DEPTH"
+            for _, d in self._last_rgb_detections
+            if str(getattr(d, "id", "")) != "DEGRADED_DEPTH" and self._in_workspace(d)
         ]
         response.detections = _filter_detections(executable, request.class_filter)
         response.ok = True

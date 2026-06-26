@@ -77,6 +77,13 @@ from llm_gateway.semantic_ir_contract import (
 
 EXECUTOR_SHUTDOWN_TIMEOUT_SEC = 2.0
 
+# Commissioning calibration knob: systematic base_link +Y bias observed between
+# the grounded grasp pose and the real object (~12 mm short in +Y). Applied to
+# every grounded detection pose. ponytail: constant offset; the bias varies a
+# little per object (extrinsic rotation error) — re-run hand-eye calibration for
+# the proper fix and zero this out.
+_PERCEPTION_GROUND_Y_OFFSET_M = 0.045
+
 
 
 from llm_gateway.telemetry import TelemetryMixin
@@ -680,6 +687,9 @@ class LLMGatewayNode(Node, TelemetryMixin, SceneCacheMixin):
         position = detection.get("position")
         if not isinstance(position, dict):
             return None
+        position = dict(position)
+        if "y" in position:
+            position["y"] = float(position["y"]) + _PERCEPTION_GROUND_Y_OFFSET_M
         orientation = detection.get("orientation")
         if not isinstance(orientation, dict):
             orientation = {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}

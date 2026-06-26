@@ -146,6 +146,10 @@ def generate_launch_description():
                 "max_acceleration_scale": _motion_limits.get(
                     "max_acceleration_scale", 0.06
                 ),
+                "max_move_rel_velocity_scale": _motion_limits.get(
+                    "max_move_rel_velocity_scale",
+                    _motion_limits.get("max_velocity_scale", 0.06),
+                ),
             },
         ],
         remappings=[

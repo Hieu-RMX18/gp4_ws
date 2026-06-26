@@ -6,13 +6,13 @@
 
 perception:
   workspace_bbox_m:
-    x: [0.15, 0.70]
-    y: [-0.35, 0.35]
+    x: [-0.35, 0.75]
+    y: [-0.40, 0.50]
     z: [0.01, 0.40]
   voxel_size_m: 0.008
   ransac_distance_threshold_m: 0.010
   cluster_tolerance_m: 0.025
-  cluster_min_size: 200
+  cluster_min_size: 40
   cluster_max_size: 10000
   # Plane removal: only remove planes whose normal is near-vertical (table/floor).
   # cos(~32deg) ~= 0.85. Keeps vertical object faces (e.g. red_box side) intact.
@@ -23,7 +23,7 @@ perception:
   # (safe) breakpoint threshold but stay within this ceiling are published as
   # DEGRADED_DEPTH for visualization only — never executable. Above it: rejected.
   # Set allow_degraded_depth_detections: false to reject instead of degrade.
-  depth_noise_degraded_mm_max: 15.0
+  depth_noise_degraded_mm_max: 25.0
   allow_degraded_depth_detections: true
   # Per-cluster RGB/HSV diagnostics in logs + /perception/debug_clusters overlay.
   debug_color_diagnostics: true
@@ -40,30 +40,30 @@ perception:
     # Linear interpolation between the breakpoints below.
     # NOTE: thresholds relaxed for USB 2.1 — tighten when USB 3.0 is available.
     breakpoints:
-      - {distance_m: 0.30, noise_mm_max: 5.0}
-      - {distance_m: 0.50, noise_mm_max: 8.0}
-      - {distance_m: 0.80, noise_mm_max: 15.0}
-    extrapolation: "clamp"    # outside breakpoints -> use nearest breakpoint
+      - { distance_m: 0.30, noise_mm_max: 25.0 }
+      - { distance_m: 0.50, noise_mm_max: 30.0 }
+      - { distance_m: 0.80, noise_mm_max: 40.0 }
+    extrapolation: "clamp" # outside breakpoints -> use nearest breakpoint
 
   # ---- RGB-first detector (unified_visualizer.py owns /perception/detections) ----
   rgb_detector:
     color_topic: /camera/color/image_raw
     depth_topic: /camera/aligned_depth_to_color/image_raw
     camera_info_topic: /camera/color/camera_info
-    depth_scale_m: 0.001          # 16UC1 raw units -> metres
+    depth_scale_m: 0.001 # 16UC1 raw units -> metres
     sync_slop_s: 0.05
     processing_rate_hz: 30.0
     sync_queue: 2
     base_frame: base_link
     camera_optical_frame: camera_color_optical_frame
-    bbox_thickness_z_m: 0.03      # nominal Z extent (single deprojected point has none)
+    bbox_thickness_z_m: 0.03 # nominal Z extent (single deprojected point has none)
 
   # ---- Visualization ----
   visualization:
     max_process_fps: 30.0
     max_annotated_width_px: 960
     annotated_image:
-      layout: "side_by_side"   # side_by_side | rgb_only | depth_only
+      layout: "side_by_side" # side_by_side | rgb_only | depth_only
       show_compact_labels: true
 
     dashboard:
@@ -73,7 +73,7 @@ perception:
     zoom_roi:
       enabled: false
       rate_hz: 5.0
-      mode: "grid"             # single | grid | selected_class | selected_id
+      mode: "grid" # single | grid | selected_class | selected_id
       top_n: 6
       grid_cols: 3
       grid_cell_size: 220
@@ -91,11 +91,11 @@ perception:
       background_alpha: 0.85
       decimals_xyz: 3
       score_decimals: 2
-      distance_unit: "mm"      # mm | m
+      distance_unit: "mm" # mm | m
 
     qos:
       debug_images:
-        reliability: "best_effort"   # reliable | best_effort
+        reliability: "best_effort" # reliable | best_effort
         depth: 1
 
     debug_masks:
@@ -110,7 +110,6 @@ perception:
       - white_workpiece
       - yellow_box
       - yellow_ball
-      - orange
       - apple
 
     same_class_nms_iou: 0.50
@@ -118,10 +117,6 @@ perception:
 
     pair_suppression:
       apple:
-        red_box:
-          center_inside: true
-          iou_gt: 0.20
-      orange:
         red_box:
           center_inside: true
           iou_gt: 0.20
@@ -157,8 +152,8 @@ perception:
     - class_id: yellow_box
       enabled: true
       hsv_ranges:
-        - [18, 60, 60, 40, 255, 255]
-      min_area_px: 500
+        - [18, 90, 80, 40, 255, 255]
+      min_area_px: 1000
       max_area_px: 80000
       morph_kernel: 3
       require_border: null
@@ -168,7 +163,7 @@ perception:
         max_aspect_ratio: 3.0
 
     - class_id: yellow_ball
-      enabled: false            # disabled — no real yellow ball in current workspace
+      enabled: false # disabled — no real yellow ball in current workspace
       hsv_ranges:
         - [18, 60, 60, 40, 255, 255]
       min_area_px: 300
@@ -178,18 +173,6 @@ perception:
       shape_filter:
         min_circularity: 0.70
         max_aspect_ratio: 1.3
-
-    - class_id: orange
-      enabled: true
-      hsv_ranges:
-        - [8, 80, 60, 25, 255, 255]
-      min_area_px: 300
-      max_area_px: 60000
-      morph_kernel: 3
-      require_border: null
-      shape_filter:
-        min_circularity: 0.55
-        max_aspect_ratio: 1.6
 
     - class_id: apple
       enabled: true
@@ -207,14 +190,14 @@ perception:
     - class_id: white_workpiece
       enabled: true
       detector_type: "blue_border_white_fill"
-      min_area_px: 500
-      max_area_px: 120000
-      morph_kernel: 5
-      require_border: null          # handled by detector_type
-      blue_border_hsv: [95, 50, 40, 135, 255, 255]
-      white_fill_hsv: [0, 0, 135, 179, 90, 255]
+      min_area_px: 1200
+      max_area_px: 30000
+      morph_kernel: 3
+      require_border: null # handled by detector_type
+      blue_border_hsv: [95, 70, 40, 135, 255, 255]
+      white_fill_hsv: [0, 0, 90, 179, 55, 255]
       inner_white_min_ratio: 0.45
-      min_blue_border_ratio: 0.04
+      min_blue_border_ratio: 0.03
       shape_filter:
         min_aspect_ratio: 0.4
         max_aspect_ratio: 4.0

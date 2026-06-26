@@ -339,11 +339,20 @@ class WorldModel:
     def object_pose(self, object_ref: Any) -> dict[str, Any]:
         key = self._object_key(object_ref)
         candidate = self._objects.get(key)
+        if candidate is None:
+            candidate = self._regions.get(key)
         if isinstance(object_ref, dict):
             candidate = object_ref
         if not isinstance(candidate, dict):
             raise FactoryTaskError(f"world model has no grounded pose for object '{key}'")
         pose = candidate.get("pose") or candidate.get("target_pose")
+        if not isinstance(pose, dict) and "geometry" in candidate:
+            center = candidate["geometry"].get("center")
+            if isinstance(center, dict):
+                pose = {
+                    "position": dict(center),
+                    "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+                }
         if not isinstance(pose, dict):
             raise FactoryTaskError(f"world model has no grounded pose for object '{key}'")
         return dict(pose)
@@ -393,6 +402,17 @@ class PolicyEngine:
             risk_level=risk_level,
         )
 
+@dataclass(frozen=True)
+class GripperCompileConfig:
+    """Real gripper IO addresses, injected by the node at compile time.
+
+    factory_task.py never reads ROS config directly; the node passes the
+    verified GripperConfig values in as (address, value) pairs.
+    """
+    close: tuple[int, int]
+    open: tuple[int, int]
+
+
 class TaskCompiler:
     """Compile FactoryTask into the existing guarded downstream command form."""
 
@@ -401,9 +421,11 @@ class TaskCompiler:
         *,
         world_model: WorldModel | None = None,
         policy_engine: PolicyEngine | None = None,
+        gripper: "GripperCompileConfig | None" = None,
     ) -> None:
         self._world_model = world_model or WorldModel()
         self._policy_engine = policy_engine or PolicyEngine()
+        self._gripper = gripper
 
     def compile(self, task: FactoryTask) -> CompiledTask:
         decisions: list[PolicyDecision] = []
@@ -560,64 +582,49 @@ class TaskCompiler:
                 "reference_frame": str(args.get("reference_frame") or "base_link"),
             }
         if node.name in {"pick_object", "place_object", "pick_and_place"}:
-            # Complex manipulator skills compile to a gripper I/O step as the static review
-            # representative. The actual approach/descent/lift sequence is owned by TaskRuntime.
-            # The review shows the world-model-resolved object pose and planned gripper state.
-            object_ref = (
-                args.get("object_ref")
-                or args.get("object")
-                or args.get("object_id")
-            )
-            if node.name in {"pick_object", "pick_and_place"} and object_ref is None:
-                raise FactoryTaskError(f"{node.name} at {path} requires object_ref")
-            io_intent = "io_set"
+            if self._gripper is None:
+                raise FactoryTaskError(f"{node.name} at {path} requires gripper config")
+            frame = str(args.get("reference_frame") or "base_link")
+            clearance = float(args.get("approach_clearance_m", 0.08))
+            descend = float(args.get("descend_m", clearance))
+
             if node.name == "place_object":
-                # Place: open gripper to release
-                io_step: dict[str, Any] = {
-                    "intent": io_intent,
-                    "io_address": 0,
-                    "io_value": 0,
-                    "metadata": {
-                        "purpose": f"{node.name}_gripper_open",
-                        "requires_gripper_config": True,
-                        "destination": str(args.get("destination") or ""),
-                    },
-                }
+                destination = args.get("destination")
+                if not destination:
+                    raise FactoryTaskError(f"place_object at {path} requires destination")
+                target = self._world_model.object_pose(destination)
+                io_address, io_value = self._gripper.open
+                purpose = "place"
             else:
-                # Pick: close gripper to grasp
-                io_step = {
-                    "intent": io_intent,
-                    "io_address": 0,
-                    "io_value": 1,
-                    "metadata": {
-                        "purpose": f"{node.name}_gripper_close",
-                        "requires_gripper_config": True,
-                        "object_ref": str(object_ref or ""),
-                    },
-                }
-            steps_for_review: list[dict[str, Any]] = []
-            if object_ref is not None:
-                try:
-                    approach_pose = self._world_model.object_pose(object_ref)
-                    steps_for_review.append({
-                        "intent": "absolute_move_ptp",
-                        "target_pose": approach_pose,
-                        "reference_frame": str(args.get("reference_frame") or "base_link"),
-                        "metadata": {"purpose": f"{node.name}_approach"},
-                    })
-                except FactoryTaskError:
-                    if node.name in {"pick_object", "pick_and_place"}:
-                        raise
-                    # Object pose not yet grounded — static review can't plan;
-                    # TaskRuntime will resolve place destinations at execution time.
-                    pass
-            steps_for_review.append(io_step)
-            if len(steps_for_review) == 1:
-                return steps_for_review[0]
+                object_ref = args.get("object_ref") or args.get("object") or args.get("object_id")
+                if object_ref is None:
+                    raise FactoryTaskError(f"{node.name} at {path} requires object_ref")
+                target = self._world_model.object_pose(object_ref)
+                io_address, io_value = self._gripper.close
+                purpose = "pick"
+
+            pos = target.get("position") or target
+            approach_pose = {
+                "position": {
+                    "x": float(pos["x"]),
+                    "y": float(pos["y"]),
+                    "z": float(pos["z"]) + clearance,
+                },
+                "orientation": {"x": 1.0, "y": 0.0, "z": 0.0, "w": 0.0},
+            }
             return {
                 "intent": "sequence",
-                "steps": steps_for_review,
                 "metadata": {"source": f"factory_task.{node.name}", "tool_changed_world": True},
+                "steps": [
+                    {"intent": "absolute_move_ptp", "target_pose": approach_pose,
+                     "reference_frame": frame, "metadata": {"purpose": f"{purpose}_approach"}},
+                    {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": -descend},
+                     "reference_frame": frame, "metadata": {"purpose": f"{purpose}_descend"}},
+                    {"intent": "io_set", "io_address": int(io_address), "io_value": int(io_value),
+                     "metadata": {"purpose": f"{purpose}_gripper"}},
+                    {"intent": "move_relative", "delta": {"x": 0.0, "y": 0.0, "z": descend},
+                     "reference_frame": frame, "metadata": {"purpose": f"{purpose}_lift"}},
+                ],
             }
         if node.name == "verify_scene":
             # Postcondition check — no motion Semantic IR, TaskRuntime handles verification.
@@ -985,6 +992,7 @@ __all__ = [
     "FactoryTaskError",
     "TaskNode",
     "TaskCompiler",
+    "GripperCompileConfig",
     "TaskRuntime",
     "TaskRuntimeReport",
     "RuntimeStepResult",

@@ -108,6 +108,16 @@ class LLMBackendConfig:
 
 
 def load_llm_backend_config(config_path: str | None = None) -> LLMBackendConfig:
+    try:
+        import dotenv
+        env_file = os.getenv("GP4_LLM_ENV_FILE")
+        if env_file and os.path.exists(env_file):
+            dotenv.load_dotenv(env_file)
+        else:
+            dotenv.load_dotenv()
+    except ImportError:
+        pass
+
     resolved_path = config_path or _default_config_path()
     with open(resolved_path, "r", encoding="utf-8") as config_file:
         raw_config = yaml.safe_load(config_file) or {}
@@ -318,6 +328,7 @@ alarm_reset args: {}
 get_pose args: {"reference_frame": "base_link"}
 set_speed args: {"velocity_scale": 0.01..0.06}
 wait args: {"wait_duration_sec": float, default 2.0 when clearly requested}
+io_set args: {"io_address": int, "io_value": 0|1}
 move_relative args: {"delta": {"x": m, "y": m, "z": m}, "reference_frame": "base_link"}
 move_named_pose args: {"pose_name": "home"|"ready"|"poseA"|"poseB"}
 move_to_region args: {"region": "semantic_region_name", "approach": "safe_top"}
@@ -384,6 +395,15 @@ User: "try placing the apple twice, otherwise go home"
 
 User: "hạ xuống một chút"
 → {"error": "MISSING_SLOT", "missing_fields": ["distance"], "hint": "relative move requires direction and distance."}
+
+User: "đi tới yellow box"
+→ {"task_type": "factory_task", "version": "1.0", "task_id": "move-to-yellow-box", "replan_policy": {"max_replans": 1, "on_world_change": "replan_before_motion"}, "root": {"type": "sequence", "children": [{"type": "observe", "name": "observe_station", "args": {"region": "station"}}, {"type": "skill", "name": "move_to_object", "args": {"object_ref": "yellow_box", "pose": "approach"}}]}}
+
+User: "go to red box"
+→ {"task_type": "factory_task", "version": "1.0", "task_id": "move-to-red-box", "replan_policy": {"max_replans": 1, "on_world_change": "replan_before_motion"}, "root": {"type": "sequence", "children": [{"type": "observe", "name": "observe_station", "args": {"region": "station"}}, {"type": "skill", "name": "move_to_object", "args": {"object_ref": "red_box", "pose": "approach"}}]}}
+
+User: "gắp yellow box thả ở gá phôi"  (grasp yellow box, place on fixture)
+→ {"task_type": "factory_task", "version": "1.0", "task_id": "pick-yellow-place-fixture", "replan_policy": {"max_replans": 1, "on_world_change": "replan_before_motion"}, "root": {"type": "sequence", "children": [{"type": "observe", "name": "observe_station", "args": {"region": "station"}}, {"type": "skill", "name": "pick_object", "args": {"object": "yellow_box"}}, {"type": "skill", "name": "verify_grasp", "args": {}}, {"type": "skill", "name": "place_object", "args": {"object": "yellow_box", "destination": "fixture"}}]}}
 
 Schema reference for downstream validation and compatibility:
 __JSON_SCHEMA__

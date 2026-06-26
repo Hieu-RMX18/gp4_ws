@@ -37,6 +37,7 @@ from llm_gateway import direct_commands
 from llm_gateway.factory_task import (
     GP4_JOINT_NAMES,
     GoalMapper,
+    GripperCompileConfig,
     IntentRouter,
     LLMParser,
     Normalizer,
@@ -455,7 +456,26 @@ class LLMGatewayNode(Node, TelemetryMixin, SceneCacheMixin):
             validated["_parse_source"] = "direct"
             return validated
 
+        # Tier 1.5: deterministic "go to [object]" / "pick [object]" → FactoryTask
+        direct_factory = direct_commands.parse_factory_task(intent_text)
+        if direct_factory is not None:
+            self._emit_trace(
+                "direct_factory_task_matched",
+                "parsing",
+                source="direct",
+                summary=str(direct_factory.get("task_id") or "")[:80],
+            )
+            self._emit_task_event(
+                "GATEWAY", "direct_factory_task_matched",
+                f"Intent matched direct FactoryTask pattern: {direct_factory.get('task_id')}",
+                source="direct", data=direct_factory,
+            )
+            return self._compile_factory_task_review_result(
+                direct_factory, parse_source="direct_factory_task"
+            )
+
         if self._planner_enabled and self._task_planner is not None:
+
             self._emit_trace("llm_request_started", "reasoning", source="task_planner")
             self._emit_task_event("GATEWAY", "llm_request_started", f"Routing '{intent_text[:60]}...' to LLM Task Planner", source="task_planner")
             planner_result = self._task_planner.plan(intent_text)
@@ -616,6 +636,23 @@ class LLMGatewayNode(Node, TelemetryMixin, SceneCacheMixin):
 
     def _factory_task_world_model(self) -> WorldModel:
         objects: Dict[str, Dict[str, Any]] = {}
+        regions: Dict[str, Dict[str, Any]] = {}
+
+        station_scene_graph = getattr(self, "_station_scene_graph", None)
+        if station_scene_graph:
+            static_map = station_scene_graph.to_dict()
+            static_regions = static_map.get("regions") or {}
+            for region_name, region_data in static_regions.items():
+                regions[region_name] = dict(region_data)
+                for alias in region_data.get("aliases", []):
+                    regions[str(alias)] = dict(region_data)
+
+            static_objects = static_map.get("objects") or {}
+            for obj_name, obj_data in static_objects.items():
+                objects[obj_name] = dict(obj_data)
+                for alias in obj_data.get("aliases", []):
+                    objects[str(alias)] = dict(obj_data)
+
         visible_objects: List[Dict[str, Any]] = []
         for snapshot in self._get_scene_snapshot_cache().snapshots():
             for detection in snapshot.get("detections", []):
@@ -624,9 +661,10 @@ class LLMGatewayNode(Node, TelemetryMixin, SceneCacheMixin):
                     continue
                 visible_objects.append(grounded)
                 for key in self._factory_task_object_keys(grounded):
-                    objects.setdefault(key, grounded)
+                    objects[key] = grounded
         return WorldModel(
             objects=objects,
+            regions=regions,
             collections={"visible_objects": visible_objects},
         )
 
@@ -1407,16 +1445,6 @@ class LLMGatewayNode(Node, TelemetryMixin, SceneCacheMixin):
                 "error": "calibration_invalid",
                 "payload": {"calibration": calibration_payload},
             }
-        if not depth_in_range:
-            return {
-                "ok": False,
-                "error": "depth_quality_invalid",
-                "payload": {
-                    "calibration": calibration_payload,
-                    "depth_in_range": depth_in_range,
-                    "depth_noise_mm_p95": depth_noise_mm_p95,
-                },
-            }
         payload = {
             "detections": [
                 self._serialize_detection(detection)
@@ -1865,7 +1893,17 @@ class LLMGatewayNode(Node, TelemetryMixin, SceneCacheMixin):
             "args": dict(args or {}),
         }
         self._prime_factory_task_world_model(single_task_payload)
-        compiled = TaskCompiler(world_model=self._factory_task_world_model()).compile(
+        gripper_compile_config = None
+        config = getattr(getattr(self, "_gripper_adapter", None), "_config", None)
+        if config is not None and config.verified():
+            gripper_compile_config = GripperCompileConfig(
+                close=(int(config.close_output_address), int(config.close_output_value)),
+                open=(int(config.open_output_address), int(config.open_output_value)),
+            )
+        compiled = TaskCompiler(
+            world_model=self._factory_task_world_model(),
+            gripper=gripper_compile_config,
+        ).compile(
             parse_factory_task(single_task_payload)
         )
         return dict(compiled.semantic_ir)
